@@ -3,7 +3,7 @@
 > pi-go 是原生 Android 客户端「pi 编程助手」：在手机上的 PRoot Ubuntu 容器里运行 pi coding agent，通过 `pi --mode rpc` 的 stdin/stdout JSONL 通信，界面全部用 Kotlin + Jetpack Compose 原生实现，不再内嵌 PiMet 的 Pi-Web 网页。
 >
 > - 定稿日期：2026-11-03（CST）
-> - 底稿：`docs/proposals/B.md`（投票胜出），按 `docs/votes/V2.md`、`docs/votes/V3.md` 吸收 A、C 的优点并改正事实性错误
+> - 底稿：`docs/proposals/B.md`（投票胜出），按 `docs/votes/V1.md`、`V2.md`、`V3.md` 吸收 A、C 的优点并改正事实性错误
 > - 核实基线：
 >   - pi：npm `@earendil-works/pi-coding-agent@1.5.0` 包内 `docs/{rpc,rpc-commands,rpc-extension-ui,json,message-types,session-format,providers,models-configuration,cli,environment-variables,security,termux}.md`、`dist/modes/rpc/rpc-types.d.ts`、`CHANGELOG.md`、`package.json`；npm registry 两个包名的元数据
 >   - PiMet：`zr987459/pimet@a80222c2dda4a4c8a936258b96597bc7ea7d4102`（只读）
@@ -26,11 +26,11 @@
 
 | 投票 | A | B | C | 投给 |
 |---|---|---|---|---|
-| V1 | 7.7 | **8.6** | 7.3 | B（定稿后补交） |
+| V1 | 7.7 | **8.6** | 7.3 | B（本稿起草时未产出，定稿推送后于 main `c2d34e1` 提交，已补入） |
 | V2 | 7.5 | **8.5** | 7.0 | B |
 | V3 | 7.3 | **8.6** | 6.9 | B |
 
-结论：**B 以 3:0 胜出**（V1 在定稿后补交，同样投 B，结论不变），本文以 B 为底稿。
+结论：定稿时 V2、V3 两票均投 B，**B 以 2:0 胜出**；随后提交的 V1 同样投 B（合计 3:0），不改变结论。本文以 B 为底稿。
 
 ### 0.3 吸收的优点
 
@@ -55,7 +55,9 @@
 | 17 | 投票新增 | Provider 预设拆成「按量 API」与「编程套餐」，并提供「自定义 OpenAI 兼容」预填 baseUrl，套餐类文案写明「需要套餐 Key」 | V2 §三.1.2、§四.8；V3 §4.2 #8–9 | §3.10 |
 | 18 | B 自修 | `jniLibs` 只归 W1（`core/runtime/src/main/jniLibs/`），scaffold 不放二进制 | V3 §3「B 自身需修」 | §6 |
 | 19 | B 自修 | `--max-old-space-size` 改为按设备内存取 768 或 1024，并在崩溃诊断中识别 heap OOM | V2 §二 B 缺点；V3 §3「B 自身需修」 | §3.2、§3.9 |
-| 20 | B 自修 | 冷启动「中断检测」改用 App 自记的运行标记 | V2 §四.9；V3 §4.2 #10 | §3.9 |
+| 20 | B 自修 | 冷启动「中断检测」改用 App 自记的运行标记 | V1 错误表；V2 §四.9；V3 §4.2 #10 | §3.9 |
+| 21 | C | 版本清单带 `blocked`：`pins.json` 的 pi 段除兼容范围外加 `blocked` 列表，命中的版本不提供升级 | V1「吸收」3 | §3.1、§4.6 |
+| 22 | A | 乐观气泡（发送中 → 已排队/已发送 → 失败重试）写进 chat 验收；模型错误按「无网络 / Key 错误 / 额度不足 / 模型不存在」映射成中文 | V1「吸收」6、7 | §3.7、§3.9、§5 S6 |
 
 ### 0.4 改正的事实性错误
 
@@ -82,6 +84,9 @@
 | 19 | C | 启动参数 `-e /root/.pi-go/ext/*.ts` | `ProcessBuilder` 不经 shell，通配符不展开 | 逐个 `-e <path>` 或放进 `~/.pi/agent/extensions/` 自动发现（§3.2） |
 | 20 | C | `ChatRepository` 接口写在 `:feature:chat`、实现在 core；`AgentHost` 用 `:core:data` 但依赖图里二者平级 | 违反「core 不依赖 feature」，依赖方向不自洽 | 所有跨模块接口统一放 `:core:contract`（§2） |
 | 21 | C | 「排队消息立即发送」靠 `clear_queue` 再全部重发模拟 | 容易丢或重（REVIEW.md 必报项） | 不进 MVP（§5 不做清单） |
+| 22 | C | targetSdk 28 需要声明 `foregroundServiceType` | Android 14 的强制要求只针对 targetSdk ≥ 34（V1 指出）；声明无害 | 不作为前提；`EngineService` 可声明但不依赖 |
+
+注：TarGzipExtractor 的相似度各票口径不同（V2/V3：按行序列匹配 447/453；V1：453 行中 408 行在 DSH-Folk 版原样出现），本稿用 V2/V3 口径复核得 447/453、相似度 0.917，结论一致。V1 认为 A 的「1.5.0 只发 delta」正确，本稿按 CHANGELOG 核实该行为始于 0.84.0，以第 13 条为准。
 
 ### 0.5 本稿核实中新增的发现
 
@@ -291,7 +296,7 @@ interface LaunchEnvProvider { suspend fun env(): Map<String, String> }   // 由 
 {
   "pi":     {"package": "@earendil-works/pi-coding-agent", "version": "1.5.0",
              "integrity": "sha512-xNDZ5kqowO6Z03FS2gwAkPEGk1ssxVcYKQ6qZId84mFEvwACvvyc2l0vAMOS+c5zvxLRMLBE9r4y44IGYkMJaQ==",
-             "compat": ">=1.5.0 <2.0.0"},
+             "compat": ">=1.5.0 <2.0.0", "blocked": []},
   "node":   {"version": "24.22.2",
              "sha256": {"arm64": "95c264150aceb7f3437a29fd6984924f5f8d1511ea3cbd6c508b83f6c555dae2",
                         "x64":   "361718c444e49af2ca5a110c83ba6a8901143f23ab285ebbef0341f391f482a9"}},
@@ -415,7 +420,7 @@ stdout 三类记录：`type:"response"`、会话事件、`type:"extension_ui_req
 |---|---|---|
 | 命令被拒 | `success:false` | 提示 `error`；`prompt` 失败时文本退回输入框（不覆盖草稿，同 §3.7） |
 | `parse` 错误 | `command:"parse"`、无 id | 记日志，诊断页可见 |
-| 模型/网络失败 | `message_end.stopReason=="error"`；`auto_retry_end.success==false` | 错误卡：原因 +「重试」（重发上一条用户文本）+「去设置模型」 |
+| 模型/网络失败 | `message_end.stopReason=="error"`；`auto_retry_end.success==false` | 错误卡：按 `errorMessage` 中的 HTTP 状态与关键字映射成中文（无网络 / Key 错误 401·403 / 额度不足 402·429 / 模型不存在 404）+ 原文可展开 +「重试」（重发上一条用户文本）+「去设置模型」 |
 | 启动失败 | 回应首条 `get_state` 前退出 | 按 stderr 归类成中文一句话（下表） |
 | 引擎崩溃 | stdout EOF / 进程退出 | 退避 1 s→3 s→10 s 自动重启最多 3 次，并 `switch_session` 回到上次文件；仍失败显示诊断页（stderr 尾部、复制诊断〔已脱敏〕、「修复运行环境」） |
 | App 被系统杀 | 冷启动时 DataStore 里仍有运行标记（`agent_start` 写入，`agent_settled` 清除） | 回到该会话，顶部提示「上一轮被系统中断」；兜底：最后一条是 user 消息且其后没有 assistant 回复，同样提示 |
@@ -564,7 +569,7 @@ stderr 归类（关键字由 W2 以真机日志校准，匹配不到时显示「
 ### 4.6 升级与修复
 
 - **App 升级不动 rootfs**；启动时比对 `pins.json` 与 `pi-go-runtime.json`，不一致时在设置页提示。
-- **pi 升级**：「检查更新」读 npmmirror `dist-tags.latest`；只有落在兼容范围 `>=1.5.0 <2.0.0` 内才可一键升级：装到新 prefix `/opt/pi-go/pi/<X>` → 冒烟（`--version` + RPC `get_state` 握手 + `get_available_models`）→ 停引擎 → 切 `current` 软链 → 重启；任一步失败保持旧软链。保留最近 2 个版本。升级前复查新版本依赖是否出现 install 脚本（`--ignore-scripts` 的前提）。
+- **pi 升级**：「检查更新」读 npmmirror `dist-tags.latest`；只有落在兼容范围 `>=1.5.0 <2.0.0` 内且不在 `blocked` 列表中才可一键升级：装到新 prefix `/opt/pi-go/pi/<X>` → 冒烟（`--version` + RPC `get_state` 握手 + `get_available_models`）→ 停引擎 → 切 `current` 软链 → 重启；任一步失败保持旧软链。保留最近 2 个版本。升级前复查新版本依赖是否出现 install 脚本（`--ignore-scripts` 的前提）。
 - **Node 升级**：只在 pi 的 `engines.node` 变化时提示，同样装到新目录、校验、切软链。
 - **修复运行环境**：只重跑缺失或损坏的步骤。
 - **重置运行环境**：删除 rootfs 但保留 `root/.pi/agent`（会话、`models.json`、`settings.json`、回收站）与 `root/pi-cwd`，先移到 `files/preserve/`，重装后移回；需二次确认。
@@ -601,6 +606,7 @@ stderr 归类（关键字由 W2 以真机日志校准，匹配不到时显示「
 - [ ] **S3** thinking 块显示为可折叠的「思考中…/已思考 N 秒」。
 - [ ] **S4** 顶栏显示当前模型、思考级别（可切换）、上下文占用百分比。
 - [ ] **S5** 旋转屏幕、切后台再回来，正在流式的消息继续增长，不丢不重。
+- [ ] **S6** 发送后气泡立即出现并标「发送中」，收到响应后变为「已发送/已排队」；模拟命令失败时标红并提供「重试」，不会自动重发；用错误 Key 发送时错误卡显示「Key 错误」中文提示。
 
 ### 5.4 工具调用卡片折叠
 
@@ -655,7 +661,7 @@ stderr 归类（关键字由 W2 以真机日志校准，匹配不到时显示「
 | **mvp/scaffold**（最先合入 main） | 根 `settings.gradle.kts`、`build.gradle.kts`、`gradle.properties`、`gradle/**`（含 `libs.versions.toml`、wrapper）、`gradlew`、`gradlew.bat`；所有模块的 `build.gradle.kts`；`core/contract/**`（§2.2 全部接口、数据类、RPC 记录类型、Fake 实现）；`core/ui/**`；`app/**` 中除四个 `di/*Bindings.kt` 以外的文件（Application、MainActivity、导航、主题接入、`AppGraph.kt`、`di/BindingMode.kt` 初版）；四个 `di/*Bindings.kt` 的**初版**（只含 `fake()`）；各 feature 模块的占位页（每个 `feature/*/src/main/` 下一个 `Placeholder.kt`）；`app/src/main/assets/pins.json`；`buildSrc` 或 `build-logic/**` 中的 `checkLicenseHygiene`；`LICENSE`（所有者选定后）；`THIRD_PARTY_NOTICES.md` | 无 | JDK 17 下 `./gradlew assembleDebug testDebugUnitTest` 通过，CI 产出 debug APK；APK 能在四个占位页间导航；Fake 引擎能回放一段内置夹具（流式文本 + 两个工具卡 + 一次排队）；`checkLicenseHygiene` 对植入的 `me.bmax.apatch` 字符串会失败；仓库中无任何 `.so` |
 | **mvp/runtime** | `core/runtime/src/**`（含 `src/main/jniLibs/**`、`src/main/assets/mirrors.json`、`src/main/AndroidManifest.xml`、测试）；`core/runtime/NOTICE-runtime.md`；`tools/fetch-termux-libs.sh`；`feature/onboarding/src/**`（替换其占位页）；`app/src/main/java/**/di/RuntimeBindings.kt` | scaffold | §5.1 F1–F6；`RuntimeManager.exec(["node","-v"])` 返回 v24.22.2；`start(GuestSpec(["pi","--version"]))` 输出 1.5.0；`TarExtract` 单测：路径穿越、绝对/相对符号链接、硬链接、可执行位、超量上限；`Downloader` 单测：换镜像删 `.part`、同 URL 续传、哈希不符拒绝；`GuestProcess.stop()` 单测/仪器测试：只结束自身进程树；jniLibs 每个文件的 SHA256 与 `NOTICE-runtime.md` 一致 |
 | **mvp/engine** | `core/protocol/src/**`（含 `src/test/resources/fixtures/**`）；`core/engine/src/**`（含 `EngineService` 与其 manifest）；`docs/protocol/fixtures.md`；`app/src/main/java/**/di/EngineBindings.kt` | scaffold；真机联调需 runtime（开发期在桌面 Linux 上用真 pi 1.5.0 跑 JVM 集成测试，不依赖手机） | JVM 单测：Framer（U+2028/U+2029 不切分、CRLF、半包、超长行）、id 乱序关联、超时、不带 id 的 `parse` 错误、Reducer 夹具快照（文本流、思考、工具成功/失败、followUp、steer、clear_queue+abort、重试、压缩、未知事件/role）；桌面真 pi 集成测试：prompt→`agent_settled`、`handled` 不等待、followUp/steer、停止、`switch_session`、进程被杀后自动重启并恢复会话；stderr 归类表单测；§5.5 Q5、§5.7 N1–N3 |
-| **mvp/chat-ui** | `feature/chat/src/**`；`app/src/main/java/**/di/ChatBindings.kt` | scaffold（开发期用 Fake 引擎回放夹具） | §5.3 S1–S5、§5.4 T1–T4、§5.5 Q1–Q4 的界面部分；扩展对话框四种 method 与未知 method 自动 `cancelled`；Compose UI 测试：回放 1000 条 delta 时慢帧 < 5%（JankStats）；停止时草稿不被覆盖的 UI 测试 |
+| **mvp/chat-ui** | `feature/chat/src/**`；`app/src/main/java/**/di/ChatBindings.kt` | scaffold（开发期用 Fake 引擎回放夹具） | §5.3 S1–S6、§5.4 T1–T4、§5.5 Q1–Q4 的界面部分；扩展对话框四种 method 与未知 method 自动 `cancelled`；Compose UI 测试：回放 1000 条 delta 时慢帧 < 5%（JankStats）；停止时草稿不被覆盖的 UI 测试 |
 | **mvp/sessions-settings** | `core/store/src/**`；`feature/sessions/src/**`；`feature/settings/src/**`；`app/src/main/java/**/di/StoreBindings.kt` | scaffold；联调 `openSession/rename/models` 需 engine | §5.2 C1–C5、§5.6 L1–L5（列表、回收与恢复部分）、§5.7 N5 的引导页；`SessionRepository` 单测：header/`session_info`/预览解析、头尾读取、坏行容错、移入与恢复回收站；`ProviderConfigStore` 单测：`models.json` 合并不丢条目、权限 600、`$PIGO_KEY_<ID>` 写法、Key 清洗与脱敏；`SecretStore` 仪器测试：加密往返 |
 | **mvp/integration**（W1–W4 全部合入后） | `app/src/main/java/**/di/BindingMode.kt`；`app/src/androidTest/**`（端到端冒烟）；`docs/testing/mvp-acceptance.md`（真机验收记录） | scaffold、runtime、engine、chat-ui、sessions-settings | `BindingMode` 全部为真实实现；在 §5 规定的设备上逐条走通 §5 全表并记录到验收文档；无回归后打 `v0.1.0` |
 
