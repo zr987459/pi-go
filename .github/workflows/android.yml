@@ -1,0 +1,94 @@
+name: Android debug build
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 检测工程
+        id: detect
+        run: |
+          if [ -f gradlew ]; then
+            echo "has_project=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_project=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::仓库里还没有 gradlew，跳过构建（等 mvp/scaffold 合入后自动生效）。"
+          fi
+
+      - name: 安装 JDK 17
+        if: steps.detect.outputs.has_project == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 配置 Gradle
+        if: steps.detect.outputs.has_project == 'true'
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: 构建 debug APK
+        if: steps.detect.outputs.has_project == 'true'
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace assembleDebug
+
+      - name: 收集 APK
+        if: steps.detect.outputs.has_project == 'true'
+        id: apk
+        run: |
+          mkdir -p out
+          SHORT=$(git rev-parse --short HEAD)
+          n=0
+          while IFS= read -r f; do
+            base=$(basename "$f" .apk)
+            cp "$f" "out/${base}-${SHORT}.apk"
+            n=$((n+1))
+          done < <(find . -path '*/build/outputs/apk/debug/*.apk' -not -path './out/*')
+          echo "count=$n" >> "$GITHUB_OUTPUT"
+          ls -la out
+
+      - name: 上传构建产物
+        if: steps.detect.outputs.has_project == 'true' && steps.apk.outputs.count != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-go-debug-${{ github.sha }}
+          path: out/*.apk
+          retention-days: 14
+
+      - name: 发布到 nightly 测试版
+        if: >-
+          steps.detect.outputs.has_project == 'true' && steps.apk.outputs.count != '0' &&
+          (github.event_name == 'workflow_dispatch' ||
+           (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=nightly
+          NOTES="分支 ${GITHUB_REF_NAME} · 提交 ${GITHUB_SHA} · $(date -u '+%Y-%m-%d %H:%M UTC')"
+          # 不移动、不强推标签：nightly 标签首次创建后固定，每次只覆盖资产，
+          # 实际对应的分支和提交写在说明和 APK 文件名里。
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "pi-go 测试版" --notes "$NOTES" --prerelease
+            # 删掉旧资产，再上传新的
+            for a in $(gh release view "$TAG" --json assets -q '.assets[].name'); do
+              gh release delete-asset "$TAG" "$a" -y
+            done
+          else
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "pi-go 测试版" --notes "$NOTES" --prerelease
+          fi
+          gh release upload "$TAG" out/*.apk --clobber
