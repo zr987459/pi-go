@@ -16,4 +16,6 @@
 - 阶段3完成：docs/DESIGN.md 已推送（提交 6799687d9536107599ad2b150e1c4be7cd1b5407），同一提交同步更新 THIRD_PARTY_NOTICES.md 与 README.md
 - 阶段4完成：自查一致性（章节号与 REVIEW.md 引用的 §6、`:core:contract` 对齐；工作流文件范围互不重叠；全文无参考项目名称/标识）
 
-状态：**已完成**（2026-11-03 CST）。最终 DESIGN.md 提交：6799687d9536107599ad2b150e1c4be7cd1b5407
+- 补充：推送后 main 上出现 V1 投票（c2d34e1，同样投 B），已在 DESIGN.md 决策记录中补入其分数、吸收点与错误更正（提交 1acc0a39c844a8cb7054257b19ca05834d539f5a）
+
+状态：**已完成**（2026-11-03 CST）。最终 DESIGN.md 提交：1acc0a39c844a8cb7054257b19ca05834d539f5a
