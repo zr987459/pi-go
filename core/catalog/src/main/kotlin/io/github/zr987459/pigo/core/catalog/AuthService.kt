@@ -102,10 +102,13 @@ class AuthService(
         set
     }
 
-    /** 开始一次 OAuth 登录。运行环境没就绪时返回错误。 */
-    fun startOAuth(provider: String, proxyEnv: Map<String, String>): Outcome<OAuthLoginSession> {
-        if (runtime.status.value.phase != Phase.READY) return Outcome.Err(ErrCode.ENGINE_START, "请先完成运行环境安装再登录")
-        return try {
+    /**
+     * 开始一次 OAuth 登录。运行环境没就绪时返回错误。
+     * 释放脚本（读 asset、算 SHA、写文件）和拉起 proot 都是阻塞 IO，一律切到 [io]，调用方在主线程也不会卡（审查第 1 轮）。
+     */
+    suspend fun startOAuth(provider: String, proxyEnv: Map<String, String>): Outcome<OAuthLoginSession> = withContext(io) {
+        if (runtime.status.value.phase != Phase.READY) return@withContext Outcome.Err(ErrCode.ENGINE_START, "请先完成运行环境安装再登录")
+        try {
             scripts.ensure()
             val proc = runtime.start(GuestSpec(listOf(GuestScripts.NODE, GuestScripts.AUTH, "login", provider), env = proxyEnv))
             Outcome.Ok(

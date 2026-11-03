@@ -9,7 +9,10 @@ import io.github.zr987459.pigo.core.store.PiProviderConfigStore
 import io.github.zr987459.pigo.core.store.ProviderSpecs
 import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -30,6 +33,7 @@ class RealAuthManager(
     private val auth: AuthService,
     /** 目录里的服务商（判断是否内置）；默认取 [ProviderSpecs]。 */
     private val knownProvider: (String) -> Boolean = { ProviderSpecs.get(it) != null },
+    private val io: CoroutineDispatcher = Dispatchers.IO,
 ) : AuthManager {
 
     private val states = MutableStateFlow<Map<String, AuthState>?>(null)
@@ -139,7 +143,7 @@ class RealAuthManager(
                 withContext(NonCancellable) { session.cancel() } // 收集方取消 = 取消登录，并结束容器里的脚本
             }
         }
-    }
+    }.flowOn(io) // 读配置、释放脚本、拉起 proot 都不在收集方（界面主线程）上跑
 
     override suspend fun submitCode(provider: String, code: String) {
         val s = sessions[provider] ?: return
