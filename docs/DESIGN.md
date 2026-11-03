@@ -473,6 +473,7 @@ stderr 归类（关键字由 W2 以真机日志校准，匹配不到时显示「
 
 - 默认模型：合并写 `settings.json` 的 `defaultProvider` / `defaultModel` / `defaultThinkingLevel`，不覆盖用户其他键。
 - **边界**：环境变量不落盘，避免了 Key 出现在容器文件、备份、`/root/shared` 和误提交里；但 pi 的 bash 工具继承进程环境，模型仍能用 `env` 读到 Key。设置页须明确提示「pi 能读取容器内的文件和环境变量，请使用可随时作废的 Key」。
+- **OAuth 凭据例外**（2026-11-03 所有者决策，见 `docs/feature-gap.md` M3）：Claude Pro/Max、ChatGPT/Codex、GitHub Copilot 等 OAuth 登录的凭据需要 pi 自己刷新，因此允许写入容器内 pi 的 `auth.json`。要求：位于应用私有目录、文件权限 600、排除在 Android 备份和 App 的导出/分享之外、日志与诊断一律脱敏；API Key 仍按上文只放 Keystore 与进程环境。
 
 ---
 
