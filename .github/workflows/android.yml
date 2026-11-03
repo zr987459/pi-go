@@ -49,7 +49,7 @@ jobs:
 
       - name: 编译 W3 仪器测试（只编译不运行）
         if: steps.detect.outputs.has_project == 'true'
-        run: ./gradlew --no-daemon --stacktrace :core:workspace:assembleDebugAndroidTest :feature:files:assembleDebugAndroidTest
+        run: ./gradlew --no-daemon --stacktrace :core:workspace:assembleDebugAndroidTest :feature:files:assembleDebugAndroidTest :app:assembleDebugAndroidTest
 
       - name: 收集 APK
         if: steps.detect.outputs.has_project == 'true'
