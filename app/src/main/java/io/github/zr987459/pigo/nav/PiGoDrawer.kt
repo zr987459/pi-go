@@ -51,7 +51,7 @@ import io.github.zr987459.pigo.core.ui.StatusTone
 private val DrawerShape = RoundedCornerShape(topEnd = 28.dp, bottomEnd = 28.dp)
 
 private fun Destination.glyph(): Glyph = when (this) {
-    Destination.Chat -> AppIcons.chats
+    Destination.Chat -> AppIcons.conversations
     Destination.Sessions -> AppIcons.history
     Destination.Settings -> AppIcons.settings
     Destination.Onboarding -> AppIcons.terminal
