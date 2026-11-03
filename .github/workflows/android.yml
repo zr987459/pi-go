@@ -51,6 +51,23 @@ jobs:
         if: steps.detect.outputs.has_project == 'true'
         run: ./gradlew --no-daemon --stacktrace :core:workspace:assembleDebugAndroidTest :feature:files:assembleDebugAndroidTest :app:assembleDebugAndroidTest
 
+      # ---- r3（DESIGN-r3 §8.4，D3 授权）：全部模块单测 + 全部仪器测试编译 ----
+      - name: 单元测试（全部模块，r3）
+        if: steps.detect.outputs.has_project == 'true'
+        run: ./gradlew --no-daemon --stacktrace testDebugUnitTest
+
+      - name: 编译全部仪器测试（r3）
+        if: steps.detect.outputs.has_project == 'true'
+        run: ./gradlew --no-daemon --stacktrace assembleDebugAndroidTest
+
+      - name: 上传单测报告（失败时）
+        if: failure() && steps.detect.outputs.has_project == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-reports-${{ github.sha }}
+          path: '**/build/reports/tests/'
+          retention-days: 7
+
       - name: 收集 APK
         if: steps.detect.outputs.has_project == 'true'
         id: apk
@@ -96,3 +113,57 @@ jobs:
             gh release create "$TAG" --target "$GITHUB_SHA" --title "pi-go 测试版" --notes "$NOTES" --prerelease
           fi
           gh release upload "$TAG" out/*.apk --clobber
+
+  # r3（DESIGN-r3 §8.4 第 3 条）：模拟器仪器测试。只跑已存在的硬性要求测试类；
+  # 一个都还没合入时整个 job 以 notice 结束（不报错），合入后自动生效，缺的类不会让 job 失败。
+  instrumented:
+    name: 仪器测试（模拟器）
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 查找已合入的仪器测试类
+        id: find
+        run: |
+          : > "$RUNNER_TEMP/instr.sh"
+          n=0
+          for name in UiCoverageTest TermCoverageTest AppCoverageTest FormSwitchStreamingTest; do
+            f=$(find . -path '*/src/androidTest/*' -name "$name.kt" -not -path './build/*' | head -1)
+            [ -z "$f" ] && { echo "未找到 $name（尚未合入），跳过"; continue; }
+            module=$(echo "$f" | sed -e 's#^\./##' -e 's#/src/androidTest/.*##' | tr / :)
+            pkg=$(grep -m1 '^package ' "$f" | awk '{print $2}')
+            echo "./gradlew --no-daemon --stacktrace :$module:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=$pkg.$name" >> "$RUNNER_TEMP/instr.sh"
+            n=$((n+1))
+          done
+          cat "$RUNNER_TEMP/instr.sh"
+          echo "count=$n" >> "$GITHUB_OUTPUT"
+          if [ "$n" = 0 ]; then echo "::notice::硬性要求仪器测试尚未合入，模拟器步骤跳过。"; fi
+
+      - name: 安装 JDK 17
+        if: steps.find.outputs.count != '0'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 配置 Gradle
+        if: steps.find.outputs.count != '0'
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: 启用 KVM
+        if: steps.find.outputs.count != '0'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: 在模拟器上运行（API 34，x86_64）
+        if: steps.find.outputs.count != '0'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          script: chmod +x gradlew && bash "$RUNNER_TEMP/instr.sh"
