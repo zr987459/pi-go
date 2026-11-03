@@ -5,12 +5,13 @@ import io.github.zr987459.pigo.contract.ExecResult
 import io.github.zr987459.pigo.contract.FileDiff
 import io.github.zr987459.pigo.contract.FileNode
 import io.github.zr987459.pigo.contract.FilePreview
-import io.github.zr987459.pigo.contract.GitFileChange
 import io.github.zr987459.pigo.contract.GitStatus
 import io.github.zr987459.pigo.contract.GitWorktree
 import io.github.zr987459.pigo.contract.Outcome
 import io.github.zr987459.pigo.contract.TextChunk
 import io.github.zr987459.pigo.contract.WorkspaceFs
+import io.github.zr987459.pigo.contract.workspace.FileMatch
+import io.github.zr987459.pigo.contract.workspace.WorkspaceSearch
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -25,9 +26,11 @@ import java.time.Instant
 import java.util.concurrent.CopyOnWriteArraySet
 
 /**
- * [WorkspaceFs] 的真实实现：宿主直接读写 rootfs（不经 pi，引擎没起来也能浏览），git 经容器内 `git -C` 执行。
+ * [WorkspaceSearch]（DESIGN-r3 §1.2：`@` 模糊搜索、读文件、branchName()、只列目录）与旧 [WorkspaceFs] 的真实实现：
+ * 宿主直接读写 rootfs（不经 pi，引擎没起来也能用）。附件导入（[importInto]）与导出仍在用；浏览器、预览由 r3/app 删除后
+ * 契约里的旧方法随之移除。Git 页与 GitParse 已删除（§1.1 X5），git* 方法只剩兼容存根。
  *
- * 允许访问的范围：`/root` 与调用方给过的会话 cwd（[roots]、[gitStatus]、[allowRoot]）。路径解析与越界检查见 [GuestPaths]。
+ * 允许访问的范围：`/root` 与调用方给过的会话 cwd（[roots]、[allowRoot]）。路径解析与越界检查见 [GuestPaths]。
  * 所有 IO 在 [io] 上执行，不阻塞主线程。
  *
  * @param rootfs 宿主上的 rootfs 目录（`runtime.hostFile("/")`）
@@ -37,7 +40,7 @@ class RootfsWorkspace(
     private val rootfs: File,
     private val exec: suspend (cmd: List<String>, timeoutMs: Long) -> ExecResult,
     private val io: CoroutineDispatcher = Dispatchers.IO,
-) : WorkspaceFs {
+) : WorkspaceFs, WorkspaceSearch {
     private val extraRoots = CopyOnWriteArraySet<String>()
 
     /** 允许访问 [guestDir] 及其子路径（新会话 cwd、Share Target 的落地目录等）。 */
@@ -158,81 +161,94 @@ class RootfsWorkspace(
         f.inputStream().use { it.copyTo(output) }
     }
 
-    // ------------------------------------------------------------------ git
+    // ------------------------------------------------------------------ git（已删除，DESIGN-r3 §1.1 X5）
 
+    /**
+     * Git 页已按 DESIGN-r3 §1.1 X5 删除（pi 没有）；GitParse 与 diff/worktree 实现一并删除。
+     * 契约 [WorkspaceFs] 冻结（r3/core 只新增文件），旧调用方（feature/files 的 Git 页，r3/app 删除）在那之前仍能编译：
+     * 只回答「是不是仓库 + 当前分支名」，不再列文件改动。
+     */
+    @Deprecated("r3: r3/app 删除调用方（GitScreens / FilesController）；页脚分支名用 branchName()")
     override suspend fun gitStatus(cwd: String): Outcome<GitStatus> = guarded {
-        // 只检查不扩大：cwd 必须已由 roots(sessionCwd) 或装配层 allowRoot 登记过，否则 resolve 抛 PathDenied。
-        val dir = paths().resolve(cwd)
-        val top = git(dir, "rev-parse", "--show-toplevel")
-        if (top.exitCode != 0) return@guarded GitStatus(isRepo = false)
-        val r = git(dir, "status", "--porcelain=v2", "-z", "--branch", "--untracked-files=all")
-        if (r.exitCode != 0) throw IOException(gitError(r))
-        val s = GitParse.porcelainV2(r.stdout)
-        // porcelain 的路径相对仓库根；换成相对 cwd 的显示需要仓库根与 cwd 的关系，这里保留仓库根相对路径并附上仓库根。
-        GitStatus(
-            isRepo = true,
-            branch = s.branch,
-            upstream = s.upstream,
-            ahead = s.ahead,
-            behind = s.behind,
-            files = s.entries.filter { it.kind != GitParse.Kind.IGNORED }.map { GitFileChange(it.path, it.index, it.worktree, it.originalPath) },
-        )
+        paths().resolve(cwd) // 只检查不扩大：未登记的 cwd 抛 PathDenied
+        val b = branchNameBlocking(cwd)
+        if (b == null) GitStatus(isRepo = false) else GitStatus(isRepo = true, branch = b)
     }
 
-    /** 仓库根（容器路径）；不是仓库返回 null。 */
-    suspend fun gitRoot(cwd: String): String? = withContext(io) {
-        runCatching {
-            val r = git(paths().resolve(cwd), "rev-parse", "--show-toplevel")
-            r.stdout.trim().takeIf { r.exitCode == 0 && it.startsWith("/") }
-        }.getOrNull()
-    }
+    @Deprecated("r3: Git diff 已删除（DESIGN-r3 §1.1 X5），r3/app 删除调用方")
+    override suspend fun gitDiff(cwd: String, path: String?, staged: Boolean): Outcome<List<FileDiff>> =
+        Outcome.Err(ErrCode.UNKNOWN, GIT_REMOVED)
 
-    /** [path]：相对仓库根的路径（GitStatus.files 里的形式）或容器绝对路径。 */
-    override suspend fun gitDiff(cwd: String, path: String?, staged: Boolean): Outcome<List<FileDiff>> = guarded {
-        val dir = paths().resolve(cwd)
-        val args = ArrayList(listOf("-c", "core.quotepath=off", "diff", "--no-color", "--no-ext-diff", "--unified=3"))
-        if (staged) args += "--cached"
-        // 相对路径按仓库根解析（与 GitStatus.files 的路径一致），绝对路径原样交给 git。
-        if (path != null) { args += "--"; args += if (path.startsWith("/")) path else ":(top)$path" }
-        val r = git(dir, *args.toTypedArray(), timeoutMs = 30_000)
-        if (r.exitCode != 0) throw IOException(gitError(r))
-        // GuestRunner 的 stdout 上限是「字节」(maxOutputBytes = 1 MB)，drain 到顶即切断，最后一个文件可能不全。
-        // 因此按 UTF-8 字节数判断是否贴近上限：r.stdout.length 是 UTF-16 码元数，中文等多字节内容每字约占 3 字节、
-        // 却只算 1 个 length，永远到不了阈值 → 大 diff 检测不到（第 2 轮回归）。改用 stdout 的 UTF-8 字节数。
-        val nearLimit = r.stdout.toByteArray(Charsets.UTF_8).size >= DIFF_TRUNCATE_THRESHOLD
-        if (nearLimit) {
-            val parsed = GitParse.unifiedDiff(r.stdout).map(::toContract)
-            // 多文件时丢掉可能被切断的最后一个；单文件（界面都是按文件查看）就保留它，展示大部分优于什么都不给。
-            throw DiffTooLargeException(if (parsed.size > 1) parsed.dropLast(1) else parsed)
+    @Deprecated("r3: worktree 列表已删除（DESIGN-r3 §1.1 X5），r3/app 删除调用方")
+    override suspend fun gitWorktrees(cwd: String): Outcome<List<GitWorktree>> =
+        Outcome.Err(ErrCode.UNKNOWN, GIT_REMOVED)
+
+    // ------------------------------------------------------------------ WorkspaceSearch（DESIGN-r3 §1.2）
+
+    override suspend fun searchFiles(cwd: String, query: String, limit: Int): Outcome<List<FileMatch>> = guarded {
+        val ps = paths()
+        val base = GuestPaths.normalize(cwd)
+        val dir = ps.hostFile(base)
+        if (!dir.isDirectory) throw IOException("不是目录：$cwd")
+        val rootCanon = runCatching { rootfs.canonicalPath }.getOrDefault(rootfs.path)
+        val allowedHost = ps.allowedRoots.map { r -> runCatching { ps.hostFile(r).canonicalPath }.getOrNull() }.filterNotNull()
+        val inAllowed: (File) -> Boolean = { f ->
+            val c = f.path
+            (c == rootCanon || c.startsWith("$rootCanon/")) && allowedHost.any { a -> c == a || c.startsWith("$a/") }
         }
-        var diffs = GitParse.unifiedDiff(r.stdout).map(::toContract)
-        // 未跟踪文件 git diff 不输出：只有确认「未跟踪且未被忽略」时才按「全部新增」生成（参考 Pi-Web createAddedFilePatch）。
-        // 干净的已跟踪文件、只有暂存改动的文件、被 .gitignore 忽略的文件都返回空表。
-        if (diffs.isEmpty() && path != null && !staged) {
-            val top = gitRoot(cwd) ?: return@guarded diffs
-            val rel = repoRelative(top, path) ?: return@guarded diffs
-            // --full-name：无论 cwd 在仓库哪个子目录，ls-files 都输出相对仓库根的路径，才能和 rel 比对
-            // （否则 cwd 为子目录时输出相对 cwd 的 ../new.kt、n2.kt，永远匹配不上，回归为 diff 全空）。
-            val untracked = git(dir, "ls-files", "--others", "--exclude-standard", "--full-name", "-z", "--", ":(top,literal)$rel")
-            if (untracked.exitCode != 0 || untracked.stdout.split('\u0000').none { it == rel }) return@guarded diffs
-            val f = runCatching { paths().hostFile(GuestPaths.child(top, rel)) }.getOrNull()
-            if (f != null && f.isFile && f.length() <= WorkspaceFs.DEFAULT_MAX_TEXT_BYTES && !looksBinary(f)) {
-                diffs = GitParse.unifiedDiff(GitParse.addedFilePatch(rel, f.readText())).map(::toContract)
+        FileSearch.search(dir, query, limit, inAllowed).map { m ->
+            FileMatch(
+                guestPath = GuestPaths.child(base, m.path),
+                path = m.path,
+                name = m.path.substringAfterLast('/'),
+                isDir = m.isDir,
+                score = m.score,
+                completion = FileSearch.completion(m.path, m.isDir),
+            )
+        }
+    }
+
+    override suspend fun readFile(guestPath: String, maxBytes: Long): Outcome<TextChunk> = readText(guestPath, maxBytes)
+
+    override suspend fun branchName(cwd: String): String? = withContext(io) { runCatching { branchNameBlocking(cwd) }.getOrNull() }
+
+    override suspend fun listDirectories(guestDir: String, showHidden: Boolean): Outcome<List<FileNode>> =
+        when (val r = list(guestDir, showHidden)) {
+            is Outcome.Ok -> Outcome.Ok(r.value.filter { it.isDir })
+            is Outcome.Err -> r
+        }
+
+    /**
+     * 与 pi 页脚（`footer-data-provider.js` 的 `findGitPaths` + `resolveGitBranchSync`）相同：从 cwd 往上找 `.git`
+     * （目录，或 worktree 的 `gitdir:` 文件），读 HEAD：`ref: refs/heads/<名>` → 名；其他 → `"detached"`；
+     * reftable 仓库（`.invalid`）用 `git symbolic-ref` 兜底。不是仓库返回 null。只读 rootfs 里的文件。
+     */
+    private suspend fun branchNameBlocking(cwd: String): String? {
+        val ps = paths()
+        var dir: String? = GuestPaths.normalize(cwd)
+        while (dir != null) {
+            val git = ps.rawHost(GuestPaths.child(dir, ".git").let { runCatching { ps.resolve(it) }.getOrDefault(it) })
+            if (git.exists()) {
+                val head: File = if (git.isFile) {
+                    val content = runCatching { git.readText().trim() }.getOrNull() ?: return null
+                    if (!content.startsWith("gitdir: ")) return null
+                    val gd = content.removePrefix("gitdir: ").trim()
+                    val gitDirGuest = if (gd.startsWith("/")) GuestPaths.normalize(gd) else GuestPaths.normalize("$dir/$gd")
+                    ps.rawHost(gitDirGuest).resolve("HEAD")
+                } else git.resolve("HEAD")
+                if (!head.isFile) return null
+                val content = runCatching { head.readText().trim() }.getOrNull() ?: return null
+                if (!content.startsWith("ref: refs/heads/")) return "detached"
+                val b = content.removePrefix("ref: refs/heads/")
+                if (b != ".invalid") return b
+                val r = runCatching { exec(listOf("git", "-C", dir, "--no-optional-locks", "symbolic-ref", "--quiet", "--short", "HEAD"), 5_000) }.getOrNull()
+                val out = if (r != null && r.exitCode == 0) r.stdout.trim() else ""
+                return out.ifEmpty { "detached" }
             }
+            dir = GuestPaths.parent(dir)
         }
-        diffs
+        return null
     }
-
-    override suspend fun gitWorktrees(cwd: String): Outcome<List<GitWorktree>> = guarded {
-        val r = git(paths().resolve(cwd), "worktree", "list", "--porcelain")
-        if (r.exitCode != 0) return@guarded emptyList()
-        parseWorktrees(r.stdout)
-    }
-
-    private suspend fun git(dir: String, vararg args: String, timeoutMs: Long = 15_000): ExecResult =
-        exec(listOf("git", "-C", dir) + args, timeoutMs)
-
-    private fun gitError(r: ExecResult) = if (r.timedOut) "git 执行超时" else "git 执行失败：" + r.stderr.trim().lineSequence().firstOrNull().orEmpty()
 
     // ------------------------------------------------------------------ 内部
 
@@ -289,22 +305,7 @@ class RootfsWorkspace(
     companion object {
         const val HOME = "/root"
 
-        /** 略低于 GuestRunner 的 1 MB 输出上限，单位为 UTF-8 字节（与 maxOutputBytes 同一单位）；留 4 KB 余量，宁可多报截断。 */
-        internal const val DIFF_TRUNCATE_THRESHOLD = (1 shl 20) - 4096
-
-        /**
-         * 把 [path]（相对仓库根，或容器绝对路径）换成相对仓库根 [top] 的路径；在仓库外或含 `..` 返回 null。
-         * diff 头与 `ls-files` 都用这个相对路径。
-         */
-        internal fun repoRelative(top: String, path: String): String? {
-            val rel = if (path.startsWith("/")) {
-                val norm = runCatching { GuestPaths.normalize(path) }.getOrNull() ?: return null
-                val t = top.trimEnd('/')
-                if (t.isEmpty()) norm.removePrefix("/") else if (norm.startsWith("$t/")) norm.removePrefix("$t/") else return null
-            } else path
-            if (rel.isEmpty() || rel.split('/').any { it == ".." || it.isEmpty() }) return null
-            return rel
-        }
+        internal const val GIT_REMOVED = "Git 页已删除（pi 没有此功能，DESIGN-r3 §1.1 X5）"
 
         /** 读前 [maxBytes]；按 UTF-8 解码，截断处不切开多字节字符。含 NUL 视为二进制，返回空文本。 */
         internal fun readChunk(f: File, maxBytes: Long, language: String?): TextChunk {
@@ -350,58 +351,7 @@ class RootfsWorkspace(
             }
         }.getOrDefault(false)
 
-        internal fun toContract(d: GitParse.FileDiff): FileDiff = FileDiff(
-            path = d.path,
-            oldPath = d.oldPath?.takeIf { it != d.newPath },
-            hunks = d.hunks.map { h ->
-                io.github.zr987459.pigo.contract.DiffHunk(h.header, h.lines.map { l ->
-                    io.github.zr987459.pigo.contract.DiffLine(
-                        kind = when (l.type) {
-                            GitParse.LineType.ADD -> io.github.zr987459.pigo.contract.DiffLineKind.ADD
-                            GitParse.LineType.DEL -> io.github.zr987459.pigo.contract.DiffLineKind.DELETE
-                            GitParse.LineType.CONTEXT -> io.github.zr987459.pigo.contract.DiffLineKind.CONTEXT
-                            GitParse.LineType.NO_NEWLINE -> io.github.zr987459.pigo.contract.DiffLineKind.META
-                        },
-                        text = l.text,
-                        oldNo = l.oldNo,
-                        newNo = l.newNo,
-                    )
-                })
-            },
-            binary = d.binary,
-            added = d.additions,
-            deleted = d.deletions,
-        )
-
-        internal fun parseWorktrees(out: String): List<GitWorktree> {
-            val res = ArrayList<GitWorktree>()
-            var path: String? = null
-            var head: String? = null
-            var branch: String? = null
-            fun flush() { path?.let { res += GitWorktree(it, branch, head) }; path = null; head = null; branch = null }
-            for (line in out.lines()) {
-                when {
-                    line.isBlank() -> flush()
-                    line.startsWith("worktree ") -> { flush(); path = line.removePrefix("worktree ") }
-                    line.startsWith("HEAD ") -> head = line.removePrefix("HEAD ")
-                    line.startsWith("branch ") -> branch = line.removePrefix("branch ").removePrefix("refs/heads/")
-                    line == "detached" -> branch = null
-                }
-            }
-            flush()
-            return res
-        }
     }
 }
-
-/**
- * diff 输出超过 GuestRunner 的 1 MB 字节上限被截断。[partial] 是完整解析出的文件：
- * 多文件时已丢掉可能不全的最后一个，单文件时保留（界面本就按文件查看，展示大部分优于空白）。
- * 契约 [FileDiff] 没有截断标志（契约冻结），故目前只能经此异常以 [message] 提示；
- * 让 partial 随 Ok 返回需给契约加截断字段，另开 PR。
- */
-class DiffTooLargeException(val partial: List<FileDiff>) : IOException(
-    if (partial.size <= 1) "改动过大，已超过 1 MB 显示上限被截断，下面只是其中一部分" else "改动过大，已截断（只显示前 ${partial.size} 个文件）；请按文件查看",
-)
 
 class TooLargeException(val limit: Long) : IOException("文件超过 ${limit / (1024 * 1024)} MB，无法导入")
