@@ -61,6 +61,115 @@ object ModelDiscovery {
         }.map { it.trim() }.filter { it.isNotEmpty() }.distinct().sorted()
     }
 
+    /** 「获取模型列表」带回的详情（M7 回填用），上游不给的字段为 null。 */
+    data class Discovered(
+        val id: String,
+        val name: String? = null,
+        val contextWindow: Long? = null,
+        val maxTokens: Long? = null,
+        val reasoning: Boolean? = null,
+        val supportsImages: Boolean? = null,
+    )
+
+    /**
+     * 解析详情（W2 / M7）。识别常见字段：
+     * - OpenRouter：`context_length`、`top_provider.max_completion_tokens`、`architecture.input_modalities`、`supported_parameters` 含 `reasoning`；
+     * - Gemini：`displayName`、`inputTokenLimit`、`outputTokenLimit`、`thinking`；
+     * - Anthropic：`display_name`；
+     * - vLLM / 其他兼容端点：`max_model_len`、`context_window`、`max_context_length`、`max_tokens`。
+     */
+    fun parseDetailed(body: String): List<Discovered> {
+        val root: JsonElement = runCatching { json.parseToJsonElement(body) }.getOrNull() ?: return emptyList()
+        val list: JsonArray = when (root) {
+            is JsonArray -> root
+            is JsonObject -> (root["data"] as? JsonArray) ?: (root["models"] as? JsonArray) ?: return emptyList()
+            else -> return emptyList()
+        }
+        fun JsonObject.p(k: String) = (this[k] as? JsonPrimitive)?.contentOrNull
+        fun JsonObject.l(vararg ks: String) = ks.firstNotNullOfOrNull { p(it)?.toDoubleOrNull()?.toLong() }
+        val out = LinkedHashMap<String, Discovered>()
+        for (el in list) {
+            val d = when (el) {
+                is JsonPrimitive -> el.contentOrNull?.let { Discovered(it.trim()) }
+                is JsonObject -> {
+                    val id = (el.p("id") ?: el.p("name")?.removePrefix("models/"))?.trim()
+                    if (id.isNullOrEmpty()) null else {
+                        val arch = el["architecture"] as? JsonObject
+                        val modalities = (arch?.get("input_modalities") as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+                        val params = (el["supported_parameters"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+                        val top = el["top_provider"] as? JsonObject
+                        Discovered(
+                            id = id,
+                            name = el.p("display_name") ?: el.p("displayName") ?: el.p("name")?.takeIf { !it.startsWith("models/") && it != id },
+                            contextWindow = el.l("context_length", "inputTokenLimit", "context_window", "max_context_length", "max_model_len"),
+                            maxTokens = top?.l("max_completion_tokens") ?: el.l("outputTokenLimit", "max_output_tokens", "max_tokens"),
+                            reasoning = when {
+                                params != null -> "reasoning" in params || "include_reasoning" in params
+                                el.p("thinking") != null -> el.p("thinking") == "true"
+                                else -> null
+                            },
+                            supportsImages = modalities?.let { "image" in it },
+                        )
+                    }
+                }
+                else -> null
+            }
+            if (d != null && d.id.isNotEmpty() && d.id !in out) out[d.id] = d
+        }
+        return out.values.sortedBy { it.id }
+    }
+
+    /** 带详情的模型列表；[api] 决定鉴权头（Gemini 用 `x-goog-api-key`，Anthropic 加 `anthropic-version`）。 */
+    suspend fun discoverDetailed(
+        baseUrl: String,
+        rawKey: String,
+        api: String? = null,
+        /** M9 的代理（[HostProxy.select]）；null = 直连。 */
+        proxy: java.net.Proxy? = null,
+    ): Outcome<List<Discovered>> =
+        withContext(Dispatchers.IO) {
+            val key = sanitizeApiKey(rawKey)
+            val url = try {
+                modelsUrl(baseUrl)
+            } catch (e: IllegalArgumentException) {
+                return@withContext Outcome.Err(ErrCode.PROVIDER, e.message ?: "接口地址不正确")
+            }
+            try {
+                val conn = (URL(url).openConnection(proxy ?: java.net.Proxy.NO_PROXY) as HttpURLConnection).apply {
+                    requestMethod = "GET"
+                    connectTimeout = TIMEOUT_MS
+                    readTimeout = TIMEOUT_MS
+                    setRequestProperty("Accept", "application/json")
+                    if (key.isNotEmpty()) {
+                        when (api) {
+                            "google-generative-ai" -> setRequestProperty("x-goog-api-key", key)
+                            "anthropic-messages" -> {
+                                setRequestProperty("x-api-key", key)
+                                setRequestProperty("anthropic-version", "2023-06-01")
+                                setRequestProperty("Authorization", "Bearer $key")
+                            }
+                            else -> {
+                                setRequestProperty("Authorization", "Bearer $key")
+                                setRequestProperty("x-api-key", key)
+                            }
+                        }
+                    }
+                }
+                try {
+                    val code = conn.responseCode
+                    val body = HttpText.read(conn, code)
+                    if (code !in 200..299) return@withContext Outcome.Err(HttpText.errCode(code), HttpText.statusReason(code, body, key))
+                    val list = parseDetailed(body)
+                    if (list.isEmpty()) Outcome.Err(ErrCode.PROVIDER, "服务返回了空的模型列表，请手动填写模型 id")
+                    else Outcome.Ok(list)
+                } finally {
+                    conn.disconnect()
+                }
+            } catch (e: Exception) {
+                Outcome.Err(ErrCode.NETWORK, HttpText.networkReason(e))
+            }
+        }
+
     /** 请求模型列表。失败时返回中文原因（不含 Key）。 */
     suspend fun discover(baseUrl: String, rawKey: String): Outcome<List<String>> = withContext(Dispatchers.IO) {
         val key = sanitizeApiKey(rawKey)

@@ -94,20 +94,22 @@ object ProviderTester {
         rawKey: String,
         model: String? = null,
         clock: () -> Long = System::currentTimeMillis,
+        /** 其余要一起注入的变量（多变量服务商的区域/账户、代理等，W2）。 */
+        extraEnv: Map<String, String> = emptyMap(),
     ): ProbeResult {
         val key = sanitizeApiKey(rawKey)
         if (key.isEmpty()) return ProbeResult(false, "还没有填写 Key")
         val t0 = clock()
         val r = try {
-            runtime.exec(piArgs(provider, model), env = mapOf(envVar to key), timeoutMs = PI_TIMEOUT_MS)
+            runtime.exec(piArgs(provider, model), env = extraEnv + (envVar to key), timeoutMs = PI_TIMEOUT_MS)
         } catch (e: Exception) {
-            return ProbeResult(false, "运行环境不可用：" + KeyRedaction.redact(e.message ?: e::class.simpleName.orEmpty(), listOf(key)))
+            return ProbeResult(false, "运行环境不可用：" + KeyRedaction.redact(e.message ?: e::class.simpleName.orEmpty(), listOf(key) + extraEnv.values))
         }
         val ms = clock() - t0
         if (r.timedOut) return ProbeResult(false, "超过 ${PI_TIMEOUT_MS / 1000} 秒没有回应：模型服务可能连不上", null, ms)
         if (r.exitCode == 0 && r.stdout.isNotBlank()) return ProbeResult(true, "连接正常，耗时 $ms ms", null, ms)
         val raw = (r.stderr.ifBlank { r.stdout }).lines().map { it.trim() }.lastOrNull { it.isNotEmpty() }.orEmpty()
-        return ProbeResult(false, classifyPiError(raw, key), statusIn(raw), ms)
+        return ProbeResult(false, KeyRedaction.redact(classifyPiError(raw, key), extraEnv.values), statusIn(raw), ms)
     }
 
     private val status = Regex("""(?<![\d.])(4\d\d|5\d\d)(?![\d.])""")
