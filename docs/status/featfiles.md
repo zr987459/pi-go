@@ -1,5 +1,8 @@
 # feat/files（W3）状态
 
+> **修复1 进行中**（2026-11-03 15:50 CST）：PR #9 审查第 1 轮，Important 4 条 + Nit 7 条；先 merge origin/main（f1f0e02）。
+
+
 - 状态：**已完成，PR 已开**（2026-11-03 15:40 CST）
 - 已合入 origin/feat/modules（W0，最新 02bc39b）。W0 合入 main 后会 `merge origin/main`（不 rebase）。
 
