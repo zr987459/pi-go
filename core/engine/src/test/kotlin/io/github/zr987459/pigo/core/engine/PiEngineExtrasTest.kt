@@ -202,9 +202,16 @@ class PiEngineExtrasTest {
 
     @Test
     fun messageMetaFromEntriesAndEntryAppended() = runBlocking {
+        // 轮末引擎会再全量 get_entries 一次：脚本返回的全量要包含本轮追加的条目。
+        val e3 = """{"type":"message","id":"e3","parentId":"e2","message":{"role":"user","content":"第二句"}}"""
+        val e4 = """{"type":"message","id":"e4","parentId":"e3","message":{"role":"assistant","provider":"p","model":"m","content":[],"usage":{"output":7,"cost":{"total":0.25}}}}"""
+        val appended = java.util.concurrent.atomic.AtomicBoolean(false)
         val rt = ScriptedRuntime {
             { cmd ->
-                if (cmd.str("type") == "prompt") {
+                if (cmd.str("type") == "get_entries" && appended.get()) {
+                    ok(cmd, entries.replace("],\"leafId\":\"e2\"", ",$e3,$e4],\"leafId\":\"e4\""))
+                } else if (cmd.str("type") == "prompt") {
+                    appended.set(true)
                     ok(cmd, """{"disposition":"started"}""")
                     emit("""{"type":"agent_start"}""")
                     emit("""{"type":"message_start","message":{"role":"user","content":"第二句"}}""")
