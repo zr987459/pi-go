@@ -1,0 +1,48 @@
+# feat/wiring（W5）状态
+
+> **已合入 W1 并切换 extras 真实实现**（2026-11-04 00:5x CST）：
+> - merge origin/main（e21eb46，含 W1 PR #13 feat/engine-rpc）→ `a4132ec`，无冲突（`EngineBindings.kt` 只有 main 一侧改动，W1 的 `extras(engine)` 与任务通知接入原样保留）。
+> - `ExtrasBindings.real()` 返回 W1 的 `EngineBindings.extras(engine)`（PiEngine 本身实现 EngineExtras），并套上与 `GatedEngineClient` 同一个冷启动预热闸门（新文件 `di/GatedEngineExtras.kt`；`GatedEngineClient.gate` 改为公开）：extras 的命令也经 `ensureStarted` 按需启动引擎，不挡会抢在「回到上次会话」之前。`ExtrasBindings.fake()` 保留给单测。
+> - `BindingMode.extras = REAL`：时间线附加项、长按分叉、上下文小环、抽屉「会话树 / 技能与模板 / 用量」、设置「会话默认」进入生产路径；WiringSmokeTest ②–⑤ 不再因 FAKE 跳过（仍需真机与模型 Key）。
+> - `WorkspaceBindings`：当前会话 HTML 导出走 `extras.exportHtml`（`export_html`），其他会话走 `pi --export`；extras 为 Fake（本地 FAKE 引擎）时不传。
+> - 新增单测 `app/.../di/GatedEngineExtrasTest`（预热前不转发、放行后全部转发、运行环境未就绪时直接放行）。
+
+> **审查第 1 轮修复完成**（2026-11-03 17:42 CST，接手续做）：
+> - 17:58 修复1 ✅：`AppGraph.liveExtras`（仅 REAL 时非 null）传给 ChatController；时间线附加项、长按分叉、上下文小环、抽屉「会话树 / 技能与模板 / 用量」只在 REAL 时出现，直达路由显示「需要新版引擎」。
+> - 17:58 修复2 ✅：长按菜单用 rememberUpdatedState 读最新 text / entryId；新增 feature/chat `LongPressMenuTest`（仪器）。
+> - 17:58 修复3 ✅：feature/models `ModelPicker` 新增 `onConfigureModel(ModelRef)`（旧回调保留），`PickerLogic.Click.Configure` 带 ref；`PendingModel` 存 ModelRef，回聊天 setModel 到被点的模型；配置页返回清空、只在真正配置后回聊天（Nit）；WiringSmokeTest ① 断言 provider + id。
+> - 18:08 修复4 ✅：会话长按菜单新增「导出」→ W3 `ExportSheet(graph.workspace.exporter, guestPath)`；feature/settings 新增 `SessionDefaultsScreen`（M8 四个开关，经 extras.setAutoCompaction / setAutoRetry / setSteeringMode / setFollowUpMode，pi 写入 settings.json），设置首页「会话默认」入口仅 REAL 时显示；副标题改成与实际一致。
+> - 18:08 Nit：抽屉高亮去掉查询参数；缩略图在 IO 线程按 96dp 采样解码；「去配置」返回时清空 PendingModel、只在真正已配置时回聊天；真机清单标题注明「待真机填写」。
+> - 18:10 本地：app 10/10、feature:chat 92/92、models 8/8、settings 15/15、sessions 16/16 单测通过；assembleDebug 与三个 assembleDebugAndroidTest 通过。PR 描述已追加修复表与测试结果。W1（PR #13）仍未合入，extras 保持 FAKE（生产路径不使用）。
+
+> ~~**等待 W1**~~（已完成，见顶部）。原计划：merge origin/main → `ExtrasBindings.real()` 返回 W1 的 `EngineBindings.extras(engine)`（PiEngine 本身实现 EngineExtras）→ `BindingMode.extras = REAL` → `WorkspaceBindings` 当前会话 HTML 导出改走 `extras.exportHtml` → 「从这里分叉」随 messageMeta 可用 → 全量单测。
+
+**状态：W2/W3/W4/UI 接线完成，会话面板已接 W4 SessionIndex；CI 绿（run 41610482453，2401c0e，含 `:app:assembleDebugAndroidTest`）；W1（PR #13）已合入，extras 已切真实实现（2026-11-04）**（2026-11-03 17:3x CST，从 main@b54a507 切出）
+
+## 计划（按 docs/feature-gap.md §3.2 W5）
+1. 读 §3.2 W5 条目、各模块入口，确定接线点。
+2. AppGraph / *Bindings：W2（feature/models、RealAuthManager）、W4（CommandsGraph、UsageController）、UI 改版接入；W1/W3 未合入前 BindingMode 用 Fake（EngineExtras、Workspace）。
+3. 顶栏、输入框（/ 候选、+ 附件）、抽屉（文件、会话树、技能与模板、用量）、设置入口换成 W2 新服务商页、会话内切模型/思考强度。
+4. 前几轮留下的 Nit：抽屉返回键、外壳只订阅 sessionFile、服务商表单回填 savedFields、旧设置入口替换、setModel/setThinking。
+5. docs/notices/*.md 并入 THIRD_PARTY_NOTICES.md。
+6. 仪器冒烟用例；docs/testing/ 真机验收清单；单测；CI。
+7. 每次推送前 merge origin/main；W1/W3 合入后切真实实现。
+
+## 进度
+- 17:3x 续做：抽屉会话面板（feature/sessions `SessionsScreen(index = graph.commands.sessionIndex)`）接 W4 SessionIndex——搜索框走全文搜索（名字 + 用户消息，停顿 250ms，结果带命中片段，索引未返回时先用本地筛选），无查询时「置顶」节 + 按工作目录分组，长按菜单「置顶 / 取消置顶」，刷新、删除、恢复后 `rescan`；不传 index 时保持原来的按日期分组。纯函数 `DrawerGrouping.indexed` / `mergeSearch` 加单测。
+- 17:2x CI：「编译 W3 仪器测试」一步追加 `:app:assembleDebugAndroidTest`，`WiringSmokeTest` / `AppSmokeTest` 编译通过（run 41610482453 success）。
+- ModelPicker 自动选回用户点的模型：W2 契约只回传服务商 id，不改 feature/models；提议（`Click.Configure(provider, ref)` + 可选 `onConfigureModel`）已追加到 PR #14 描述，目前仍选该服务商第一个可用模型。
+- 已 merge origin/main（f9097eb，W3 feat/files PR #9）→ 74dc68b；BindingMode.workspace 切 REAL（WorkspaceServices），抽屉「文件」→ FilesHost，「+」→ AttachmentSheet，轮末汇总点文件 → 文件预览，FilesRuntime 在 Application 启动时登记。
+- 导航：设置首页（服务商与登录 / 代理与费用 / 运行环境与高级 / 导出）、服务商页与配置页（回填 savedFields）、自定义端点、会话树、技能与模板、用量、文件（占位）；模型选择弹层 + 用量弹层；审查 Nit ①–⑤ 已处理。
+- THIRD_PARTY_NOTICES.md 已并入 docs/notices（feat-commands、feat-models、feat-modules）。
+- 仪器冒烟 WiringSmokeTest（①–⑥，缺条件时 Assume 跳过）；AppSmokeTest 按新入口更新；真机清单 docs/testing/feat-wiring-device-checklist.md。
+- 聊天页插槽：时间线附加项（按 anchorKey）、`/` 候选面板、消息长按菜单（复制、复制 Markdown、从这里分叉）、待发图片胶囊、上下文小环 → 用量弹层。
+- 依赖装配：app 依赖 core:catalog/core:workspace/feature:models/files/commands/usage；AppGraph 新增 extras（Fake，等 W1）、models（REAL，CatalogGraph）、workspace（Fake，等 W3）、commands（REAL，CommandsGraph，传 launchEnv）；ChatController 带上 extras 与草稿存储。
+
+## 遗留（2026-11-03 17:3x CST）
+- **等待 W1（PR #13）**：合入后切 extras REAL、HTML 导出走 `extras.exportHtml`、「从这里分叉」可用，WiringSmokeTest ②④⑤ 才真正运行；PR #13 也改了 `app/di/EngineBindings.kt`，merge 时注意。
+- **W2 缺口**：ModelPicker 只回传服务商 id，自动选回的是该服务商第一个可用模型（提议见 PR 描述）。
+- 会话归档（`setArchived`）、未读标记、自动命名结果显示尚未接界面。
+- 「会话默认设置（M8）」W2 没有独立页面，未接。
+- 本地只能跑 JVM 单测（aarch64 沙箱，无 Android SDK）：本轮 feature/sessions DrawerGroupingTest + SessionFormatTest 16/16 通过；Android 编译与 androidTest 编译靠 CI。
+

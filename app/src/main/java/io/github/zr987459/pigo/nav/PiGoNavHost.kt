@@ -57,9 +57,20 @@ import io.github.zr987459.pigo.di.StoreBindings
 import io.github.zr987459.pigo.feature.chat.ui.ChatScreen
 import io.github.zr987459.pigo.feature.onboarding.OnboardingScreen
 import io.github.zr987459.pigo.feature.sessions.SessionsScreen
+import io.github.zr987459.pigo.feature.files.export.ExportSheet
 import io.github.zr987459.pigo.feature.settings.SettingsFocus
 import io.github.zr987459.pigo.feature.settings.SettingsScreen
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import io.github.zr987459.pigo.contract.ModelRef
+import io.github.zr987459.pigo.feature.chat.ui.MessageMenu
+import io.github.zr987459.pigo.feature.commands.ui.CommandPalette
+import io.github.zr987459.pigo.feature.commands.ui.PaletteGroup
+import io.github.zr987459.pigo.feature.models.ModelPicker
 
 /** 四个顶层目的地。MVP 期间 feature 只提供页面，导航只在 :app。 */
 enum class Destination(val route: String, val label: String) {
@@ -67,6 +78,11 @@ enum class Destination(val route: String, val label: String) {
     Chat("chat", "聊天"),
     Sessions("sessions", "全部会话"),
     Settings("settings", "设置"),
+    // W5 抽屉入口
+    Files(Routes.FILES, "文件"),
+    Tree(Routes.TREE, "会话树"),
+    Skills(Routes.SKILLS, "技能与模板"),
+    Usage(Routes.USAGE, "用量"),
 }
 
 /** 设置页带可选定位参数：`settings?focus=models`（见 [SettingsFocus]）。 */
@@ -127,7 +143,9 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
 
     // 抽屉里的会话列表：抽屉打开、当前会话变化、运行环境就绪时都重新读取（抽屉内容关着时也组合，
     // SessionsScreen 自己的首次 refresh 只在启动时跑一次）。
-    val currentSession = graph.engine.chat.collectAsState().value.sessionFile
+    // 外壳只订阅当前会话文件（审查 Nit：不要整个 chat 流，流式输出时外壳不重组）。
+    val currentSession by remember(graph) { graph.engine.chat.map { it.sessionFile }.distinctUntilChanged() }
+        .collectAsState(initial = graph.engine.chat.value.sessionFile)
     LaunchedEffect(drawerState) {
         snapshotFlow { drawerState.targetValue }.collect { v ->
             if (v == DrawerValue.Open) runCatching { graph.sessions.refresh() }
@@ -146,13 +164,15 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
             PiGoDrawer(
                 current = current,
                 onDestination = ::go,
+                // 会话树、技能与模板、用量依赖 W1 的 extras：切 REAL 前不显示（审查第 1 轮 Important 1）。
+                extrasReady = graph.extrasReady,
                 engineStatus = graph.engine.status.collectAsState().value,
             ) { footer ->
                 SessionsPage(
                     graph,
                     onOpened = { go(Destination.Chat) },
                     onError = ::toast,
-                    onOpenSettings = { go(Destination.Settings) },
+                    onOpenSettings = { scope.launch { drawerState.close() }; navController.navigate(Routes.SETTINGS_HUB) { launchSingleTop = true } },
                     footer = footer,
                 )
             }
@@ -176,9 +196,79 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
                 composable(Destination.Chat.route) {
                     ChatPage(
                         graph,
-                        onOpenModelSettings = { navController.openSettings(SettingsFocus.MODELS) },
+                        // 旧设置页入口换成 W2 的服务商页（审查 Nit ④）。
+                        onOpenModelSettings = { navController.navigate(Routes.PROVIDERS) { launchSingleTop = true } },
                         onOpenDrawer = { scope.launch { drawerState.open() } },
                         onNewChat = newChat,
+                        // 抽屉开着时聊天页的「返回 = 退到后台」让位给关抽屉（审查 Nit ①，旋转/切深色后也成立）。
+                        drawerOpen = drawerOpen,
+                        onConfigureProvider = { id -> navController.navigate(Routes.provider(id)) { launchSingleTop = true } },
+                        onOpenFile = { path -> navController.navigate(Routes.files(path)) },
+                        onToast = ::toast,
+                    )
+                }
+                composable(Routes.SETTINGS_HUB) {
+                    SettingsHub(onOpen = { r -> navController.navigate(r) { launchSingleTop = true } }, onBack = { navController.popBackStack() }, extrasReady = graph.extrasReady)
+                }
+                composable(Routes.PROVIDERS) {
+                    ProvidersPage(
+                        graph,
+                        onOpen = { id -> navController.navigate(Routes.provider(id)) },
+                        onAddCustom = { navController.navigate(Routes.CUSTOM_PROVIDER) },
+                        onBack = { if (!navController.popBackStack()) navController.navigateTopLevel(Destination.Chat) },
+                    )
+                }
+                composable(Routes.PROVIDER, arguments = listOf(navArgument("id") { type = NavType.StringType })) { entry ->
+                    val id = entry.arguments?.getString("id").orEmpty()
+                    ProviderConfigPage(
+                        graph,
+                        id,
+                        // 从模型选择弹层「去配置」进来的：配好就回聊天，并自动选中该服务商的模型（验收①）。
+                        // 是否该回聊天由配置页判断（PendingModelLogic.shouldReturn）；回到聊天后 applyPendingModel 切到用户点的模型。
+                        onDone = { navController.navigateTopLevel(Destination.Chat) },
+                        onBack = { if (!navController.popBackStack()) navController.navigateTopLevel(Destination.Chat) },
+                    )
+                }
+                composable(Routes.CUSTOM_PROVIDER) { CustomProviderPage(graph, onBack = { navController.popBackStack() }) }
+                composable(Routes.NETWORK) { NetworkPage(graph, onBack = { navController.popBackStack() }) }
+                composable(Routes.SESSION_DEFAULTS) { SessionDefaultsPage(graph, onBack = { navController.popBackStack() }) }
+                composable(Routes.TREE) {
+                    if (!graph.extrasReady) {
+                        NeedsNewEnginePage("会话树", "tree") { navController.navigateTopLevel(Destination.Chat) }
+                        return@composable
+                    }
+                    SessionTreePage(graph, onForked = { navController.navigateTopLevel(Destination.Chat) }, onError = ::toast, onBack = { navController.navigateTopLevel(Destination.Chat) })
+                }
+                composable(Routes.SKILLS) {
+                    if (graph.extrasReady) SkillsPage(graph, onBack = { navController.navigateTopLevel(Destination.Chat) })
+                    else NeedsNewEnginePage("技能与模板", "skills") { navController.navigateTopLevel(Destination.Chat) }
+                }
+                composable(Routes.USAGE) {
+                    if (graph.extrasReady) UsagePage(graph, onBack = { navController.navigateTopLevel(Destination.Chat) })
+                    else NeedsNewEnginePage("用量", "usage") { navController.navigateTopLevel(Destination.Chat) }
+                }
+                composable(
+                    Routes.FILES_PATTERN,
+                    arguments = listOf(navArgument("path") { type = NavType.StringType; nullable = true; defaultValue = null }),
+                ) { entry ->
+                    FilesPage(
+                        graph,
+                        openPath = entry.arguments?.getString("path"),
+                        onNewSessionHere = { dir ->
+                            scope.launch {
+                                when (val r = graph.engine.newSession(dir)) {
+                                    is Outcome.Ok -> navController.navigateTopLevel(Destination.Chat)
+                                    is Outcome.Err -> toast(sessionErrorText("新建会话", r))
+                                }
+                            }
+                        },
+                        onMention = { path ->
+                            val c = graph.chatDeps.controller
+                            val d = c.state.value.composer.draft
+                            c.setDraft((if (d.isBlank()) "" else d.trimEnd() + " ") + "@" + path + " ")
+                            navController.navigateTopLevel(Destination.Chat)
+                        },
+                        onBack = { if (!navController.popBackStack()) navController.navigateTopLevel(Destination.Chat) },
                     )
                 }
                 // 完整页面版会话列表（抽屉之外的入口，保留路由以兼容深链接/测试）。
@@ -194,7 +284,7 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
                     SETTINGS_PATTERN,
                     arguments = listOf(navArgument("focus") { type = NavType.StringType; nullable = true; defaultValue = null }),
                 ) { entry ->
-                    SettingsPage(graph, focus = entry.arguments?.getString("focus"), onBack = { navController.navigateTopLevel(Destination.Chat) })
+                    SettingsPage(graph, focus = entry.arguments?.getString("focus"), onBack = { if (!navController.popBackStack()) navController.navigateTopLevel(Destination.Chat) })
                 }
             }
             SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 96.dp))
@@ -202,29 +292,131 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ChatPage(graph: AppGraph, onOpenModelSettings: () -> Unit, onOpenDrawer: () -> Unit, onNewChat: () -> Unit) {
-    val chat by graph.engine.chat.collectAsState()
+private fun ChatPage(
+    graph: AppGraph,
+    onOpenModelSettings: () -> Unit,
+    onOpenDrawer: () -> Unit,
+    onNewChat: () -> Unit,
+    drawerOpen: Boolean,
+    onConfigureProvider: (String) -> Unit,
+    onOpenFile: (String) -> Unit,
+    onToast: (String) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    // 只订阅用得到的字段（模型、思考强度、是否在生成）。
+    val model by remember(graph) { graph.engine.chat.map { it.model }.distinctUntilChanged() }.collectAsState(initial = graph.engine.chat.value.model)
+    val thinking by remember(graph) { graph.engine.chat.map { it.thinkingLevel }.distinctUntilChanged() }.collectAsState(initial = graph.engine.chat.value.thinkingLevel)
+    val running by remember(graph) { graph.engine.chat.map { it.running }.distinctUntilChanged() }.collectAsState(initial = false)
+    // 只有真实 extras（W1）才订阅附加项；Fake 的假数据不进时间线（审查第 1 轮 Important 1）。
+    val live = graph.liveExtras
+    val extras by (live?.timelineExtras ?: NO_EXTRAS).collectAsState()
     var noModel by remember { mutableStateOf(false) }
+    var picker by remember { mutableStateOf(false) }
+    var usage by remember { mutableStateOf(false) }
+    var attach by remember { mutableStateOf(false) }
+    var levels by remember { mutableStateOf<List<String>>(emptyList()) }
     // 从设置层取「是否配置过模型」；模型变化（保存设置后引擎重启）时重新读取。
-    LaunchedEffect(chat.model) {
-        noModel = chat.model == null && runCatching { graph.providerConfig.configured() }.getOrDefault(emptyList()).isEmpty()
+    LaunchedEffect(model) {
+        noModel = model == null && runCatching { graph.providerConfig.configured() }.getOrDefault(emptyList()).isEmpty()
     }
+    // 从「去配置」回来：服务商已配好就自动选中它的模型（验收①）。
+    LaunchedEffect(Unit) { applyPendingModel(graph)?.let(onToast) }
+    LaunchedEffect(picker, model) {
+        if (picker) levels = (graph.engine.thinkingLevels() as? Outcome.Ok)?.value.orEmpty()
+    }
+
     ChatScreen(
         graph.chatDeps.controller,
         Modifier.fillMaxSize(),
         onOpenModelSettings = onOpenModelSettings,
+        backToBackground = !drawerOpen,
         onOpenDrawer = onOpenDrawer,
         onNewChat = onNewChat,
-        // 「选择模型▾」「+」的完整功能由功能工作流接入：这里先用 ChatScreen 的默认行为（内置下拉 / 暂不支持提示）。
-        onModelClick = null,
-        onAttachClick = null,
+        // 顶栏「模型▾」→ W2 的模型选择弹层（思考强度在同一弹层里）。
+        onModelClick = { picker = true },
+        // 「+」→ W3 的附件弹层（拍照、相册、文件）。
+        onAttachClick = { attach = true },
         topBanner = if (noModel) {
             { NoModelBanner(onOpenModelSettings) }
         } else {
             null
         },
+        timelineExtras = extras,
+        extraContent = { e, m -> TimelineExtraView(e, onOpenFile, m) },
+        slashPalette = { cand, pick ->
+            CommandPalette(
+                groups = cand.groups.map { PaletteGroup(it.title, it.commands) },
+                loading = cand.loading,
+                onPick = pick,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+        },
+        messageMenu = remember(graph) {
+            MessageMenu(
+                // 没有真实 extras 时拿不到 entryId，「从这里分叉」自动禁用，复制 / 复制 Markdown 照常可用。
+                entryIdOf = { key -> graph.liveExtras?.messageMeta?.value?.get(key)?.entryId },
+                onFork = { entryId ->
+                    scope.launch {
+                        when (val r = graph.chatDeps.controller.forkFrom(entryId)) {
+                            is Outcome.Ok -> runCatching { graph.sessions.refresh() }
+                            is Outcome.Err -> Unit // 控制器已提示
+                        }
+                    }
+                },
+                onCopied = onToast,
+            )
+        },
+        // 用量弹层依赖 W1 的 usage/compact：W1 合入、切 REAL 前不响应点击。
+        onContextClick = if (graph.extrasReady) ({ usage = true }) else null,
     )
+
+    if (picker) {
+        ModalBottomSheet(onDismissRequest = { picker = false }, modifier = Modifier.testTag("sheet:modelPicker")) {
+            ModelPicker(
+                catalog = graph.models.catalog,
+                settings = graph.models.settings,
+                current = model?.let { ModelRef(it.provider, it.id) },
+                thinking = thinking,
+                thinkingLevels = levels,
+                generating = running,
+                // 会话内切模型 / 思考强度走引擎的 setModel / setThinking（审查 Nit ⑤）。
+                onSelect = { ref ->
+                    picker = false
+                    scope.launch {
+                        when (val r = graph.engine.setModel(ref.provider, ref.id)) {
+                            is Outcome.Ok -> Unit
+                            is Outcome.Err -> onToast("切换模型失败：" + r.message)
+                        }
+                    }
+                },
+                onThinking = { lv ->
+                    scope.launch {
+                        when (val r = graph.engine.setThinking(lv)) {
+                            is Outcome.Ok -> Unit
+                            is Outcome.Err -> onToast("设置思考强度失败：" + r.message)
+                        }
+                    }
+                },
+                // 点某个未配置的模型：记下这个模型（不是服务商第一个），配好回来就选它（审查第 1 轮 Important 3）。
+                onConfigureModel = { ref -> PendingModel.target.value = PendingModel.Target(ref.provider, ref) },
+                onConfigure = { provider ->
+                    picker = false
+                    // 服务商标题上的「去配置」没有具体模型；点模型行时 onConfigureModel 已先记下模型，这里不覆盖。
+                    if (PendingModel.target.value?.provider != provider) PendingModel.target.value = PendingModel.Target(provider, null)
+                    onConfigureProvider(provider)
+                },
+                modifier = Modifier.fillMaxHeight(0.85f),
+            )
+        }
+    }
+    if (attach) AttachSheetBridge(graph) { attach = false }
+    if (usage && graph.extrasReady) {
+        ModalBottomSheet(onDismissRequest = { usage = false }, modifier = Modifier.testTag("sheet:usage")) {
+            UsageContent(graph)
+        }
+    }
 }
 
 /** 没配模型：输入条上方的 Chrome 胶囊横幅（dsh-Go 的横幅都是胶囊）。 */
@@ -248,15 +440,21 @@ private fun SessionsPage(
     onOpenSettings: (() -> Unit)? = null,
     footer: (@Composable () -> Unit)? = null,
 ) {
-    val chat by graph.engine.chat.collectAsState()
+    val sessionFile by remember(graph) { graph.engine.chat.map { it.sessionFile }.distinctUntilChanged() }
+        .collectAsState(initial = graph.engine.chat.value.sessionFile)
+    // 会话长按「导出」→ W3 ExportSheet（Markdown / JSONL / HTML；审查第 1 轮 Important 4）。
+    var exporting by remember { mutableStateOf<String?>(null) }
+    exporting?.let { path -> ExportSheet(graph.workspace.exporter, path) { exporting = null } }
     SessionsScreen(
         repository = graph.sessions,
+        index = graph.commands.sessionIndex,
+        onExport = { s -> exporting = s.guestPath },
         onOpenSettings = onOpenSettings,
         footer = footer,
-        currentGuestPath = chat.sessionFile,
+        currentGuestPath = sessionFile,
         onOpen = { s ->
             // 点的是当前会话：只关抽屉 / 回聊天，不再调一次 openSession（审查 R1）。
-            if (s.guestPath == chat.sessionFile) {
+            if (s.guestPath == sessionFile) {
                 onOpened()
             } else {
                 when (val r = graph.engine.openSession(s.guestPath, s.cwd)) {
@@ -335,3 +533,5 @@ fun NavHostController.openSettings(focus: String) {
         launchSingleTop = true
     }
 }
+
+private val NO_EXTRAS = kotlinx.coroutines.flow.MutableStateFlow<List<io.github.zr987459.pigo.contract.TimelineExtra>>(emptyList())

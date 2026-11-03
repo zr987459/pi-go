@@ -75,11 +75,15 @@ class AppSmokeTest {
 
     @Test
     fun topLevelNavigationReachesEveryPage() {
-        // 设置：抽屉身份栏圆钮进入，左上角返回圆钮回到聊天
+        // 设置：抽屉身份栏圆钮进入设置首页（W5），「运行环境与高级」是旧设置页，返回两次回到聊天
         nav("settings")
+        waitTag("page:settingsHub")
+        rule.onNodeWithTag("hub:advanced").performClick()
         waitTag("page:settings")
         rule.onNodeWithTag("settings:sec-models").assertIsDisplayed()
         rule.onNodeWithTag("settings:back").performClick()
+        waitTag("page:settingsHub")
+        rule.onNodeWithTag("page:back").performClick()
         waitTag("page:chat")
         // 会话：抽屉本身就是会话面板
         openDrawer()
@@ -112,11 +116,10 @@ class AppSmokeTest {
         // 不论运行环境是否就绪，都从抽屉的「聊天」入口进入聊天页（不再提前 return）。
         nav("chat")
         waitTag("page:chat")
-        // 全新安装没有任何 Key：聊天页提示「还没有配置模型」，点「去设置模型」定位到设置页「模型与 Key」。
+        // 全新安装没有任何 Key：聊天页提示「还没有配置模型」，点「去设置模型」进入 W2 的服务商页（W5 换掉旧入口）。
         val hasBanner = runCatching { waitTag("chat:goSettings", 5_000) }.isSuccess
         Assume.assumeTrue("设备上已配置过模型，跳过横幅这一步", hasBanner)
         rule.onNodeWithTag("chat:goSettings").performClick()
-        waitTag("page:settings")
-        rule.onNodeWithTag("settings:sec-models").assertIsDisplayed()
+        waitTag("page:providers")
     }
 }

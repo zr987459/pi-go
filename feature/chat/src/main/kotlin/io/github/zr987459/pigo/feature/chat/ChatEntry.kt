@@ -3,7 +3,9 @@ package io.github.zr987459.pigo.feature.chat
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import io.github.zr987459.pigo.contract.DraftStore
 import io.github.zr987459.pigo.contract.EngineClient
+import io.github.zr987459.pigo.contract.EngineExtras
 import io.github.zr987459.pigo.feature.chat.ui.ChatScreen
 import java.util.WeakHashMap
 import kotlinx.coroutines.CoroutineScope
@@ -27,8 +29,12 @@ object ChatControllers {
         engine: EngineClient,
         scope: CoroutineScope? = null,
         config: ChatConfig = ChatConfig(),
+        /** W1 的其余 RPC（图片、`/`、`!`、分叉）；W5 接线时由 app 传入。 */
+        extras: EngineExtras? = null,
+        /** W4 的按会话草稿存储。 */
+        drafts: DraftStore? = null,
     ): ChatController = controllers.getOrPut(engine) {
-        ChatController(engine, scope ?: CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate), config)
+        ChatController(engine, scope ?: CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate), config, extras = extras, drafts = drafts)
     }
 }
 

@@ -1,6 +1,8 @@
 package io.github.zr987459.pigo.di
 
+import io.github.zr987459.pigo.contract.DraftStore
 import io.github.zr987459.pigo.contract.EngineClient
+import io.github.zr987459.pigo.contract.EngineExtras
 import io.github.zr987459.pigo.feature.chat.ChatConfig
 import io.github.zr987459.pigo.feature.chat.ChatController
 import io.github.zr987459.pigo.feature.chat.ChatControllers
@@ -18,15 +20,11 @@ object ChatBindings {
      */
     class ChatDeps(val engine: EngineClient, val controller: ChatController)
 
-    fun deps(mode: Mode, ctx: BindingContext, engine: EngineClient): ChatDeps = when (mode) {
-        Mode.FAKE -> fake(engine, ctx)
-        Mode.REAL -> real(engine, ctx)
-    }
+    fun deps(mode: Mode, ctx: BindingContext, engine: EngineClient, extras: EngineExtras? = null, drafts: DraftStore? = null): ChatDeps =
+        when (mode) {
+            Mode.FAKE, Mode.REAL -> build(engine, ctx, extras, drafts)
+        }
 
-    fun fake(engine: EngineClient, ctx: BindingContext): ChatDeps = build(engine, ctx)
-
-    fun real(engine: EngineClient, ctx: BindingContext): ChatDeps = build(engine, ctx)
-
-    private fun build(engine: EngineClient, ctx: BindingContext): ChatDeps =
-        ChatDeps(engine, ChatControllers.obtain(engine, ctx.appScope, ChatConfig()))
+    private fun build(engine: EngineClient, ctx: BindingContext, extras: EngineExtras?, drafts: DraftStore?): ChatDeps =
+        ChatDeps(engine, ChatControllers.obtain(engine, ctx.appScope, ChatConfig(), extras, drafts))
 }

@@ -81,7 +81,10 @@ import io.github.zr987459.pigo.core.ui.PrimaryPillButton
 import io.github.zr987459.pigo.core.ui.statusColor
 import io.github.zr987459.pigo.core.ui.StatusTone
 import io.github.zr987459.pigo.feature.chat.ChatController
+import io.github.zr987459.pigo.contract.SlashCommand
+import io.github.zr987459.pigo.contract.TimelineExtra
 import io.github.zr987459.pigo.feature.chat.logic.ChatRow
+import io.github.zr987459.pigo.feature.chat.logic.SlashCandidates
 import java.time.LocalTime
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -107,6 +110,15 @@ fun ChatScreen(
     onModelClick: (() -> Unit)? = null,
     onAttachClick: (() -> Unit)? = null,
     topBanner: (@Composable () -> Unit)? = null,
+    /** W1 时间线附加项（压缩卡、bash 卡、用户图片、轮末汇总），按 anchorKey 插入；由 [extraContent] 渲染。 */
+    timelineExtras: List<TimelineExtra> = emptyList(),
+    extraContent: (@Composable (TimelineExtra, Modifier) -> Unit)? = null,
+    /** `/` 候选面板（W4 CommandPalette），挂在输入框上方；为 null 时不显示候选。 */
+    slashPalette: (@Composable (SlashCandidates, (SlashCommand) -> Unit) -> Unit)? = null,
+    /** 消息长按菜单（复制、复制 Markdown、从这里分叉）；为 null 时不响应长按。 */
+    messageMenu: MessageMenu? = null,
+    /** 点输入条的上下文小环：打开用量弹层。 */
+    onContextClick: (() -> Unit)? = null,
 ) {
     val state by controller.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -142,11 +154,12 @@ fun ChatScreen(
     }
 
     val rows = state.rows
+    val entries = remember(rows, timelineExtras) { TimelineMerge.merge(rows, if (extraContent != null) timelineExtras else emptyList()) }
     val latestUserKey = remember(rows) { rows.lastOrNull { it is ChatRow.User }?.key }
     val listState = rememberLazyListState()
     val atBottom by remember { derivedStateOf { listState.firstVisibleItemIndex <= 1 } }
     val scrolledUnder by remember { derivedStateOf { listState.canScrollForward } }
-    val lastKey = rows.lastOrNull()?.key
+    val lastKey = entries.lastOrNull()?.key
     // 倒序布局天然贴底；新行出现时如果用户本来就在底部，跟到最新。
     LaunchedEffect(lastKey) {
         if (atBottom && rows.isNotEmpty()) listState.scrollToItem(0)
@@ -184,14 +197,24 @@ fun ChatScreen(
                 verticalArrangement = Arrangement.spacedBy(AppSpace.InTurn, Alignment.Bottom),
                 modifier = Modifier.fillMaxSize().testTag("chat:list"),
             ) {
-                items(rows.asReversed(), key = { it.key }, contentType = { it::class }) { row ->
-                    RowEnter(row.key) {
-                        ChatRowView(
-                            row,
-                            isLatestUser = row.key == latestUserKey,
-                            actions = actions,
-                            modifier = Modifier.widthIn(max = AppSpace.ReadingWidth).padding(top = if (row is ChatRow.User) AppSpace.BetweenTurns - AppSpace.InTurn else 0.dp),
-                        )
+                items(entries.asReversed(), key = { it.key }, contentType = { e -> if (e is TimelineEntry.Row) e.row::class else e.javaClass }) { entry ->
+                    when (entry) {
+                        is TimelineEntry.Row -> {
+                            val row = entry.row
+                            RowEnter(row.key) {
+                                LongPressMenu(row, messageMenu) {
+                                    ChatRowView(
+                                        row,
+                                        isLatestUser = row.key == latestUserKey,
+                                        actions = actions,
+                                        modifier = Modifier.widthIn(max = AppSpace.ReadingWidth).padding(top = if (row is ChatRow.User) AppSpace.BetweenTurns - AppSpace.InTurn else 0.dp),
+                                    )
+                                }
+                            }
+                        }
+                        is TimelineEntry.Extra -> RowEnter(entry.key) {
+                            extraContent?.invoke(entry.extra, Modifier.widthIn(max = AppSpace.ReadingWidth).testTag("extra:" + entry.extra::class.simpleName))
+                        }
                     }
                 }
             }
@@ -250,6 +273,8 @@ fun ChatScreen(
                     statusLines = state.statusLines,
                     onWithdrawnClick = { showWithdrawn = true },
                 )
+                state.slash?.let { cand -> slashPalette?.invoke(cand, controller::pickCommand) }
+                AttachmentStrip(state.attachments, onClear = controller::clearImages)
                 Box {
                     ComposerBar(
                         composer = state.composer,
@@ -262,6 +287,7 @@ fun ChatScreen(
                         contextPercent = state.contextPercent,
                         onAttachClick = onAttachClick,
                         onUnsupported = ::toast,
+                        onContextClick = onContextClick,
                     )
                     // 回到底部：浮在输入条右上方的小圆键。
                     androidx.compose.animation.AnimatedVisibility(

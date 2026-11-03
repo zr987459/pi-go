@@ -41,6 +41,9 @@ object StoreBindings {
             realConfig ?: PiProviderConfigStore(secrets, paths(ctx)).also { realConfig = it }
         }
 
+    /** W2 的 CatalogGraph 与 W4 用同一个 [PiProviderConfigStore] 实例（feat/wiring）。 */
+    fun piConfig(ctx: BindingContext, secrets: SecretStore): PiProviderConfigStore = realConfig(ctx, secrets)
+
     fun secrets(mode: Mode, ctx: BindingContext): SecretStore = when (mode) {
         Mode.FAKE -> FakeSecretStore()
         Mode.REAL -> KeystoreSecretStore(ctx.appContext)

@@ -22,7 +22,8 @@ object PickerLogic {
 
     sealed interface Click {
         data class Select(val ref: ModelRef) : Click
-        data class Configure(val provider: String) : Click
+        /** [ref] 为用户点的那个未配置模型；服务商标题上的「去配置」没有具体模型，为 null。 */
+        data class Configure(val provider: String, val ref: ModelRef? = null) : Click
     }
 
     fun matches(e: CatalogEntry, providerName: String?, q: String): Boolean {
@@ -60,7 +61,7 @@ object PickerLogic {
     }
 
     fun onClick(e: CatalogEntry): Click =
-        if (e.availability == ModelAvailability.READY) Click.Select(e.model.ref) else Click.Configure(e.model.provider)
+        if (e.availability == ModelAvailability.READY) Click.Select(e.model.ref) else Click.Configure(e.model.provider, e.model.ref)
 
     /** M5：只有支持推理的模型显示思考强度控件。 */
     fun showThinking(e: CatalogEntry?, levels: List<String>): Boolean = e?.model?.reasoning == true && levels.size > 1

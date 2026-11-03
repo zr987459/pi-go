@@ -76,9 +76,13 @@ import io.github.zr987459.pigo.core.ui.ChromeIconButton
 import io.github.zr987459.pigo.core.ui.GlassTier
 import io.github.zr987459.pigo.core.ui.DshTheme
 import io.github.zr987459.pigo.core.ui.Glyph
+import io.github.zr987459.pigo.contract.SessionHit
+import io.github.zr987459.pigo.contract.SessionIndex
 import io.github.zr987459.pigo.contract.SessionRepository
 import io.github.zr987459.pigo.contract.SessionSummary
 import java.time.Instant
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
@@ -107,6 +111,9 @@ fun SessionsPlaceholder(repository: SessionRepository, modifier: Modifier = Modi
  * @param onBeforeDeleteCurrent 删除当前会话前调用；返回失败原因（null 表示成功），失败则不删除。为 null 时当前会话不能删除。
  * @param onOpenSettings 身份栏的「设置」圆钮；为 null 时不显示。
  * @param footer 列表与身份栏之间的可选附加行（抽屉里放「安装与运行环境」入口）；为 null 时不占位。
+ * @param onExport 长按菜单「导出」（W3 ExportSheet：Markdown / JSONL / HTML）；为 null 时不显示（审查第 1 轮 Important 4）。
+ * @param index W4 会话索引（feature-gap §3.2 W5）：非 null 时搜索走全文搜索（名字 + 用户消息，显示命中片段），
+ *   列表改为「置顶」+ 按工作目录分组，长按菜单多出「置顶 / 取消置顶」。为 null 时保持按日期分组、本地筛选。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -119,8 +126,14 @@ fun SessionsScreen(
     onBeforeDeleteCurrent: (suspend () -> String?)? = null,
     onOpenSettings: (() -> Unit)? = null,
     footer: (@Composable () -> Unit)? = null,
+    index: SessionIndex? = null,
+    onExport: ((SessionSummary) -> Unit)? = null,
 ) {
     val sessions by repository.observe().collectAsState(initial = null)
+    val pinned by remember(index) {
+        index?.observeGroups()?.map { gs -> gs.flatMap { g -> g.sessions }.filter { it.meta.pinned }.map { it.summary.guestPath }.toSet() }
+            ?: kotlinx.coroutines.flow.flowOf(emptySet())
+    }.collectAsState(initial = emptySet())
     val trash by repository.observeTrash().collectAsState(initial = emptyList())
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
@@ -130,7 +143,24 @@ fun SessionsScreen(
     var actionsFor by remember { mutableStateOf<SessionSummary?>(null) }
     var busy by remember { mutableStateOf(false) }
 
-    LaunchedEffect(repository) { repository.refresh() }
+    var hits by remember { mutableStateOf<List<SessionHit>?>(null) }
+
+    LaunchedEffect(repository, index) {
+        repository.refresh()
+        index?.rescan()
+    }
+    // 全文搜索：停顿 250ms 再查，查询变了就取消上一次（LaunchedEffect 换 key 时自动取消）。
+    LaunchedEffect(index, query) {
+        hits = null
+        val q = query.trim()
+        if (index == null || q.isEmpty()) return@LaunchedEffect
+        delay(250)
+        hits = runCatching { index.search(q) }.getOrNull()
+    }
+    fun refreshAll() = scope.launch {
+        repository.refresh()
+        index?.rescan()
+    }
 
     fun toast(msg: String) = scope.launch { snackbar.showSnackbar(msg) }
 
@@ -151,6 +181,18 @@ fun SessionsScreen(
                         when {
                             list == null -> SkeletonList()
                             list.isEmpty() -> EmptyState("还没有对话", "点「新对话」或在聊天页发一条消息，就会自动创建第一个会话。")
+                            index != null -> IndexedList(
+                                list = list,
+                                pinned = pinned,
+                                query = query,
+                                hits = hits,
+                                currentGuestPath = currentGuestPath,
+                                onTap = { s ->
+                                    val open = onOpen
+                                    if (open == null) toast("打开会话需要先启动引擎") else scope.launch { open(s) }
+                                },
+                                onLongPress = { s -> if (!busy) actionsFor = s },
+                            )
                             else -> {
                                 val shown = DrawerGrouping.filter(list, query)
                                 if (shown.isEmpty()) {
@@ -210,7 +252,10 @@ fun SessionsScreen(
                                                     busy = true
                                                     scope.launch {
                                                         when (val r = repository.restore(s.guestPath)) {
-                                                            is Outcome.Ok -> toast("已恢复「${SessionFormat.title(s)}」")
+                                                            is Outcome.Ok -> {
+                                                                index?.rescan()
+                                                                toast("已恢复「${SessionFormat.title(s)}」")
+                                                            }
                                                             is Outcome.Err -> toast(r.message)
                                                         }
                                                         busy = false
@@ -227,7 +272,7 @@ fun SessionsScreen(
             }
             if (footer != null) footer()
             IdentityBar(
-                onRefresh = { scope.launch { repository.refresh() } },
+                onRefresh = { refreshAll() },
                 onSettings = onOpenSettings,
             )
         }
@@ -250,6 +295,51 @@ fun SessionsScreen(
                     color = DshTheme.colors.textFaint,
                     modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 12.dp),
                 )
+                if (index != null) {
+                    val isPinned = s.guestPath in pinned
+                    Surface(
+                        shape = RoundedCornerShape(20.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp).fillMaxWidth(),
+                    ) {
+                        ListItem(
+                            headlineContent = { Text(if (isPinned) "取消置顶" else "置顶") },
+                            supportingContent = { Text(if (isPinned) "放回所在目录的分组" else "固定在会话列表最上方") },
+                            leadingContent = { AppIcon(if (isPinned) AppIcons.pinActive else AppIcons.pin, null, size = 22.dp) },
+                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                            modifier = Modifier
+                                .testTag("sessions:actionPin")
+                                .clickable {
+                                    actionsFor = null
+                                    scope.launch {
+                                        runCatching { index.setPinned(s.guestPath, !isPinned) }
+                                            .onSuccess { toast(if (isPinned) "已取消置顶" else "已置顶") }
+                                            .onFailure { toast("没能${if (isPinned) "取消置顶" else "置顶"}：${it.message ?: it.javaClass.simpleName}") }
+                                    }
+                                },
+                        )
+                    }
+                }
+                if (onExport != null) {
+                    Surface(
+                        shape = RoundedCornerShape(20.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp).fillMaxWidth(),
+                    ) {
+                        ListItem(
+                            headlineContent = { Text("导出") },
+                            supportingContent = { Text("Markdown、JSONL 或 HTML，保存或分享") },
+                            leadingContent = { AppIcon(AppIcons.share, null, size = 22.dp) },
+                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                            modifier = Modifier
+                                .testTag("sessions:actionExport")
+                                .clickable {
+                                    actionsFor = null
+                                    onExport(s)
+                                },
+                        )
+                    }
+                }
                 Surface(
                     shape = RoundedCornerShape(20.dp),
                     color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -312,7 +402,10 @@ fun SessionsScreen(
                                     }
                                 }
                                 when (val r = repository.moveToTrash(s.guestPath)) {
-                                    is Outcome.Ok -> toast("已移到回收站")
+                                    is Outcome.Ok -> {
+                                        index?.rescan()
+                                        toast("已移到回收站")
+                                    }
                                     is Outcome.Err -> toast(r.message)
                                 }
                             } finally {
@@ -466,6 +559,8 @@ internal fun SessionTile(
     onTap: (() -> Unit)?,
     onLongPress: (() -> Unit)?,
     trailing: (@Composable () -> Unit)? = null,
+    subtitle: String? = null,
+    pinned: Boolean = false,
 ) {
     val scheme = MaterialTheme.colorScheme
     val fill by animateColorAsState(
@@ -477,7 +572,7 @@ internal fun SessionTile(
     Row(
         Modifier
             .fillMaxWidth()
-            .height(DrawerStyle.rowHeight)
+            .let { if (subtitle == null) it.height(DrawerStyle.rowHeight) else it.heightIn(min = DrawerStyle.rowHeight) }
             .clip(shape)
             .background(fill, shape)
             .let {
@@ -496,16 +591,80 @@ internal fun SessionTile(
             .padding(start = 10.dp, end = if (trailing != null) 0.dp else 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            title,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp, lineHeight = 21.sp),
-            color = scheme.onSurface,
-            fontWeight = if (current) FontWeight.SemiBold else FontWeight.Normal,
-            modifier = Modifier.weight(1f),
-        )
+        Column(Modifier.weight(1f).padding(vertical = if (subtitle == null) 0.dp else 6.dp)) {
+            Text(
+                title,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp, lineHeight = 21.sp),
+                color = scheme.onSurface,
+                fontWeight = if (current) FontWeight.SemiBold else FontWeight.Normal,
+            )
+            if (subtitle != null) {
+                Text(
+                    subtitle,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = DshTheme.colors.textFaint,
+                )
+            }
+        }
+        if (pinned) {
+            AppIcon(AppIcons.pinActive, "已置顶", size = 16.dp, tint = DshTheme.colors.textFaint)
+            if (trailing == null) Spacer(Modifier.width(2.dp))
+        }
         trailing?.invoke()
+    }
+}
+
+/** 接了 SessionIndex 时的会话列表：无查询时「置顶」+ 按目录分组；有查询时是全文搜索结果（带命中片段）。 */
+@Composable
+internal fun IndexedList(
+    list: List<SessionSummary>,
+    pinned: Set<String>,
+    query: String,
+    hits: List<SessionHit>?,
+    currentGuestPath: String?,
+    onTap: (SessionSummary) -> Unit,
+    onLongPress: (SessionSummary) -> Unit,
+) {
+    val padding = PaddingValues(start = DrawerStyle.contentEdge, end = DrawerStyle.contentEdge, bottom = 16.dp)
+    if (query.isNotBlank()) {
+        val found = DrawerGrouping.mergeSearch(hits, list, query)
+        if (found.isEmpty()) {
+            if (hits == null) SkeletonList() else EmptyState("没有找到相关对话", "会搜索会话名和你发过的消息，换个关键字试试。")
+            return
+        }
+        LazyColumn(Modifier.fillMaxSize().testTag("sessions:results"), contentPadding = padding) {
+            item(key = "h-results") { DrawerEyebrow(if (hits == null) "正在搜索…" else "搜索结果") }
+            items(found, key = { it.session.guestPath }) { f ->
+                SessionTile(
+                    title = SessionFormat.title(f.session),
+                    current = f.session.guestPath == currentGuestPath,
+                    onTap = { onTap(f.session) },
+                    onLongPress = { onLongPress(f.session) },
+                    subtitle = f.snippet ?: SessionFormat.cwd(f.session),
+                    pinned = f.session.guestPath in pinned,
+                )
+            }
+        }
+        return
+    }
+    val sections = DrawerGrouping.indexed(list, pinned)
+    LazyColumn(Modifier.fillMaxSize().testTag("sessions:list"), contentPadding = padding) {
+        sections.forEach { sec ->
+            item(key = "h-${sec.key}") { DrawerEyebrow(sec.label) }
+            items(sec.sessions, key = { "${sec.key}|${it.guestPath}" }) { s ->
+                SessionTile(
+                    title = SessionFormat.title(s),
+                    current = s.guestPath == currentGuestPath,
+                    onTap = { onTap(s) },
+                    onLongPress = { onLongPress(s) },
+                    pinned = sec.key == "pinned",
+                )
+            }
+        }
     }
 }
 

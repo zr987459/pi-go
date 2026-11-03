@@ -67,6 +67,13 @@ dependencies {
     implementation(project(":feature:chat"))
     implementation(project(":feature:sessions"))
     implementation(project(":feature:settings"))
+    // W5 接线（feat/wiring）：W2 服务商/模型、W3 文件、W4 命令/用量
+    implementation(project(":core:catalog"))
+    implementation(project(":core:workspace"))
+    implementation(project(":feature:models"))
+    implementation(project(":feature:files"))
+    implementation(project(":feature:commands"))
+    implementation(project(":feature:usage"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)

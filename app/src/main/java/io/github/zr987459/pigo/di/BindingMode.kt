@@ -13,6 +13,18 @@ object BindingMode {
     val engine: Mode = Mode.REAL
     val chat: Mode = Mode.REAL
     val store: Mode = Mode.REAL
+    /** W2 模型目录、OAuth、自定义端点、代理与费用显示（core/catalog，已在 main）。 */
+    val models: Mode = Mode.REAL
+    /**
+     * W1 的 [io.github.zr987459.pigo.contract.EngineExtras]（图片、斜杠命令、bash、分叉、用量、压缩…）。
+     * feat/engine-rpc（PR #13）已合入 main：REAL 为 [io.github.zr987459.pigo.core.engine.PiEngine] 本身（ExtrasBindings.real）；
+     * 单测与界面开发仍可用 ExtrasBindings.fake()。
+     */
+    val extras: Mode = Mode.REAL
+    /** W3 的 Workspace（文件、附件、导出），feat/files（PR #9）已合入 main。 */
+    val workspace: Mode = Mode.REAL
+    /** W4 会话索引、草稿、自动命名、技能与模板（feature/commands，已在 main）。 */
+    val commands: Mode = Mode.REAL
 }
 
 enum class Mode { FAKE, REAL }
