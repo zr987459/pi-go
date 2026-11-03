@@ -70,3 +70,7 @@
 5. 本分支 CI 绿 → 再 merge ui/dsh-style → CI 绿 → 普通 merge 回 ui/dsh-style → 确认 CI 绿 → 两个状态文件写“panels 已合入 ui/dsh-style @<sha>”。
 
 范围：只改 feature/sessions/**、feature/settings/**、feature/onboarding/**（含 res/测试）、本文件、docs/ui-shots/**、THIRD_PARTY_NOTICES.md 一行来源。不改逻辑/ViewModel 状态机/core/**/app nav。
+
+
+## 收尾工作者已接手（2026-11-03 15:30 CST）
+计划：修 feature/sessions、feature/settings、feature/onboarding 编译/测试直到 CI 绿 → 合入 ui/dsh-style 并回合 → 在 ui/dsh-style 抽屉接线 SessionsScreen → CI 绿后更新状态并开 PR 到 main。
