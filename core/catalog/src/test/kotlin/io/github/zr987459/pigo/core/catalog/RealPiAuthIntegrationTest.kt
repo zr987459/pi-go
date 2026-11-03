@@ -1,11 +1,13 @@
 package io.github.zr987459.pigo.core.catalog
 
-import com.sun.net.httpserver.HttpServer
+import okhttp3.mockwebserver.Dispatcher
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import io.github.zr987459.pigo.contract.ModelInfo
 import io.github.zr987459.pigo.core.store.BuiltinCatalog
 import java.io.File
 import java.net.HttpURLConnection
-import java.net.InetSocketAddress
 import java.net.URI
 import java.net.URL
 import java.nio.file.Files
@@ -50,7 +52,8 @@ class RealPiAuthIntegrationTest {
     private val redirect = File("src/test/resources/node/fetch-redirect.mjs").absoluteFile
     private lateinit var home: File
     private lateinit var agentDir: File
-    private lateinit var server: HttpServer
+    private lateinit var server: MockWebServer
+    private val routes = LinkedHashMap<String, (String, String) -> Pair<Int, String>>()
     private val requests = CopyOnWriteArrayList<Pair<String, String>>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -58,35 +61,37 @@ class RealPiAuthIntegrationTest {
         assumeTrue("未设置 PIGO_PI_ROOT，跳过真 pi 集成测试", piRoot != null)
         home = Files.createTempDirectory("pigo-auth").toFile()
         agentDir = File(home, ".pi/agent").apply { mkdirs() }
-        server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
-        server.start()
+        server = MockWebServer()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                val path = request.path.orEmpty()
+                val body = request.body.readUtf8()
+                requests += path to body
+                val h = routes.entries.firstOrNull { path.startsWith(it.key) }?.value
+                    ?: return MockResponse().setResponseCode(404).setBody("""{"error":"not found"}""")
+                val (code, resp) = h(path, body)
+                return MockResponse().setResponseCode(code).setHeader("content-type", "application/json").setBody(resp)
+            }
+        }
+        server.start(java.net.InetAddress.getByName("127.0.0.1"), 0)
     }
 
     @After fun tearDown() {
         if (piRoot == null) return
         scope.cancel()
-        server.stop(0)
+        server.shutdown()
         home.deleteRecursively()
     }
 
     private fun route(prefix: String, handler: (path: String, body: String) -> Pair<Int, String>) {
-        server.createContext(prefix) { ex ->
-            val body = ex.requestBody.readBytes().toString(Charsets.UTF_8)
-            val path = ex.requestURI.toString()
-            requests += path to body
-            val (code, resp) = handler(path, body)
-            val bytes = resp.toByteArray()
-            ex.responseHeaders.add("content-type", "application/json")
-            ex.sendResponseHeaders(code, bytes.size.toLong())
-            ex.responseBody.use { it.write(bytes) }
-        }
+        routes[prefix] = handler
     }
 
     private fun env(extra: Map<String, String> = emptyMap()) = mapOf(
         "PIGO_PI_ROOT" to piRoot!!,
         "HOME" to home.absolutePath,
         "PI_CODING_AGENT_DIR" to agentDir.absolutePath,
-        "PIGO_MOCK_BASE" to "http://127.0.0.1:${server.address.port}",
+        "PIGO_MOCK_BASE" to "http://127.0.0.1:${server.port}",
         "NO_PROXY" to "*", "no_proxy" to "*",
         "PI_OAUTH_CALLBACK_HOST" to "127.0.0.1",
     ) + extra
