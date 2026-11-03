@@ -97,6 +97,7 @@ class WakeLockGuard(private val port: WakeLockPort) {
  * ForegroundServiceDidNotStartInTimeException）。这里保证：服务还没进入前台时不直接 stopService，
  * 而是记下「不再需要」，由服务在 startForeground 之后自己 stopSelf。
  *
+ * [inForeground] 含义是「前台中且尚未要求停止的实例」。
  * 引擎侧调用 [request]，服务侧调用 [onForegroundStarted] / [onServiceDestroyed]。纯 JVM，可单测。
  */
 class ForegroundGate {
@@ -112,6 +113,7 @@ class ForegroundGate {
     }
 
     private var desired = false
+    /** 是否存在处于前台中且尚未要求停止的实例。 */
     private var inForeground = false
 
     @Synchronized
@@ -120,18 +122,26 @@ class ForegroundGate {
         desired = active
         return when {
             active -> Action.START
-            inForeground -> Action.STOP
+            inForeground -> {
+                inForeground = false
+                Action.STOP
+            }
             else -> Action.NONE
         }
     }
 
-    /** 服务刚调用完 startForeground。返回 true 表示引擎已不需要服务，应立即 stopSelf()。 */
+    /** 服务刚调用完 startForeground。返回 true 表示引擎已不需要服务，应立即 stopSelf()；此时 [inForeground] 置 false。 */
     @Synchronized
     fun onForegroundStarted(): Boolean {
+        if (!desired) {
+            inForeground = false
+            return true
+        }
         inForeground = true
-        return !desired
+        return false
     }
 
+    /** 服务销毁时通知（保持幂等，置 false 即可）。 */
     @Synchronized
     fun onServiceDestroyed() {
         inForeground = false
