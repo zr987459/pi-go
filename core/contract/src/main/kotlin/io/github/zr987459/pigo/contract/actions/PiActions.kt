@@ -55,20 +55,32 @@ sealed interface TermEntry {
     data class Explain(val text: String) : TermEntry
 }
 
+/**
+ * 动作表。
+ *
+ * **谁压栈（定死，审查第 1 轮 Important 2）**：[run] 是纯执行，**只返回结果，不碰 overlay 栈、不碰本地块**。
+ * 结果由 `SessionHost.runAction` 统一落地，且只落地一次：
+ * - [ActionResult.Overlay] → `SessionHost.overlay.push` 一次；
+ * - [ActionResult.LocalBlock] → 追加到 `SessionHost.localBlocks`；
+ * - [ActionResult.Toast] / [ActionResult.Done] → 原样返回给调用的形态，由形态显示提示。
+ *
+ * 两种形态**只调用 `SessionHost.runAction`，不直接调 [run]，也绝不自己 push**；形态只渲染 `overlay` 栈顶。
+ */
 interface PiActions {
     val all: List<PiActionSpec>
 
-    /** 执行动作；两种形态共用同一实现（`core/session`，r3/session）。 */
+    /** 执行动作并返回结果（不压栈，见接口说明）；两种形态共用同一实现（`core/session`，r3/session）。 */
     suspend fun run(id: String, args: String? = null): ActionResult
 }
 
 sealed interface ActionResult {
     data object Done : ActionResult
 
-    /** 压进 overlay 栈，由各形态自己画。 */
+    /** 要打开的面板。由 `SessionHost.runAction` 压栈一次；[PiActions.run] 与形态都不得 push。 */
     data class Overlay(val model: OverlayModel) : ActionResult
 
     data class Toast(val text: String) : ActionResult
 
+    /** 本地文本块（`/session` 等）。由 `SessionHost.runAction` 追加到 `localBlocks`，不写会话文件。 */
     data class LocalBlock(val title: String, val text: String) : ActionResult
 }

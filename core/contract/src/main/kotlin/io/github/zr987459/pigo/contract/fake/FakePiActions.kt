@@ -11,14 +11,14 @@ import io.github.zr987459.pigo.contract.session.OverlayModel
 /**
  * 动作表占位实现（开发期给 r3/calm、r3/term 用）：
  * - 说明条目 → [ActionResult.LocalBlock]（标题 `explain:<id>`）；
- * - 其他动作 → 压一个 [OverlayModel.Text]（id = 动作 id，界面据此打 `overlay:<id>` 标记）；
+ * - 其他动作 → 返回 [ActionResult.Overlay]（[OverlayModel.Text]，id = 动作 id，界面据此打 `overlay:<id>` 标记）；
+ *   **不压栈**：压栈由 `SessionHost.runAction` 做一次（见 [PiActions] 说明）；
  * - 每次调用都记进 [ran]，并在引擎命令日志里记 `action:<id>`（不是 pi RPC，只供断言）。
  *
  * 真正的 `run` 由 r3/session 在 `core/session` 实现。
  */
 class FakePiActions(
     private val engine: FakeScriptedEngine,
-    private val onOverlay: (OverlayModel) -> Unit = {},
     override val all: List<PiActionSpec> = PiActionCatalog.all,
 ) : PiActions {
 
@@ -36,7 +36,6 @@ class FakePiActions(
         val explain = (spec.ui as? UiEntry.Explain)?.text ?: (spec.term as? TermEntry.Explain)?.text
         if (explain != null) return ActionResult.LocalBlock("explain:$id", explain)
         val model = OverlayModel.Text(id = id, title = spec.title, text = "占位：「${spec.title}」由 r3/session 实现。")
-        onOverlay(model)
         return ActionResult.Overlay(model)
     }
 }

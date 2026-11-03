@@ -50,8 +50,13 @@ data class StreamScript(
  * - **命令日志** [commands]：每个会发 RPC 的调用都记一条（类型名与 pi RPC 一致：prompt / steer / follow_up / abort / …）；
  * - **start / restart 计数** [startCount]、[restartCount]；
  * - **可编程流式**：[program] 设定下一次 `send()` 的回复，或 [startStream] 直接开始一段流（不记命令）；
- *   结束时 [agentSettledCount] 加一、`chat.running` 置假；
- * - 扩展对话框：[pushUiRequest] 发出请求，`answerUi` 记为 `extension_ui_response`。
+ *   再次 [startStream] 会先取消正在跑的流（旧回复标 `aborted`），任何时刻只有一段流；
+ * - **排队消息按 pi 语义消费**：生成中 `send()` 进队列（记 steer / follow_up）；当前回复结束后，
+ *   先投递全部 steer、再投递全部 follow_up，每条作为一条用户消息开新一轮（短回复，或 [program] 设定的脚本），
+ *   不再记 RPC（pi 自己投递）；队列清空后才 `chat.running` 置假、[agentSettledCount] 加一。
+ *   不会出现 `running=false` 而队列非空；[stop] 清空队列；
+ * - 扩展对话框：[pushUiRequest] 发出请求（`replay = 0`，与 [FakeEngineClient] 一致，已应答的不会重放给新订阅者；
+ *   对话框以 `OverlayStack` 为准），`answerUi` 记为 `extension_ui_response`。
  *
  * 不做真实协议归约；完整事件回放用现有的 [FakeEngineClient]。
  */
@@ -79,7 +84,7 @@ class FakeScriptedEngine(
     private val _status = MutableStateFlow<EngineStatus>(EngineStatus.Stopped)
     override val status: StateFlow<EngineStatus> = _status.asStateFlow()
 
-    private val _uiRequests = MutableSharedFlow<ExtUiRequest>(replay = 8, extraBufferCapacity = 8)
+    private val _uiRequests = MutableSharedFlow<ExtUiRequest>(replay = 0, extraBufferCapacity = 8)
     override val uiRequests: SharedFlow<ExtUiRequest> = _uiRequests.asSharedFlow()
 
     private var nextScript: StreamScript? = null
@@ -105,36 +110,68 @@ class FakeScriptedEngine(
 
     fun pushUiRequest(request: ExtUiRequest) { _uiRequests.tryEmit(request) }
 
-    /** 直接开始一段流式回复（不记命令），返回流任务。 */
+    /** 带图片发送（`FakeSessionHost.sendDraft` 用）：命令日志多记 `images` 个数。 */
+    suspend fun sendWithImages(text: String, imageCount: Int, mode: SendMode): Outcome<Disposition> {
+        if (imageCount == 0) return send(text, mode)
+        return sendInternal(text, mode, mapOf("images" to imageCount.toString()))
+    }
+
+    /** 直接开始一段流式回复（不记命令），返回流任务。正在跑的流会先被取消。 */
     fun startStream(script: StreamScript, userText: String? = null): Job {
+        streamJob?.let { old ->
+            old.cancel()
+            _chat.update { s -> s.copy(items = s.items.map { if (it is ChatItem.Assistant && it.streaming) it.copy(streaming = false, stopReason = "aborted") else it }) }
+        }
+        _chat.update { it.copy(running = true) }
+        _status.value = EngineStatus.Running(state(streaming = true))
+        val job = scope.launch {
+            streamOne(script, userText)
+            // 按 pi 语义消费排队消息：先 steer，再 follow_up，一条一轮。
+            while (true) {
+                val next = dequeue() ?: break
+                val s2 = nextScript ?: StreamScript(listOf("好的。"), intervalMs = 10)
+                nextScript = null
+                streamOne(s2, next)
+            }
+            _chat.update { it.copy(running = false) }
+            agentSettledCount++
+            _status.value = EngineStatus.Idle(state())
+        }
+        streamJob = job
+        return job
+    }
+
+    private suspend fun streamOne(script: StreamScript, userText: String?) {
         val userKey = "u${++seq}"
         val asstKey = "a${++seq}"
         _chat.update { s ->
             val items = s.items.toMutableList()
             if (userText != null) items += ChatItem.User(userKey, userText)
             items += ChatItem.Assistant(asstKey, blocks = emptyList(), streaming = true)
-            s.copy(items = items, running = true)
+            s.copy(items = items)
         }
-        _status.value = EngineStatus.Running(state(streaming = true))
-        val job = scope.launch {
-            val sb = StringBuilder()
-            for (chunk in script.chunks) {
-                delay(script.intervalMs)
-                sb.append(chunk)
-                val text = sb.toString()
-                _chat.update { s -> s.copy(items = s.items.map { if (it.key == asstKey) (it as ChatItem.Assistant).copy(blocks = listOf(ContentBlock.Text(0, text))) else it }) }
-            }
-            _chat.update { s ->
-                s.copy(
-                    items = s.items.map { if (it.key == asstKey) (it as ChatItem.Assistant).copy(streaming = false, stopReason = script.stopReason) else it },
-                    running = false,
-                )
-            }
-            agentSettledCount++
-            _status.value = EngineStatus.Idle(state())
+        val sb = StringBuilder()
+        for (chunk in script.chunks) {
+            delay(script.intervalMs)
+            sb.append(chunk)
+            val text = sb.toString()
+            _chat.update { s -> s.copy(items = s.items.map { if (it.key == asstKey) (it as ChatItem.Assistant).copy(blocks = listOf(ContentBlock.Text(0, text))) else it }) }
         }
-        streamJob = job
-        return job
+        _chat.update { s -> s.copy(items = s.items.map { if (it.key == asstKey) (it as ChatItem.Assistant).copy(streaming = false, stopReason = script.stopReason) else it }) }
+    }
+
+    /** 取出下一条排队消息（先 steer 后 follow_up）；队列空返回 null。 */
+    private fun dequeue(): String? {
+        var out: String? = null
+        _chat.update { s ->
+            val q = s.queue
+            when {
+                q.steering.isNotEmpty() -> { out = q.steering.first(); s.copy(queue = q.copy(steering = q.steering.drop(1))) }
+                q.followUp.isNotEmpty() -> { out = q.followUp.first(); s.copy(queue = q.copy(followUp = q.followUp.drop(1))) }
+                else -> s
+            }
+        }
+        return out
     }
 
     private fun state(streaming: Boolean = false) = PiState(
@@ -146,17 +183,19 @@ class FakeScriptedEngine(
         isStreaming = streaming,
     )
 
-    override suspend fun send(text: String, mode: SendMode): Outcome<Disposition> {
+    override suspend fun send(text: String, mode: SendMode): Outcome<Disposition> = sendInternal(text, mode, emptyMap())
+
+    private fun sendInternal(text: String, mode: SendMode, extra: Map<String, String>): Outcome<Disposition> {
         if (_chat.value.running) {
             val type = if (mode == SendMode.STEER) "steer" else "follow_up"
-            record(type, mapOf("message" to text))
+            record(type, mapOf("message" to text) + extra)
             _chat.update { s ->
                 val q = s.queue
                 s.copy(queue = if (mode == SendMode.STEER) q.copy(steering = q.steering + text) else q.copy(followUp = q.followUp + text))
             }
             return Outcome.Ok(Disposition.QUEUED)
         }
-        record("prompt", mapOf("message" to text))
+        record("prompt", mapOf("message" to text) + extra)
         val script = nextScript ?: StreamScript(listOf("好的。"), intervalMs = 10)
         nextScript = null
         startStream(script, userText = text)
@@ -241,7 +280,9 @@ class FakeScriptedEngine(
         restartCount++
         record("restart", mapOf("reason" to reason))
         streamJob?.cancel()
-        _chat.update { it.copy(running = false) }
+        streamJob = null
+        // 进程重启后 pi 的队列随之消失；把队列文字退回草稿是 SessionHost 的事（重启前先读 chat.queue）。
+        _chat.update { it.copy(running = false, queue = QueueSnapshot.EMPTY) }
         _status.value = EngineStatus.Idle(state())
         return Outcome.Ok(Unit)
     }
