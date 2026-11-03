@@ -96,6 +96,8 @@ class FakeSessionHost(
 
     fun program(script: StreamScript) = fakeEngine.program(script)
 
+    fun clearCommands() = fakeEngine.clearCommands()
+
     fun startStream(script: StreamScript, userText: String? = null): Job = fakeEngine.startStream(script, userText)
 
     /**

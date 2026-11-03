@@ -152,19 +152,127 @@ class FakeSessionHostTest {
         host.draft.value = DraftState(text = "你好")
         host.sendDraft()
         assertEquals(DraftState.EMPTY, host.draft.value)
+        assertTrue(host.draft.value.isEmpty)
         assertEquals(listOf("你好"), host.promptHistory.value)
         assertEquals("prompt", host.commands.value.single().type)
     }
 
     @Test
-    fun placeholderActionsPushOverlayOrExplain() = runTest {
+    fun runActionPushesOverlayExactlyOnceAndRunDoesNotPush() = runTest {
         val host = FakeSessionHost(backgroundScope)
-        val r = host.actions.run("session.tree")
+        // run 只返回结果，不碰栈
+        val raw = host.actions.run("session.tree")
+        assertTrue(raw is ActionResult.Overlay)
+        assertEquals(0, host.overlay.items.value.size)
+        // runAction 压栈一次
+        val r = host.runAction("session.tree")
+        assertTrue(r is ActionResult.Overlay)
+        assertEquals(1, host.overlay.items.value.size)
+        assertEquals("session.tree", host.overlay.top?.id)
+        // 一次返回就关掉
+        host.overlay.pop()
+        assertEquals(0, host.overlay.items.value.size)
+    }
+
+    @Test
+    fun placeholderActionsReturnOverlayOrExplain() = runTest {
+        val host = FakeSessionHost(backgroundScope)
+        val r = host.runAction("session.tree")
         assertTrue(r is ActionResult.Overlay)
         assertEquals("session.tree", host.overlay.top?.id)
-        val e = host.actions.run("help.tuiMode")
+        val e = host.runAction("help.tuiMode")
         assertTrue(e is ActionResult.LocalBlock && e.title == "explain:help.tuiMode" && e.text.isNotBlank())
+        assertEquals("explain:help.tuiMode", host.localBlocks.value.single().title)
+        assertEquals(1, host.overlay.items.value.size)
         assertEquals(listOf("action:session.tree", "action:help.tuiMode"), host.commands.value.map { it.type })
-        assertTrue(host.actions.run("no.such") is ActionResult.Toast)
+        assertTrue(host.runAction("no.such") is ActionResult.Toast)
+    }
+
+    @Test
+    fun queuedSteerAndFollowUpAreDeliveredAfterStreamEnds() = runTest {
+        val host = FakeSessionHost(backgroundScope)
+        host.program(StreamScript(listOf("a", "b"), intervalMs = 100))
+        host.engine.send("hi")
+        host.engine.send("跟进", SendMode.FOLLOW_UP)
+        host.engine.send("插话", SendMode.STEER)
+        assertEquals(listOf("插话"), host.chat.value.queue.steering)
+        advanceTimeBy(10_000); runCurrent()
+        assertFalse(host.chat.value.running)
+        assertTrue(host.chat.value.queue.steering.isEmpty() && host.chat.value.queue.followUp.isEmpty())
+        val users = host.chat.value.items.filterIsInstance<ChatItem.User>().map { it.text }
+        assertEquals(listOf("hi", "插话", "跟进"), users)
+        assertEquals(1, host.fakeEngine.agentSettledCount)
+        assertEquals(listOf("prompt", "follow_up", "steer"), host.commands.value.map { it.type })
+    }
+
+    @Test
+    fun secondStartStreamCancelsFirst() = runTest {
+        val host = FakeSessionHost(backgroundScope)
+        host.startStream(StreamScript(listOf("x", "y", "z"), intervalMs = 100), "一")
+        advanceTimeBy(150); runCurrent()
+        host.startStream(StreamScript(listOf("p", "q", "r", "s", "t"), intervalMs = 100), "二")
+        advanceTimeBy(250); runCurrent()
+        // 第一段已被取消并标 aborted；第一段原本 300ms 结束，此时第二段仍在跑
+        assertTrue(host.chat.value.running)
+        val asst = host.chat.value.items.filterIsInstance<ChatItem.Assistant>()
+        assertEquals("aborted", asst.first().stopReason)
+        assertFalse(asst.first().streaming)
+        advanceTimeBy(1_000); runCurrent()
+        assertFalse(host.chat.value.running)
+        assertEquals(1, host.fakeEngine.agentSettledCount)
+        assertEquals("pqrst", lastAssistantText(host))
+    }
+
+    @Test
+    fun uiRequestsDoNotReplayToLateSubscribers() = runTest {
+        val host = FakeSessionHost(backgroundScope)
+        host.showExtDialog(ExtUiRequest(id = "req-1", method = "confirm"))
+        assertTrue(host.engine.uiRequests.replayCache.isEmpty())
+    }
+
+    @Test
+    fun sendDraftKeepsImagesRefsAndBashModeAndSkipsEmpty() = runTest {
+        val host = FakeSessionHost(backgroundScope)
+        assertTrue(host.sendDraft() is Outcome.Err)
+        host.draft.value = DraftState(text = "   ")
+        assertTrue(host.sendDraft() is Outcome.Err)
+        assertTrue(host.commands.value.isEmpty())
+        assertTrue(host.promptHistory.value.isEmpty())
+
+        host.draft.value = DraftState(text = "看图", images = listOf(DraftImage("content://a.png", "image/png")), fileRefs = listOf("src/A.kt"), recalled = listOf("旧排队"))
+        host.sendDraft()
+        val c = host.commands.value.single()
+        assertEquals("prompt", c.type)
+        assertEquals("@src/A.kt 看图", c.args["message"])
+        assertEquals("1", c.args["images"])
+        assertEquals(listOf("旧排队"), host.draft.value.recalled)
+
+        host.draft.value = DraftState(text = "", images = listOf(DraftImage("content://b.png")))
+        host.sendDraft()
+        assertEquals(listOf("看图"), host.promptHistory.value)
+
+        advanceTimeBy(10_000); runCurrent()
+        host.clearCommands()
+        host.draft.value = DraftState(text = "ls", bashMode = io.github.zr987459.pigo.contract.session.BashMode.EXCLUDE)
+        host.sendDraft()
+        val b = host.commands.value.single()
+        assertEquals("bash", b.type)
+        assertEquals("ls", b.args["command"])
+        assertEquals("true", b.args["excludeFromContext"])
+    }
+
+    @Test
+    fun hostExposesExtrasSettingsAndSessions() = runTest {
+        val host = FakeSessionHost(backgroundScope)
+        assertTrue(host.settings.set("compaction.enabled", kotlinx.serialization.json.JsonPrimitive(false)) is Outcome.Ok)
+        assertTrue(host.settings.set("no.such", null) is Outcome.Err)
+        assertEquals(3, host.sessions.sessions.value.size)
+        val p = (host.sessions.delete("/fake/session-2.jsonl") as Outcome.Ok).value
+        assertEquals(2, host.sessions.sessions.value.size)
+        assertTrue(host.sessions.undoDelete(p) is Outcome.Ok)
+        assertEquals(3, host.sessions.sessions.value.size)
+        host.sessions.open("/fake/session-3.jsonl")
+        assertEquals("switch_session", host.commands.value.last().type)
+        assertTrue(host.extras.commands() is Outcome.Ok)
     }
 }

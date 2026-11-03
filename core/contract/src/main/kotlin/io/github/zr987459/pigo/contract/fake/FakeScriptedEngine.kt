@@ -122,16 +122,18 @@ class FakeScriptedEngine(
             old.cancel()
             _chat.update { s -> s.copy(items = s.items.map { if (it is ChatItem.Assistant && it.streaming) it.copy(streaming = false, stopReason = "aborted") else it }) }
         }
+        // 第一轮的消息同步加入（调用方返回时就能看到），后续轮次在流任务里加。
+        val firstKey = addTurn(userText)
         _chat.update { it.copy(running = true) }
         _status.value = EngineStatus.Running(state(streaming = true))
         val job = scope.launch {
-            streamOne(script, userText)
+            streamOne(script, firstKey)
             // 按 pi 语义消费排队消息：先 steer，再 follow_up，一条一轮。
             while (true) {
                 val next = dequeue() ?: break
                 val s2 = nextScript ?: StreamScript(listOf("好的。"), intervalMs = 10)
                 nextScript = null
-                streamOne(s2, next)
+                streamOne(s2, addTurn(next))
             }
             _chat.update { it.copy(running = false) }
             agentSettledCount++
@@ -141,7 +143,8 @@ class FakeScriptedEngine(
         return job
     }
 
-    private suspend fun streamOne(script: StreamScript, userText: String?) {
+    /** 加入一轮的用户消息（可无）与空的流式回复，返回回复的 key。 */
+    private fun addTurn(userText: String?): String {
         val userKey = "u${++seq}"
         val asstKey = "a${++seq}"
         _chat.update { s ->
@@ -150,6 +153,10 @@ class FakeScriptedEngine(
             items += ChatItem.Assistant(asstKey, blocks = emptyList(), streaming = true)
             s.copy(items = items)
         }
+        return asstKey
+    }
+
+    private suspend fun streamOne(script: StreamScript, asstKey: String) {
         val sb = StringBuilder()
         for (chunk in script.chunks) {
             delay(script.intervalMs)
