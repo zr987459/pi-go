@@ -177,7 +177,7 @@ class RpcChannel(
         val id = RESPONSE_ID.find(head)?.groupValues?.get(1) ?: return
         val command = RESPONSE_COMMAND.find(head)?.groupValues?.get(1) ?: ""
         val waiter = pending.remove(id) ?: return
-        waiter.complete(RpcResponse(id, command, success = false, error = "会话太大，无法读取", raw = JsonObject(emptyMap())))
+        waiter.complete(RpcResponse(id, command, success = false, error = TOO_LARGE, raw = JsonObject(emptyMap())))
     }
 
     private fun onResponse(r: RpcResponse) {
@@ -238,6 +238,9 @@ class RpcChannel(
     class ChannelClosedException : IOException("pi 连接已断开")
 
     companion object {
+        /** 超长 / 解析失败的 response 以此错误立即结束对应请求（调用方据此识别「会话太大」）。 */
+        const val TOO_LARGE = "会话太大，无法读取"
+
         const val READER_STACK_BYTES = 64L * 1024 * 1024
         private val RESPONSE_ID = Regex("^\\{\\s*\"id\"\\s*:\\s*\"([^\"]+)\"")
         private val RESPONSE_COMMAND = Regex("\"command\"\\s*:\\s*\"([^\"]+)\"")

@@ -89,8 +89,14 @@ class MessageMetaTracker {
     /**
      * @param notPersisted 不会写入会话的用户气泡（扩展消费掉的输入等）
      * @param retrying 正在自动重试（重试横幅还在）：时间线最后一条失败的助手消息已被 pi 从投影排除
+     * @param running 这一轮还在进行：最后一条 error/length 条目可能马上被 context_edit 排除，暂不配对
      */
-    fun compute(items: List<ChatItem>, notPersisted: Set<String> = emptySet(), retrying: Boolean = false): Map<String, MessageMeta> {
+    fun compute(
+        items: List<ChatItem>,
+        notPersisted: Set<String> = emptySet(),
+        retrying: Boolean = false,
+        running: Boolean = false,
+    ): Map<String, MessageMeta> {
         val branch = branch()
         val omitted = branch.asSequence()
             .filter { it.type == "context_edit" && it.raw["replacement"].let { r -> r == null || r is JsonNull } }
@@ -121,24 +127,26 @@ class MessageMetaTracker {
             items.filter { it is ChatItem.Assistant && !it.streaming && it.key in covered && it.key !in retried }.map { it as ChatItem.Assistant },
             path.filter { it.role == "assistant" },
             omitted,
+            running,
             out,
         )
         return out
     }
 
     /**
-     * 助手消息从末尾往前配对，失败消息由 tracker 自己对齐（不靠时间线猜）。「失败条目」= 被 context_edit 排除的条目
-     * （自动重试 / 重试中停止 / 放弃重试后的失败消息），或 `stopReason=error` 但还没收到 context_edit 的条目
-     * （扩展 turn_end/agent_end 异步 await 的瞬时窗口）。失败条目与失败气泡（`stopReason=error`）都不发 meta：
-     * - 两边都是失败：一起跳过；
-     * - 只有条目失败（空失败消息已被时间线删掉、或重建后没有它）：只跳条目；
-     * - 只有气泡失败（没有对应条目）：只跳气泡。
-     * 这样失败消息无论留没留在时间线上，都不会让后面的配对整体错开一位。
+     * 助手消息从末尾往前配对，被 pi 排除的条目由 tracker 自己对齐（不靠时间线猜）：
+     * - 条目被 context_edit(replacement=null) 排除（自动重试 / 重试中停止 / 放弃重试的 `error`，截断恢复 `_omitRecoveryAttempt` 的 `length`）：
+     *   气泡的 stopReason 与条目相同且属于 {error, length} 时两边一起跳过、不发 meta；否则（空失败消息已被时间线删掉、重建后没有它）只跳条目。
+     * - 条目未被排除、stopReason ∈ {error, length}，且这一轮还在进行（[running]）：可能马上被排除（扩展 turn_end/agent_end 异步 await、
+     *   auto_retry_start 之前的瞬时窗口），暂按上一条处理，不发 meta。
+     * - 其余按正常规则配对：不会重试的错误（401、重试次数用尽）和普通截断留在上下文里，两边都是 error/length 时照常配对。
+     * - 气泡是 error、条目不是：这条气泡没有对应条目，只跳气泡。
      */
     private fun pairAssistants(
         timeline: List<ChatItem.Assistant>,
         entries: List<Msg>,
         omitted: Set<String>,
+        running: Boolean,
         out: MutableMap<String, MessageMeta>,
     ) {
         var i = timeline.size - 1
@@ -146,12 +154,13 @@ class MessageMetaTracker {
         while (i >= 0 && j >= 0) {
             val bubble = timeline[i]
             val entry = entries[j]
-            val bubbleFailed = bubble.stopReason == "error"
-            val entryFailed = entry.id in omitted || entry.message?.str("stopReason") == "error"
+            val entryStop = entry.message?.str("stopReason")
+            val recoverable = entryStop == "error" || entryStop == "length"
+            val pendingOmit = running && j == entries.size - 1 && recoverable
             when {
-                bubbleFailed && entryFailed -> { i--; j-- }
-                entryFailed -> j--
-                bubbleFailed -> i--
+                entry.id in omitted || pendingOmit ->
+                    if (recoverable && bubble.stopReason == entryStop) { i--; j-- } else j--
+                bubble.stopReason == "error" && entryStop != "error" -> i--
                 else -> { out[bubble.key] = meta(entry); i--; j-- }
             }
         }

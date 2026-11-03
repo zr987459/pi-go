@@ -253,6 +253,11 @@ class PiEngine(
     private var metaEndSeq = 0L
     /** 已收到 message_end（已写盘）的用户气泡 key（助手消息以 streaming=false 判断）。 */
     private val endedUsers = HashSet<String>()
+    /**
+     * 全量 get_entries 因会话太大（超长 / 解析失败）失败时的 [metaEpoch]：同一 epoch 内不再自动全量拉，
+     * 避免每次 message_end 都重拉一个超大会话；换会话（epoch 变化）或手动 [entries] 全量重试后解除。
+     */
+    private var tooLargeEpoch = -1L
 
     /** get_entries 刷新请求（合并）：由单个协程串行处理，响应不会乱序覆盖。 */
     private val entriesSignal = Channel<Unit>(Channel.CONFLATED)
@@ -403,11 +408,11 @@ class PiEngine(
         val last = state.items.lastOrNull()
         val sig = listOf(
             metaTracker.version, state.items.size, state.items.firstOrNull()?.key, last?.key, (last as? ChatItem.Assistant)?.streaming,
-            unpersisted.size, state.items.count { it is ChatItem.User && it.delivery == Delivery.SENT }, state.retry != null,
+            unpersisted.size, state.items.count { it is ChatItem.User && it.delivery == Delivery.SENT }, state.retry != null, state.running,
         )
         if (sig != metaSignature) {
             metaSignature = sig
-            val m = metaTracker.compute(state.items, unpersisted, retrying = state.retry != null)
+            val m = metaTracker.compute(state.items, unpersisted, retrying = state.retry != null, running = state.running)
             if (m != _meta.value) _meta.value = m
         }
     }
@@ -1147,10 +1152,13 @@ class PiEngine(
         var seq = 0L
         var since: String? = null
         var covered: Set<String> = emptySet()
+        var skip = false
         mutate {
             epoch = metaEpoch; seq = metaEndSeq; since = metaTracker.lastId; covered = coveredKeys(it)
+            skip = since == null && tooLargeEpoch == metaEpoch
             it
         }
+        if (skip) return
         when (val r = c.channel.request(RpcCommands.GetEntries(ids.next(), since), config.timeoutFor("get_entries"))) {
             is Outcome.Ok -> {
                 val page = ExtraResponses.entries(r.value.data)
@@ -1166,8 +1174,10 @@ class PiEngine(
             is Outcome.Err -> {
                 log.w(TAG, "get_entries 失败：${r.message}")
                 val retryFull = since != null && r.message.contains("not found", ignoreCase = true)
+                val tooLarge = since == null && r.message == RpcChannel.TOO_LARGE
                 mutate {
                     if (epoch == metaEpoch) {
+                        if (tooLarge) tooLargeEpoch = metaEpoch
                         metaTracker.clear()
                         if (retryFull) requestEntries()
                     }
@@ -1203,8 +1213,15 @@ class PiEngine(
     override suspend fun tree(): Outcome<SessionTree> =
         extra { RpcCommands.GetTree(it) }.map { ContractMapping.tree(ExtraResponses.tree(it.data)) }
 
-    override suspend fun entries(since: String?): Outcome<EntriesPage> =
-        extra { RpcCommands.GetEntries(it, since) }.map { ContractMapping.entries(ExtraResponses.entries(it.data)) }
+    override suspend fun entries(since: String?): Outcome<EntriesPage> {
+        val r = extra { RpcCommands.GetEntries(it, since) }.map { ContractMapping.entries(ExtraResponses.entries(it.data)) }
+        // 手动全量重试成功：解除「会话太大」的退避，messageMeta 重新全量拉一次。
+        if (since == null && r is Outcome.Ok) mutate {
+            if (tooLargeEpoch == metaEpoch) { tooLargeEpoch = -1L; requestEntries() }
+            it
+        }
+        return r
+    }
 
     override suspend fun cycleModel(): Outcome<ModelInfo?> = when (val r = cycleModelResult()) {
         is Outcome.Ok -> Outcome.Ok(r.value?.model)
