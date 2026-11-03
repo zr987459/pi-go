@@ -1,7 +1,4 @@
-> **审查第 2 轮修复：修复2 进行中**（2026-11-03 17:35 起）：已 merge origin/main（f9097eb，无冲突，b9bcd80）。
-> - Important 1（停止/放弃重试错配）已修：MessageMetaTracker.pairAssistants 由 tracker 对齐失败消息（e2141be）。
-> - Important 2（fork 后 get_messages 失败）已修：rebuildFromMessages(sessionReplaced) 清空时间线 + resetMeta（71fbcad）。
-> - Nit Oversized 立即结束（6cf92bf）；engine-rpc.md 同步（dacd1ae）。本地 :core:protocol 109/109、PiEngine* 57/57；真 pi 集成与 assembleDebug 进行中。
+> **修复2 已完成**（2026-11-03 18:00 CST）：PR #13 审查第 2 轮 Important 2 条、Nit（Oversized、文档）已修，SessionTreeRows 写入遗留；已 merge origin/main（f9097eb）。明细与测试结果见 PR 描述「审查第 2 轮修复」。
 
 # feat/engine-rpc（W1）状态
 
