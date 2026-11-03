@@ -12,6 +12,9 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -30,12 +33,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,6 +57,9 @@ import io.github.zr987459.pigo.contract.ProviderPreset
 import io.github.zr987459.pigo.contract.RuntimeStatus
 import io.github.zr987459.pigo.contract.SecretStore
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -63,6 +71,29 @@ import kotlinx.coroutines.withContext
 fun SettingsPlaceholder(providers: ProviderConfigStore, modifier: Modifier = Modifier) {
     SettingsScreen(providers = providers, modifier = modifier)
 }
+
+/** 从其他页面跳到设置页时要定位的区块（导航参数 `settings?focus=…`）。 */
+object SettingsFocus {
+    /** 「模型与 Key」：聊天出错（没配模型、Key 错误、连不上模型服务）时的「去设置模型」。 */
+    const val MODELS = "models"
+    /** 「默认模型」。 */
+    const val DEFAULT_MODEL = "default-model"
+}
+
+/**
+ * 「测试连接」的对象。[rawKey] 为空表示用已保存的 Key；[custom] 为 true 时 [baseUrl] 是 OpenAI 兼容端点地址。
+ * [model] 为空时内置 Provider 用 pi 的默认模型。
+ */
+data class ConnectionTarget(
+    val provider: String,
+    val custom: Boolean,
+    val baseUrl: String?,
+    val rawKey: String,
+    val model: String?,
+)
+
+/** 「测试连接」的结果：成功或失败原因（中文、已脱敏）。 */
+data class ConnectionCheck(val ok: Boolean, val message: String)
 
 /** 编辑已有自定义端点时预填的内容（不含 Key；Key 留空表示保持原 Key）。 */
 data class CustomEndpointPrefill(val baseUrl: String, val modelIds: List<String>)
@@ -77,8 +108,11 @@ data class CustomEndpointPrefill(val baseUrl: String, val modelIds: List<String>
  * @param engine 有引擎时：保存 Key 后自动重启引擎；「默认模型」从 `get_available_models` 里选并 `set_model`。
  * @param runtimeStatus 运行环境版本信息。
  * @param loadCustom 读取已有自定义端点（id → 接口地址与模型），用于编辑时预填；为 null 时编辑需要重新填写。
+ * @param focus 打开时滚动到的区块（[SettingsFocus]）。
+ * @param discoverModels 自定义端点「获取模型列表」：(id, baseUrl, rawKey) → 模型 id 列表；rawKey 为空表示用已保存的 Key。
+ * @param testConnection 「测试连接」；为 null 时不显示按钮。
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun SettingsScreen(
     providers: ProviderConfigStore,
@@ -88,6 +122,9 @@ fun SettingsScreen(
     runtimeStatus: RuntimeStatus? = null,
     onRepairRuntime: (() -> Unit)? = null,
     loadCustom: (suspend (id: String) -> CustomEndpointPrefill?)? = null,
+    focus: String? = null,
+    discoverModels: (suspend (id: String, baseUrl: String, rawKey: String) -> Outcome<List<String>>)? = null,
+    testConnection: (suspend (ConnectionTarget) -> ConnectionCheck)? = null,
 ) {
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
@@ -98,9 +135,34 @@ fun SettingsScreen(
     var pickingDefault by remember { mutableStateOf(false) }
     var showGuide by remember { mutableStateOf(false) }
     val presets = remember(providers) { providers.presets() }
+    val listState = rememberLazyListState()
+    var testingCurrent by remember { mutableStateOf(false) }
+    // 「当前模型」跟随引擎实时更新（换默认模型、引擎重启后不显示旧模型，测试连接也测新模型）。
+    val currentModel by remember(engine) {
+        engine?.chat?.map { it.model }?.distinctUntilChanged() ?: flowOf(null)
+    }.collectAsState(initial = engine?.chat?.value?.model)
+    var currentCheck by remember { mutableStateOf<ConnectionCheck?>(null) }
+
+    var configuredLoaded by remember { mutableStateOf(false) }
+    var focusDone by rememberSaveable(focus) { mutableStateOf(false) }
+
+    // 从聊天页「去设置模型」等入口进来：等配置读出来（行数确定）后滚到对应区块，只定位一次；
+    // 之后保存 Key 导致 configured 变化不再把列表拉回去。
+    LaunchedEffect(focus, configuredLoaded) {
+        if (!configuredLoaded || focusDone) return@LaunchedEffect
+        val key = when (focus) {
+            SettingsFocus.MODELS -> "sec-models"
+            SettingsFocus.DEFAULT_MODEL -> "sec-default"
+            else -> null
+        } ?: return@LaunchedEffect
+        val index = settingsItemIndex(key, presets, configured)
+        if (index >= 0) listState.scrollToItem(index)
+        focusDone = true
+    }
 
     LaunchedEffect(providers, version) {
         configured = runCatching { providers.configured() }.getOrDefault(emptyList())
+        configuredLoaded = true
         // 只取末 4 位（SecretStore 实现内部在 IO 线程解密），明文不进界面层。
         masks = if (secrets == null) emptyMap() else configured.associateWith { id ->
             val builtIn = presets.any { it.provider == id && it.kind != PresetKind.CUSTOM_OPENAI }
@@ -135,11 +197,12 @@ fun SettingsScreen(
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
         LazyColumn(
-            Modifier.padding(padding).fillMaxSize(),
+            Modifier.padding(padding).fillMaxSize().testTag("settings:list"),
+            state = listState,
             contentPadding = PaddingValues(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            item { Section("模型与 Key") }
+            item(key = "sec-models") { Section("模型与 Key", Modifier.testTag("settings:sec-models")) }
             item {
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)) {
                     Text(
@@ -173,7 +236,7 @@ fun SettingsScreen(
                     )
                 }
             }
-            item { Section("默认模型") }
+            item(key = "sec-default") { Section("默认模型", Modifier.testTag("settings:sec-default")) }
             item {
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -183,6 +246,27 @@ fun SettingsScreen(
                         )
                         OutlinedButton(onClick = { pickingDefault = true }, enabled = configured.isNotEmpty()) {
                             Text("选择默认模型")
+                        }
+                        val current = currentModel
+                        val tester = testConnection
+                        if (tester != null && current != null) {
+                            Text("当前模型：${current.name ?: current.id}（${current.provider}）", style = MaterialTheme.typography.bodySmall)
+                            OutlinedButton(
+                                enabled = !testingCurrent,
+                                onClick = {
+                                    testingCurrent = true
+                                    currentCheck = null
+                                    scope.launch {
+                                        val isCustom = presets.none { it.provider == current.provider && it.kind != PresetKind.CUSTOM_OPENAI }
+                                        currentCheck = runCatching {
+                                            tester(ConnectionTarget(current.provider, isCustom, null, "", current.id))
+                                        }.getOrElse { ConnectionCheck(false, "测试失败：${it.message}") }
+                                        testingCurrent = false
+                                    }
+                                },
+                                modifier = Modifier.testTag("settings:testCurrent"),
+                            ) { Text(if (testingCurrent) "正在测试…" else "测试连接") }
+                            currentCheck?.let { CheckText(it) }
                         }
                     }
                 }
@@ -222,6 +306,8 @@ fun SettingsScreen(
                 preset = p,
                 existing = configured.contains(p.provider),
                 loadCustom = loadCustom,
+                discoverModels = discoverModels,
+                testConnection = testConnection,
                 onDismiss = { editing = null },
                 onSave = { id, url, key, models ->
                     val err = runCatching { providers.upsertCustom(id, url, key, models) }.exceptionOrNull()
@@ -236,6 +322,7 @@ fun SettingsScreen(
             KeyDialog(
                 preset = p,
                 alreadySet = configured.contains(p.provider),
+                testConnection = testConnection,
                 onDismiss = { editing = null },
                 onSave = { key ->
                     val err = runCatching { providers.setBuiltInKey(p.provider, key) }.exceptionOrNull()
@@ -304,8 +391,32 @@ private fun phaseLabel(p: String) = when (p) {
 }
 
 @Composable
-private fun Section(title: String) {
-    Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
+private fun Section(title: String, modifier: Modifier = Modifier) {
+    Text(title, style = MaterialTheme.typography.titleMedium, modifier = modifier.padding(top = 8.dp))
+}
+
+@Composable
+private fun CheckText(c: ConnectionCheck) {
+    Text(
+        (if (c.ok) "✓ " else "✗ ") + c.message,
+        style = MaterialTheme.typography.bodySmall,
+        color = if (c.ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+        modifier = Modifier.testTag(if (c.ok) "settings:checkOk" else "settings:checkFail"),
+    )
+}
+
+/**
+ * [SettingsScreen] 里 LazyColumn 各区块的下标，与上面 item 的顺序一致：
+ * 「模型与 Key」标题、安全提示，然后每组（标题 + 行），再是「默认模型」标题。
+ */
+internal fun settingsItemIndex(key: String, presets: List<ProviderPreset>, configured: List<String>): Int {
+    if (key == "sec-models") return 0
+    var i = 2
+    PresetKind.entries.forEach { kind ->
+        i += 1 + presets.count { it.kind == kind }
+        if (kind == PresetKind.CUSTOM_OPENAI) i += configured.count { id -> presets.none { it.provider == id } }
+    }
+    return if (key == "sec-default") i else -1
 }
 
 @Composable
@@ -335,6 +446,7 @@ private fun PresetRow(preset: ProviderPreset, status: String, onClick: () -> Uni
 private fun KeyDialog(
     preset: ProviderPreset,
     alreadySet: Boolean,
+    testConnection: (suspend (ConnectionTarget) -> ConnectionCheck)?,
     onDismiss: () -> Unit,
     onSave: suspend (String) -> String?,
 ) {
@@ -342,6 +454,8 @@ private fun KeyDialog(
     var key by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var saving by remember { mutableStateOf(false) }
+    var testing by remember { mutableStateOf(false) }
+    var check by remember { mutableStateOf<ConnectionCheck?>(null) }
     AlertDialog(
         onDismissRequest = { if (!saving) onDismiss() },
         title = { Text(preset.label) },
@@ -360,6 +474,22 @@ private fun KeyDialog(
                     modifier = Modifier.fillMaxWidth().testTag("settings:keyField"),
                 )
                 KeyText.preview(key)?.let { Text("将保存为 $it", style = MaterialTheme.typography.bodySmall) }
+                if (testConnection != null) {
+                    OutlinedButton(
+                        enabled = !testing && !saving && (KeyText.clean(key).isNotEmpty() || alreadySet),
+                        onClick = {
+                            testing = true
+                            check = null
+                            scope.launch {
+                                check = runCatching { testConnection(ConnectionTarget(preset.provider, false, null, key, null)) }
+                                    .getOrElse { ConnectionCheck(false, "测试失败：${it.message}") }
+                                testing = false
+                            }
+                        },
+                        modifier = Modifier.testTag("settings:testKey"),
+                    ) { Text(if (testing) "正在测试（最多 45 秒）…" else "测试连接") }
+                    check?.let { CheckText(it) }
+                }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
             }
         },
@@ -383,11 +513,14 @@ private fun KeyDialog(
  * 自定义 OpenAI 兼容端点。
  * [existing] 为 true 表示修改已有配置：id 固定，Key 可留空（保持原 Key），接口地址与模型由 [loadCustom] 预填。
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CustomDialog(
     preset: ProviderPreset,
     existing: Boolean,
     loadCustom: (suspend (id: String) -> CustomEndpointPrefill?)?,
+    discoverModels: (suspend (id: String, baseUrl: String, rawKey: String) -> Outcome<List<String>>)?,
+    testConnection: (suspend (ConnectionTarget) -> ConnectionCheck)?,
     onDismiss: () -> Unit,
     onSave: suspend (id: String, baseUrl: String, key: String, models: List<String>) -> String?,
 ) {
@@ -398,6 +531,46 @@ private fun CustomDialog(
     var models by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var saving by remember { mutableStateOf(false) }
+    var discovery by remember { mutableStateOf(DiscoveryUi()) }
+    val discovered = discovery.discovered
+    val discovering = discovery.running
+    val discoverMsg = discovery.message
+    val discoverGate = remember { LatestOnly() }
+    var testing by remember { mutableStateOf(false) }
+    var check by remember { mutableStateOf<ConnectionCheck?>(null) }
+    val keyReady = KeyText.clean(key).isNotEmpty() || existing
+
+    /** 填好地址和 Key 后自动获取模型列表（piweb-study G2）；失败给出原因，允许手填。 */
+    // 只接受最新一次请求的结果：旧请求（阻塞的 HTTP 取消不掉）晚到时不覆盖新结果，取消也不当成失败显示。
+    suspend fun discover() {
+        val d = discoverModels ?: return
+        if (url.isBlank() || !keyReady) return
+        val token = discoverGate.begin()
+        discovery = discovery.started()
+        try {
+            val r = discoverGate.run(
+                token,
+                onError = { Outcome.Err(io.github.zr987459.pigo.contract.ErrCode.UNKNOWN, it.message ?: "") },
+            ) { d(id.ifBlank { preset.provider }, url, key) } ?: return
+            when (r) {
+                is Outcome.Ok -> discovery = discovery.succeeded(r.value)
+                is Outcome.Err -> discovery = discovery.failed(r.message)
+            }
+        } finally {
+            if (discoverGate.isLatest(token)) discovery = discovery.finished()
+        }
+    }
+
+    // 地址和 Key 都填好后停顿片刻自动获取一次（输入过程中不反复请求）。
+    LaunchedEffect(url, key, existing) {
+        // 输入变了：之前发出的请求一律作废，按钮先恢复可点（旧请求可能还卡在网络上）；
+        // 旧地址取到的模型列表和提示一并清掉，不能再点选加入（审查第 2 轮 Nit）。
+        discoverGate.invalidate()
+        discovery = discovery.inputChanged()
+        if (discoverModels == null || url.isBlank() || !keyReady) return@LaunchedEffect
+        kotlinx.coroutines.delay(800)
+        discover()
+    }
 
     LaunchedEffect(preset.provider, existing) {
         if (!existing || loadCustom == null) return@LaunchedEffect
@@ -432,12 +605,55 @@ private fun CustomDialog(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 KeyText.preview(key)?.let { Text("将保存为 $it", style = MaterialTheme.typography.bodySmall) }
+                if (discoverModels != null) {
+                    OutlinedButton(
+                        enabled = !discovering && url.isNotBlank() && keyReady,
+                        onClick = { scope.launch { discover() } },
+                        modifier = Modifier.testTag("settings:discover"),
+                    ) { Text(if (discovering) "正在获取模型列表…" else "获取模型列表") }
+                    discoverMsg?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (discovered.isEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.testTag("settings:discoverMsg"),
+                        )
+                    }
+                    if (discovered.isNotEmpty()) {
+                        val chosen = KeyText.splitModels(models)
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            discovered.forEach { m ->
+                                FilterChip(
+                                    selected = m in chosen,
+                                    onClick = { models = KeyText.toggleModel(models, m); error = null },
+                                    label = { Text(m) },
+                                )
+                            }
+                        }
+                    }
+                }
                 OutlinedTextField(
                     value = models, onValueChange = { models = it; error = null },
                     label = { Text("模型 id（多个用逗号或换行分开）") },
                     placeholder = { Text(preset.note) },
                     modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp),
                 )
+                if (testConnection != null) {
+                    OutlinedButton(
+                        enabled = !testing && !saving && url.isNotBlank() && keyReady && KeyText.splitModels(models).isNotEmpty(),
+                        onClick = {
+                            testing = true
+                            check = null
+                            scope.launch {
+                                val target = ConnectionTarget(id.ifBlank { preset.provider }, true, url, key, KeyText.splitModels(models).first())
+                                check = runCatching { testConnection(target) }.getOrElse { ConnectionCheck(false, "测试失败：${it.message}") }
+                                testing = false
+                            }
+                        },
+                        modifier = Modifier.testTag("settings:testCustom"),
+                    ) { Text(if (testing) "正在测试…" else "测试连接") }
+                    check?.let { CheckText(it) }
+                }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
             }
         },

@@ -21,7 +21,8 @@ class GuestRunner(
     private val uid: Int,
     private val signaller: Signaller,
     private val tree: ProcessTree = ProcessTree(),
-    private val processFactory: (argv: List<String>, hostEnv: Map<String, String>) -> Process = ::defaultStart,
+    /** argv 不含任何环境变量的值；[processEnv] 为 proot 进程的完整环境（含容器内变量与 Key）。 */
+    private val processFactory: (argv: List<String>, processEnv: Map<String, String>) -> Process = ::defaultStart,
 ) {
     /**
      * 启动容器内进程（非挂起，签名由 `RuntimeManager.start` 决定）。
@@ -35,7 +36,7 @@ class GuestRunner(
         if (!RuntimeFiles.copiesPresent(paths)) RuntimeFiles.ensure(paths)
         paths.guest(spec.cwd).mkdirs()
         val argv = ProotLauncher.buildArgv(paths, spec)
-        val p = processFactory(argv, ProotLauncher.hostEnv(paths))
+        val p = processFactory(argv, ProotLauncher.processEnv(paths, spec))
         return GuestProcessImpl(p, GuestProcessImpl.pidOf(p), uid, tree, signaller)
     }
 
@@ -77,13 +78,12 @@ class GuestRunner(
     }
 
     companion object {
-        fun defaultStart(argv: List<String>, hostEnv: Map<String, String>): Process {
+        fun defaultStart(argv: List<String>, processEnv: Map<String, String>): Process {
             val pb = ProcessBuilder(argv)
             val env = pb.environment()
-            // 宿主环境也只给 proot 必需的几项，避免把 App 进程的环境原样带过去
-            val keep = setOf("ANDROID_ROOT", "ANDROID_DATA", "ANDROID_ART_ROOT", "ANDROID_I18N_ROOT", "ANDROID_TZDATA_ROOT", "BOOTCLASSPATH")
-            env.keys.retainAll(keep)
-            env.putAll(hostEnv)
+            // App 进程的环境只留 proot 必需的几项（进容器前由 `env -u` 去掉），其余全部来自 processEnv。
+            env.keys.retainAll(ProotLauncher.HOST_PASSTHROUGH)
+            env.putAll(processEnv)
             return pb.start()
         }
 

@@ -5,14 +5,14 @@ import kotlinx.coroutines.CoroutineScope
 
 /**
  * 每组依赖用 Fake 还是 Real（DESIGN.md §2.3）。
- * scaffold 初版全部为 FAKE；之后本文件**只归 mvp/integration**。
- * 各工作流可在本地把自己那组切到 REAL 调试，但不要提交本文件。
+ * 本文件**只归 mvp/integration**：MVP 集成后四组全部为真实实现（PRoot 运行环境、pi RPC 引擎、
+ * 文件会话库 + Keystore + models.json/settings.json）。界面开发需要回放夹具时，在本地把对应组改回 FAKE，不要提交。
  */
 object BindingMode {
-    val runtime: Mode = Mode.FAKE
-    val engine: Mode = Mode.FAKE
-    val chat: Mode = Mode.FAKE
-    val store: Mode = Mode.FAKE
+    val runtime: Mode = Mode.REAL
+    val engine: Mode = Mode.REAL
+    val chat: Mode = Mode.REAL
+    val store: Mode = Mode.REAL
 }
 
 enum class Mode { FAKE, REAL }

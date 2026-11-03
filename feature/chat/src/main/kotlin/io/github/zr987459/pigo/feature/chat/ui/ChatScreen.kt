@@ -127,7 +127,7 @@ fun ChatScreen(
                 onPickThinking = controller::setThinking,
             )
             EngineBanner(state.engineStatus, onRestart = controller::restartEngine)
-            state.chat.retry?.let { RetryBar(it, onStop = controller::stop) }
+            state.retry?.let { RetryBar(it, onStop = controller::stop) }
 
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 if (rows.isEmpty()) {

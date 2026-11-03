@@ -38,6 +38,12 @@ object KeyText {
     fun splitModels(raw: String): List<String> =
         raw.split(Regex("[,，;；\\s]+")).map { it.trim() }.filter { it.isNotEmpty() }.distinct()
 
+    /** 点选「获取模型列表」的结果：已在输入框里就去掉，否则追加（保持用户手填的其他 id）。 */
+    fun toggleModel(raw: String, model: String): String {
+        val list = splitModels(raw)
+        return (if (model in list) list - model else list + model).joinToString(", ")
+    }
+
     /** pi 1.5.0 `settings.md` 的 `defaultThinkingLevel` 取值（常用的几档）。 */
     val THINKING_LEVELS: List<Pair<String, String>> = listOf(
         "off" to "关闭",

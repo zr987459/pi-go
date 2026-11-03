@@ -13,6 +13,7 @@ import io.github.zr987459.pigo.contract.ExtUiRequest
 import io.github.zr987459.pigo.contract.ModelInfo
 import io.github.zr987459.pigo.contract.Outcome
 import io.github.zr987459.pigo.contract.QueueSnapshot
+import io.github.zr987459.pigo.contract.RetryBanner
 import io.github.zr987459.pigo.contract.SendMode
 import io.github.zr987459.pigo.feature.chat.logic.ChatRow
 import io.github.zr987459.pigo.feature.chat.logic.ChatRows
@@ -23,6 +24,9 @@ import io.github.zr987459.pigo.feature.chat.logic.ExtUiAction
 import io.github.zr987459.pigo.feature.chat.logic.ExtUiAnswer
 import io.github.zr987459.pigo.feature.chat.logic.LocalSend
 import io.github.zr987459.pigo.feature.chat.logic.Outbox
+import io.github.zr987459.pigo.feature.chat.logic.ErrorText
+import io.github.zr987459.pigo.feature.chat.logic.PhaseLabel
+import io.github.zr987459.pigo.feature.chat.logic.RetryAnchor
 import io.github.zr987459.pigo.feature.chat.logic.PrimaryAction
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -73,6 +77,10 @@ data class ChatScreenState(
     val statusLines: List<String> = emptyList(),
     val title: String = "新会话",
     val contextPercent: Double? = null,
+    /** 要显示的自动重试黄条；重试已开始出字或回合结束后为 null（见 [RetryVisibility]）。 */
+    val retry: RetryBanner? = null,
+    /** 发送到出第一个字之间、长时间跑工具时的阶段提示（见 [PhaseLabel]）；已并入 [statusLines] 的第一行。 */
+    val phase: String? = null,
 )
 
 /**
@@ -144,6 +152,10 @@ class ChatController(
     /** 思考块计时：key = "assistantKey#index" → (开始, 结束)。只在合成协程里读写。 */
     private val thinkingStart = HashMap<String, Long?>()
     private val thinkingEnd = HashMap<String, Long>()
+
+    /** 自动重试黄条锚点（每次 attempt 变化重新记录）；只在合成协程里读写。
+     * 必须在 [state] 之前初始化：[state] 的初始值在构造时就调用 compose()。 */
+    private val retryAnchor = RetryAnchor()
 
     val state: StateFlow<ChatScreenState> =
         combine(engine.chat, engine.status, local) { chat, status, l -> compose(chat, status, l) }
@@ -250,6 +262,7 @@ class ChatController(
     private var thinkingGeneration = 0
 
     private fun compose(chat: ChatState, status: EngineStatus, l: Local): ChatScreenState {
+        val visibleRetry = retryAnchor.update(chat)
         if (l.generation != thinkingGeneration) {
             thinkingStart.clear()
             thinkingEnd.clear()
@@ -263,8 +276,11 @@ class ChatController(
             local = Outbox.visible(l.sends, chat),
             thinkingMs = ::thinkingMs,
         )
+        val phase = PhaseLabel.of(status, chat, l.sends, l.composer.stopping)
         val statusLines = buildList {
-            chat.statusLine?.takeIf { it.isNotBlank() }?.let(::add)
+            phase?.let(::add)
+            // 阶段提示已经概括了引擎状态行（如「正在压缩上下文（n 条排队）」）时不再重复显示。
+            if (phase == null) chat.statusLine?.takeIf { it.isNotBlank() }?.let(::add)
             l.status.values.filter { it.isNotBlank() }.forEach(::add)
         }
         return ChatScreenState(
@@ -279,6 +295,8 @@ class ChatController(
             statusLines = statusLines,
             title = l.title?.takeIf { it.isNotBlank() } ?: chat.sessionName?.takeIf { it.isNotBlank() } ?: "新会话",
             contextPercent = chat.contextPercent ?: l.statsPercent,
+            retry = visibleRetry,
+            phase = phase,
         )
     }
 
@@ -369,7 +387,7 @@ class ChatController(
                         Disposition.QUEUED -> cur.copy(status = Delivery.QUEUED, sawRunning = now.running)
                         Disposition.HANDLED -> null
                     }
-                    is Outcome.Err -> cur.copy(status = Delivery.FAILED, error = sendErrorText(r))
+                    is Outcome.Err -> cur.copy(status = Delivery.FAILED, error = sendErrorText(r), needsSettings = needsModelSettings(r))
                 }
                 val sends = s.sends.map { if (it.id == id) next else it }.filterNotNull()
                 s.copy(sends = Outbox.reconcile(sends, now))
@@ -415,6 +433,13 @@ class ChatController(
         _messages.trySend(text)
     }
 
+    /** 没配模型、Key/鉴权失败、连不上模型服务时，失败气泡上给「去设置模型」。 */
+    private fun needsModelSettings(e: Outcome.Err): Boolean = when (e.code) {
+        ErrCode.NO_MODEL, ErrCode.PROVIDER -> true
+        ErrCode.RPC_REJECTED, ErrCode.UNKNOWN -> ErrorText.classify(e.message).suggestsSettings
+        else -> false
+    }
+
     private fun sendErrorText(e: Outcome.Err): String = when (e.code) {
         ErrCode.RPC_TIMEOUT -> "发送超时，pi 没有回应"
         ErrCode.RPC_REJECTED -> "pi 拒绝了这条消息" + e.message.takeIf { it.isNotBlank() }?.let { "：$it" }.orEmpty()
@@ -433,7 +458,23 @@ class ChatController(
      */
     fun stop() {
         if (local.value.composer.stopping) return
-        local.update { it.copy(composer = it.composer.copy(stopping = true, stopSlow = false), withdrawnDuringStop = emptyList()) }
+        // 先收起所有还在等用户回答的阻塞类对话框（工具确认、提问等），不留悬空弹窗（piweb-study G1）。
+        // pi 1.5.0 的 RPC 对话框在 abort 时不会自己结束、也不发关闭事件：不先应答 cancelled，
+        // 扩展没传 signal 时 abort 会一直等到 20 s 超时被强杀。移植自 agegr/pi-web@025e24e
+        // `lib/rpc-manager.ts:1323-1345`（停止先撤销扩展对话框，再 abort），MIT。
+        var dropped: List<DialogEntry> = emptyList()
+        local.update { s ->
+            dropped = s.dialogs.filter { it.request.needsResponse }
+            s.copy(
+                composer = s.composer.copy(stopping = true, stopSlow = false),
+                withdrawnDuringStop = emptyList(),
+                dialogs = s.dialogs.filterNot { it.request.needsResponse },
+            )
+        }
+        for (d in dropped) {
+            notifier?.cancel(d.request.id)
+            scope.launch { engine.answerUi(d.request.id, cancelled = true) }
+        }
         stopJob = scope.launch {
             val slow = launch {
                 delay(config.stopSlowHintMs)
@@ -487,6 +528,12 @@ class ChatController(
     private fun onUiRequest(r: ExtUiRequest) {
         when (val a = ExtUi.classify(r)) {
             is ExtUiAction.Dialog -> {
+                if (r.needsResponse && local.value.composer.stopping) {
+                    // 停止过程中才到的阻塞类对话框（引擎队列或宽限窗口里的）：直接回 cancelled，不弹出，
+                    // 否则 abort 可能一直等它，直到 20 s 被强杀。
+                    scope.launch { engine.answerUi(r.id, cancelled = true) }
+                    return
+                }
                 local.update { s ->
                     if (s.dialogs.any { it.request.id == r.id }) s
                     else s.copy(dialogs = s.dialogs + DialogEntry(r, clock()))

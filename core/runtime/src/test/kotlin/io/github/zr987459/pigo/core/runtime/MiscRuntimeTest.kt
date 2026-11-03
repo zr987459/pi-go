@@ -32,11 +32,41 @@ class MiscRuntimeTest {
         assertTrue(argv.containsAll(listOf("/dev", "/dev/urandom:/dev/random", "/proc", "/sys", "/proc/self/fd:/dev/fd")))
         assertTrue(argv.contains("${File(tmp, "ext").absolutePath}:/root/shared"))
         assertEquals("/root/pi-cwd", argv[argv.indexOf("-w") + 1])
-        assertEquals("-i", argv[i + 1])
-        assertTrue(argv.subList(i, argv.size).containsAll(listOf("HOME=/root", "TERM=dumb", "LANG=C.UTF-8", "PIGO_KEY_X=k")))
+        // 容器入口只用 `env -u` 去掉 proot 自己的变量，不带任何变量的值
+        val unset = argv.subList(i + 1, argv.size - 3)
+        assertEquals(ProotLauncher.hostOnlyNames(paths).flatMap { listOf("-u", it) }, unset)
+        assertTrue(unset.containsAll(listOf("LD_LIBRARY_PATH", "PROOT_LOADER", "ANDROID_ROOT")))
+        assertFalse(argv.any { '=' in it && !it.startsWith("/") })
         assertEquals(listOf("pi", "--mode", "rpc"), argv.takeLast(3))
         // 默认不挂载共享存储
         assertFalse(argv.any { it.contains("/storage/emulated") || it.contains("/sdcard") })
+    }
+
+    @Test fun secretsNeverAppearInArgvOnlyInProcessEnv() {
+        // 审查 R1 #1：Key 不得出现在 proot 的 argv（/proc/<pid>/cmdline）里
+        val key = "sk-test-1234567890abcdefSECRET"
+        val spec = GuestSpec(
+            listOf("pi", "--print", "--provider", "deepseek", "hi"),
+            env = mapOf("DEEPSEEK_API_KEY" to key, "PIGO_KEY_MY" to "custom-$key"),
+        )
+        val argv = ProotLauncher.buildArgv(paths, spec)
+        assertFalse(argv.joinToString("\u0000").contains(key))
+        assertFalse(argv.any { it.contains("DEEPSEEK_API_KEY") || it.contains("PIGO_KEY_MY") })
+        val env = ProotLauncher.processEnv(paths, spec)
+        assertEquals(key, env["DEEPSEEK_API_KEY"])
+        assertEquals("custom-$key", env["PIGO_KEY_MY"])
+        assertEquals("/root", env["HOME"])
+        assertEquals(ProotLauncher.GUEST_PATH, env["PATH"])
+        assertEquals(paths.tmp.absolutePath, env["PROOT_TMP_DIR"])
+        // 容器内看到的环境 = processEnv 去掉 hostOnlyNames = guestEnv
+        val inGuest = env.filterKeys { it !in ProotLauncher.hostOnlyNames(paths) }
+        assertEquals(ProotLauncher.guestEnv(spec.env), LinkedHashMap(inGuest))
+    }
+
+    @Test fun guestEnvMayNotShadowProotVariables() {
+        assertThrows(IllegalArgumentException::class.java) {
+            ProotLauncher.buildArgv(paths, GuestSpec(listOf("pi"), env = mapOf("LD_LIBRARY_PATH" to "/x")))
+        }
     }
 
     @Test fun prootHostEnvOnlyForProot() {

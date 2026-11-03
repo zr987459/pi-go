@@ -698,4 +698,100 @@ class ChatControllerTest {
         runCurrent()
         assertEquals("重启时在途的消息，再补一句", e.controller.state.value.composer.draft)
     }
+
+    // ---------- integration：停止收起确认框、「去设置模型」、阶段提示 ----------
+
+    @Test
+    fun stopClosesPendingBlockingDialogsAndCancelsThemOnce() = runTest {
+        val e = env()
+        warmUp(e)
+        startRunning(e)
+        e.engine.fake.emitUiRequest(ExtUiRequest(id = "c1", method = "confirm", title = "允许执行 rm？"))
+        e.engine.fake.emitUiRequest(ExtUiRequest(id = "q1", method = "input", title = "要叫什么？"))
+        runCurrent()
+        assertNotNull(e.controller.state.value.dialog)
+        e.controller.stop()
+        runCurrent()
+        assertNull("停止后不留悬空弹窗", e.controller.state.value.dialog)
+        assertEquals(0, e.controller.state.value.pendingDialogs)
+        drain()
+        assertEquals(1, e.engine.answers.count { it.first == "c1" && it.third })
+        assertEquals(1, e.engine.answers.count { it.first == "q1" && it.third })
+    }
+
+    @Test
+    fun noModelSendFailureOffersSettings() = runTest {
+        val e = env()
+        e.engine.failNext = Outcome.Err(ErrCode.NO_MODEL, "no model")
+        e.say("你好")
+        runCurrent()
+        val row = e.controller.state.value.rows.filterIsInstance<ChatRow.User>().single { it.localId != null }
+        assertEquals(Delivery.FAILED, row.delivery)
+        assertTrue(row.needsSettings)
+
+        e.engine.failNext = Outcome.Err(ErrCode.RPC_TIMEOUT, "")
+        e.controller.retry(row.localId!!)
+        runCurrent()
+        val again = e.controller.state.value.rows.filterIsInstance<ChatRow.User>().single { it.localId != null }
+        assertFalse("超时与模型配置无关", again.needsSettings)
+    }
+
+    @Test
+    fun phaseHintAppearsBetweenSendAndFirstToken() = runTest {
+        val e = env()
+        warmUp(e)
+        e.engine.sendDelayMs = 50
+        e.say("检查一下代码")
+        runCurrent()
+        assertEquals(io.github.zr987459.pigo.feature.chat.logic.PhaseLabel.CONNECTING, e.controller.state.value.phase)
+        assertEquals(e.controller.state.value.phase, e.controller.state.value.statusLines.firstOrNull())
+        drain()
+        assertNull("回合结束后阶段提示消失", e.controller.state.value.phase)
+    }
+
+    /** chat 状态由测试直接设置的引擎（压缩状态行等）。 */
+    private class ChatOverrideEngine(val fake: FakeEngineClient) : EngineClient by fake {
+        val chatFlow = kotlinx.coroutines.flow.MutableStateFlow(fake.chat.value)
+        override val chat: kotlinx.coroutines.flow.StateFlow<io.github.zr987459.pigo.contract.ChatState> get() = chatFlow
+    }
+
+    @Test
+    fun compactionWithQueueShowsOneStatusLine() = runTest {
+        val fake = FakeEngineClient(backgroundScope, stepDelayMs = 100)
+        val engine = ChatOverrideEngine(fake)
+        val c = ChatController(engine, backgroundScope)
+        runCurrent()
+        engine.chatFlow.value = engine.chatFlow.value.copy(
+            running = true,
+            statusLine = "正在压缩…",
+            queue = io.github.zr987459.pigo.contract.QueueSnapshot(emptyList(), listOf("排队的消息")),
+        )
+        runCurrent()
+        assertEquals(listOf("正在压缩上下文（1 条排队）"), c.state.value.statusLines)
+        // 没有排队时只显示引擎自己的状态行
+        engine.chatFlow.value = engine.chatFlow.value.copy(queue = io.github.zr987459.pigo.contract.QueueSnapshot.EMPTY)
+        runCurrent()
+        assertEquals(listOf("正在压缩…"), c.state.value.statusLines)
+    }
+
+    @Test
+    fun blockingDialogArrivingWhileStoppingIsCancelledNotShown() = runTest {
+        val e = env()
+        warmUp(e)
+        startRunning(e)
+        e.engine.stopDelayMs = 3_000
+        e.controller.stop()
+        runCurrent()
+        assertTrue(e.controller.state.value.composer.stopping)
+        e.engine.fake.emitUiRequest(ExtUiRequest(id = "late", method = "confirm", title = "继续？"))
+        e.engine.fake.emitUiRequest(ExtUiRequest(id = "note", method = "notify", message = "提示"))
+        runCurrent()
+        assertNull("停止过程中到达的对话框不弹出", e.controller.state.value.dialog)
+        assertTrue(e.engine.answers.contains(Triple("late", null, true)))
+        drain()
+        // 停止结束后到达的对话框照常显示
+        e.engine.fake.emitUiRequest(ExtUiRequest(id = "after", method = "confirm"))
+        runCurrent()
+        assertEquals("after", e.controller.state.value.dialog?.request?.id)
+    }
 }
