@@ -12,8 +12,8 @@
 
 - 16:25 引擎层：`PiEngine` 同时实现 `EngineExtras`（全部方法；messageMeta 由 get_entries + entry_appended 维护；cycleModelResult 直接解析；bash 冷流按 id 归卡；compact 定稿压缩卡并刷新用量）；`stats()` 的 contextPercent 不再回退旧值（U2）；发布 timelineExtras / runOutcomes / usageState / extensionSurface；`EngineConfig.timeoutFor` 用新超时表。`:core:engine:testDebugUnitTest` 原有用例全过。
 
+- 16:40 N1：`TaskNotifier`（JVM 逻辑：后台才发、ABORTED 不发、同会话复用 id）+ `AndroidTaskNotifications`（`pigo-tasks` 通道，点通知带 sessionFile/cwd 打开 App）+ `ActivityVisibility`；`EngineBindings` 接入通知并提供 `extras(engine)`。新增 `PiEngineExtrasTest`（7）、`TaskNotifierTest`（1）；`:core:engine:testDebugUnitTest` 56 过 + 9 个真 pi 用例跳过（未配置）。
+
 ## 剩余（按顺序）
-2. EngineBindings.kt 接入；引擎层新增单测（ScriptedPi）。
-3. N1 任务通知（pigo-tasks 通道，后台才发，ABORTED 不发）。
 4. 真 pi 1.5.0 集成测试。
 5. notices、docs/protocol、assembleDebug、开 PR。
