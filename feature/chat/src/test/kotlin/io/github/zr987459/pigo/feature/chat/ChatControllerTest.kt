@@ -4,6 +4,7 @@ import io.github.zr987459.pigo.contract.ChatItem
 import io.github.zr987459.pigo.contract.Delivery
 import io.github.zr987459.pigo.contract.Disposition
 import io.github.zr987459.pigo.contract.EngineClient
+import io.github.zr987459.pigo.contract.EngineStatus
 import io.github.zr987459.pigo.contract.ErrCode
 import io.github.zr987459.pigo.contract.ExtUiRequest
 import io.github.zr987459.pigo.contract.NoticeKind
@@ -71,6 +72,55 @@ class ChatControllerTest {
         override suspend fun answerUi(id: String, value: String?, confirmed: Boolean?, cancelled: Boolean) {
             answers += id
         }
+    }
+
+    /** 状态可控、可让 send 延迟/失败的引擎：用来模拟「发送中引擎崩溃」「排队中引擎重启」。 */
+    private class RestartEngine(val fake: FakeEngineClient) : EngineClient by fake {
+        val st = kotlinx.coroutines.flow.MutableStateFlow(fake.status.value)
+        override val status: kotlinx.coroutines.flow.StateFlow<EngineStatus> get() = st
+        val sends = mutableListOf<Pair<String, SendMode>>()
+        var sendDelayMs = 0L
+        var failNext: Outcome.Err? = null
+
+        override suspend fun send(text: String, mode: SendMode): Outcome<Disposition> {
+            sends += text to mode
+            if (sendDelayMs > 0) kotlinx.coroutines.delay(sendDelayMs)
+            failNext?.let {
+                failNext = null
+                return it
+            }
+            return fake.send(text, mode)
+        }
+
+        override suspend fun answerUi(id: String, value: String?, confirmed: Boolean?, cancelled: Boolean) {}
+    }
+
+    private class RestartEnv(val engine: RestartEngine, val controller: ChatController)
+
+    private fun TestScope.restartEnv(): RestartEnv {
+        val fake = FakeEngineClient(backgroundScope, stepDelayMs = 100)
+        val engine = RestartEngine(fake)
+        val c = ChatController(engine, backgroundScope, ChatConfig(stopSlowHintMs = 20_000))
+        runCurrent()
+        return RestartEnv(engine, c)
+    }
+
+    /** 跑完一整回合（内置夹具），让夹具自带的排队消息落定、队列清空。 */
+    private fun TestScope.finishOneTurn(c: ChatController) {
+        c.setDraft("列出当前目录并读 README")
+        c.submit()
+        advanceTimeBy(120_000)
+        runCurrent()
+    }
+
+    /** 开一轮并推进到「生成中」。 */
+    private fun TestScope.goRunning(c: ChatController, text: String = "检查一下代码") {
+        c.setDraft(text)
+        c.submit()
+        runCurrent()
+        advanceTimeBy(150)
+        runCurrent()
+        assertTrue("应处于生成中", c.state.value.chat.running)
     }
 
     private class Env(val engine: RecordingEngine, val controller: ChatController)
@@ -474,5 +524,65 @@ class ChatControllerTest {
         assertEquals("停止中又写的不应被发送", 0, e.engine.sends.count { it.first == "停止中又写的" })
         assertTrue("撤回的消息不能在停止后照样发出", e.users.none { it == "这条要撤回" })
         assertEquals(listOf("这条要撤回"), e.controller.state.value.composer.withdrawn)
+    }
+
+    // ---------- §5.5 Q4 文字不丢：引擎崩溃 / 重启不得静默丢弃 ----------
+
+    /**
+     * 「发送中崩溃 → 文本回到输入框」：一条消息还在途（SENDING，send 尚未返回）时引擎崩溃重启，
+     * 乐观气泡被清，但文本必须退回输入框，且延迟到达的失败结果不得把它再退一次。
+     */
+    @Test
+    fun crashWhileSendingReturnsTextToInput() = runTest {
+        val e = restartEnv()
+        finishOneTurn(e.controller)
+        goRunning(e.controller)
+        // 让这条发送卡在途中（send 延迟返回），并模拟引擎已退出：返回前就崩溃。
+        e.engine.sendDelayMs = 10_000
+        e.engine.failNext = Outcome.Err(ErrCode.ENGINE_EXIT, "")
+        e.controller.setDraft("崩溃时正在发送的消息")
+        e.controller.submit()
+        runCurrent()
+        assertEquals("", e.controller.state.value.composer.draft)
+        val sending = e.controller.state.value.rows.filterIsInstance<ChatRow.User>().last { it.localId != null }
+        assertEquals(Delivery.SENDING, sending.delivery)
+
+        // 引擎崩溃重启。
+        e.engine.st.value = EngineStatus.Starting
+        runCurrent()
+        // 文本回到（空的）输入框，气泡清掉，不进「已撤回」芯片。
+        assertEquals("崩溃时正在发送的消息", e.controller.state.value.composer.draft)
+        assertTrue(e.controller.state.value.composer.withdrawn.isEmpty())
+        assertTrue(e.controller.state.value.rows.none { it is ChatRow.User && it.localId != null })
+
+        // 迟到的失败结果回来，不能把同一条文本再退一次。
+        advanceTimeBy(20_000)
+        runCurrent()
+        assertEquals("崩溃时正在发送的消息", e.controller.state.value.composer.draft)
+        assertTrue(e.controller.state.value.composer.withdrawn.isEmpty())
+    }
+
+    /**
+     * 「排队中重启 → 文本不丢」：一条消息已排队（引擎队列里、以芯片显示）时引擎重启，
+     * 队列随旧进程消失，文本必须退回输入框，不能随本地气泡一起被清掉。
+     */
+    @Test
+    fun restartWhileQueuedKeepsText() = runTest {
+        val e = restartEnv()
+        finishOneTurn(e.controller)
+        goRunning(e.controller)
+        e.controller.setDraft("排队中的消息")
+        e.controller.submit()
+        runCurrent()
+        // 已进入引擎队列、输入框清空、本地气泡改由芯片显示。
+        assertEquals(listOf("排队中的消息"), e.controller.state.value.chat.queue.followUp)
+        assertEquals("", e.controller.state.value.composer.draft)
+
+        // 引擎重启：旧队列随旧进程消失。
+        e.engine.st.value = EngineStatus.Starting
+        runCurrent()
+        // 排队文本退回（空的）输入框，只退一份。
+        assertEquals("排队中的消息", e.controller.state.value.composer.draft)
+        assertTrue(e.controller.state.value.composer.withdrawn.isEmpty())
     }
 }

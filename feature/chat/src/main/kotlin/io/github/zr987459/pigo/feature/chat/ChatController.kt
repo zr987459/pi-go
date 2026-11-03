@@ -12,6 +12,7 @@ import io.github.zr987459.pigo.contract.ErrCode
 import io.github.zr987459.pigo.contract.ExtUiRequest
 import io.github.zr987459.pigo.contract.ModelInfo
 import io.github.zr987459.pigo.contract.Outcome
+import io.github.zr987459.pigo.contract.QueueSnapshot
 import io.github.zr987459.pigo.contract.SendMode
 import io.github.zr987459.pigo.feature.chat.logic.ChatRow
 import io.github.zr987459.pigo.feature.chat.logic.ChatRows
@@ -97,14 +98,22 @@ class ChatController(
         val statsPercent: Double? = null,
         /** 会话代数：切换会话或引擎重启时递增，按会话缓存的本地状态（思考计时等）随之作废。 */
         val generation: Int = 0,
+        /**
+         * 同一进程内切会话时仍在途（SENDING）的发送：气泡已从界面清掉，但 send 结果还没回来。
+         * key = 本地 id，value = 原文。结果回来若是失败，就把原文退回输入框；成功则已由引擎接管。
+         */
+        val orphanSends: Map<String, String> = emptyMap(),
+        /** 停止进行中被引擎重启提前退回的文本；停止结果回来时从撤回文本里扣掉，避免同一条退回两次。 */
+        val withdrawnDuringStop: List<String> = emptyList(),
     )
 
     private val local = MutableStateFlow(Local())
     /**
      * 带缓冲的一次性提示：聊天页不在前台（没人收集）时产生的提示先存着，回到聊天页再显示，每条只显示一次。
-     * 缓冲满时丢最旧的。
+     * 只留最近 [MESSAGE_BUFFER] 条（满时丢最旧的），离开很久再回来不会连弹一长串。
+     * 已知限制：单消费者模型，Snackbar 正显示时旋转屏幕，已取出的那一条会丢（见 PR 说明）。
      */
-    private val _messages = Channel<String>(capacity = 16, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    private val _messages = Channel<String>(capacity = MESSAGE_BUFFER, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
     /** 一次性提示（Snackbar）：扩展 notify、命令失败、停止失败等。 */
     val messages: Flow<String> = _messages.receiveAsFlow()
@@ -117,6 +126,11 @@ class ChatController(
     private var foreground = false
     private var seq = 0
     private var stopJob: Job? = null
+
+    /** 引擎重启前最后一次看到的队列（以 `queue_update` 为准）。排队消息的本地气泡入队后即撤掉、改由芯片显示，
+     *  所以重启时要从这里取回仍在旧进程队列里的文本。 */
+    @Volatile
+    private var lastQueue: QueueSnapshot = QueueSnapshot.EMPTY
 
     /** 已调用 engine.send() 但还没拿到响应的发送；停止前要等它们返回。 */
     private val inflightSends: MutableSet<Job> = ConcurrentHashMap.newKeySet()
@@ -138,6 +152,10 @@ class ChatController(
                 // 切到了另一个会话（null → 文件只是首次得知会话文件，不算切换）。
                 if (lastFile != null && chat.sessionFile != lastFile) resetSessionLocal(sameProcess = true)
                 lastFile = chat.sessionFile
+                // 引擎重启中：旧进程的队列快照要留给 resetSessionLocal 退回；也不拿重启中的空状态去对账，
+                // 否则「已排队」的本地气泡会被误判为已送达而被清掉。
+                if (isRestarting(engine.status.value)) return@collect
+                lastQueue = chat.queue
                 local.update { l ->
                     val sends = Outbox.reconcile(l.sends, chat)
                     if (sends === l.sends) l else l.copy(sends = sends)
@@ -149,14 +167,14 @@ class ChatController(
         scope.launch {
             var prev = engine.status.value
             engine.status.collect { st ->
-                val restarting = st is EngineStatus.Starting || st is EngineStatus.Crashed
-                val wasRestarting = prev is EngineStatus.Starting || prev is EngineStatus.Crashed
-                if (restarting && !wasRestarting) resetSessionLocal(sameProcess = false)
+                if (isRestarting(st) && !isRestarting(prev)) resetSessionLocal(sameProcess = false)
                 prev = st
             }
         }
         scope.launch { refreshStats() }
     }
+
+    private fun isRestarting(st: EngineStatus) = st is EngineStatus.Starting || st is EngineStatus.Crashed
 
     /**
      * 切换会话或引擎重启（进入 Starting / Crashed）时，清掉只属于原会话或原进程的本地状态，
@@ -164,18 +182,35 @@ class ChatController(
      * - 扩展写的标题、状态行、替换草稿询问、折叠展开记录、上下文统计、思考计时；
      * - 扩展对话框（同时取消对应通知）。同一进程内切会话时，对阻塞类对话框补发 cancelled，pi 不会一直等；
      *   引擎重启后旧 id 新进程不认识，不再应答；
-     * - 发送中 / 已排队的乐观气泡丢弃（结果以引擎为准）；发送失败的气泡不显示到新会话里，
-     *   其文本按撤回规则退回输入框（输入框为空时放回，否则进「已撤回」芯片），不丢、不覆盖草稿。
+     * - 乐观气泡全部清掉，但**文本一律不丢**（§5.5 Q4），按撤回规则退回（输入框为空时放回，否则进「已撤回」芯片，
+     *   不覆盖草稿）：
+     *   - 发送失败（FAILED）：退回；
+     *   - 已排队：引擎重启时队列随旧进程消失，本地 QUEUED 气泡与已入队、改由芯片显示的 [lastQueue] 文本都退回；
+     *     同一进程内切会话时只退回本地 QUEUED 气泡（已入 pi 队列的那部分由引擎 openSession 的停止流程处理，见 PR 已知限制）；
+     *   - 发送中（SENDING）：引擎重启时旧进程不会再处理它，立即退回（之后迟到的 send 结果不再退第二次）；
+     *     同一进程内切会话时 pi 仍可能收下它，先记进 [Local.orphanSends]，等 send 结果：失败才退回，成功则已由引擎接管；
+     *   - 已发出（SENT）：pi 已收下并开始处理，历史里有，不退回。
      * 草稿本身保留。
      */
     private fun resetSessionLocal(sameProcess: Boolean) {
         var dropped: List<DialogEntry> = emptyList()
+        val engineQueue = if (sameProcess) QueueSnapshot.EMPTY else lastQueue
+        if (!sameProcess) lastQueue = QueueSnapshot.EMPTY
         local.update { s ->
             dropped = s.dialogs
-            val failedTexts = s.sends.filter { it.status == Delivery.FAILED }.map { it.text }
+            val texts = rescuedTexts(s.sends, engineQueue, includeSending = !sameProcess)
+            val orphans = if (sameProcess) {
+                s.orphanSends + s.sends.filter { it.status == Delivery.SENDING }.associate { it.id to it.text }
+            } else {
+                // 旧进程已不在：之前同进程切会话留下的在途发送也不会再有成功结果，一并退回。
+                emptyMap()
+            }
+            val all = if (sameProcess) texts else texts + s.orphanSends.values
             s.copy(
-                composer = ComposerLogic.onWithdrawn(s.composer, failedTexts),
+                composer = ComposerLogic.onWithdrawn(s.composer, all),
                 sends = emptyList(),
+                orphanSends = orphans,
+                withdrawnDuringStop = if (s.composer.stopping) s.withdrawnDuringStop + all else s.withdrawnDuringStop,
                 expanded = emptySet(),
                 dialogs = emptyList(),
                 replaceDraftOffer = null,
@@ -308,7 +343,8 @@ class ChatController(
             }
             val now = engine.chat.value
             local.update { s ->
-                val cur = s.sends.firstOrNull { it.id == id } ?: return@update s
+                val cur = s.sends.firstOrNull { it.id == id }
+                    ?: return@update settleOrphan(s, id, r)
                 val next: LocalSend? = when (r) {
                     is Outcome.Ok -> when (r.value) {
                         Disposition.STARTED -> cur.copy(status = Delivery.SENT, sawRunning = now.running)
@@ -325,6 +361,21 @@ class ChatController(
         inflightSends += job
         job.invokeOnCompletion { inflightSends.remove(job) }
         job.start()
+    }
+
+    /**
+     * send 结果回来时，本地条目已不在（会话切换 / 引擎重启时被清掉）：
+     * - 同进程切会话留下的在途发送（[Local.orphanSends]）：失败 → 文本退回输入框（§5.5 Q4）；成功 → 已由引擎接管，只移除记录；
+     * - 其他情况（引擎重启时已立即退回，或已被引擎接管后对账移除）：什么都不做，不重复退回。
+     */
+    private fun settleOrphan(s: Local, id: String, r: Outcome<Disposition>): Local {
+        val text = s.orphanSends[id] ?: return s
+        val rest = s.orphanSends - id
+        return if (r is Outcome.Err) {
+            s.copy(orphanSends = rest, composer = ComposerLogic.onWithdrawn(s.composer, listOf(text)))
+        } else {
+            s.copy(orphanSends = rest)
+        }
     }
 
     private fun emitMessage(text: String) {
@@ -349,7 +400,7 @@ class ChatController(
      */
     fun stop() {
         if (local.value.composer.stopping) return
-        local.update { it.copy(composer = it.composer.copy(stopping = true, stopSlow = false)) }
+        local.update { it.copy(composer = it.composer.copy(stopping = true, stopSlow = false), withdrawnDuringStop = emptyList()) }
         stopJob = scope.launch {
             val slow = launch {
                 delay(config.stopSlowHintMs)
@@ -371,9 +422,13 @@ class ChatController(
             slow.cancel()
             local.update { s ->
                 var c = s.composer.copy(stopping = false, stopSlow = false)
-                if (r is Outcome.Ok) c = ComposerLogic.onWithdrawn(c, ComposerLogic.withdrawnTexts(r.value))
+                if (r is Outcome.Ok) {
+                    // 停止超时触发强杀重启时，引擎重启已经把队列文本退回过一次，这里扣掉，避免出现两份。
+                    val texts = minusEach(ComposerLogic.withdrawnTexts(r.value), s.withdrawnDuringStop)
+                    c = ComposerLogic.onWithdrawn(c, texts)
+                }
                 // 排队中的本地气泡已随队列一起撤回（文本在撤回结果里），不再显示。
-                s.copy(composer = c, sends = s.sends.filterNot { it.status == Delivery.QUEUED })
+                s.copy(composer = c, sends = s.sends.filterNot { it.status == Delivery.QUEUED }, withdrawnDuringStop = emptyList())
             }
             if (r is Outcome.Err) emitMessage("停止失败：" + r.message.ifBlank { "未知错误" })
         }
@@ -516,6 +571,30 @@ class ChatController(
         scope.launch {
             val r = engine.restart("用户在聊天页点击「重启引擎」")
             if (r is Outcome.Err) emitMessage("重启失败：${r.message}")
+        }
+    }
+
+    internal companion object {
+        /** 页面不在前台时最多攒几条一次性提示。 */
+        const val MESSAGE_BUFFER = 3
+
+        /**
+         * 会话切换 / 引擎重启时要退回输入框的文本，按 pi 送达顺序：已入队的（先插话、后排队）→
+         * 本地还没见到入队的排队气泡 → 发送中（[includeSending]）→ 发送失败的。已在 [queue] 里的同文本只退一次。
+         */
+        fun rescuedTexts(sends: List<LocalSend>, queue: QueueSnapshot, includeSending: Boolean): List<String> {
+            val fromQueue = ComposerLogic.withdrawnTexts(queue)
+            val queued = minusEach(sends.filter { it.status == Delivery.QUEUED }.map { it.text }, fromQueue)
+            val sending = if (includeSending) sends.filter { it.status == Delivery.SENDING }.map { it.text } else emptyList()
+            val failed = sends.filter { it.status == Delivery.FAILED }.map { it.text }
+            return fromQueue + queued + sending + failed
+        }
+
+        /** 多重集差：[remove] 里每出现一次，就从 [from] 里去掉一条同文本（按 trim 比较）。 */
+        fun minusEach(from: List<String>, remove: List<String>): List<String> {
+            if (remove.isEmpty()) return from
+            val pool = remove.map { it.trim() }.toMutableList()
+            return from.filter { t -> !pool.remove(t.trim()) }
         }
     }
 }
