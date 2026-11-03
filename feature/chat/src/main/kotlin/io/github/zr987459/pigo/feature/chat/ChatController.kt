@@ -105,6 +105,12 @@ class ChatController(
         val orphanSends: Map<String, String> = emptyMap(),
         /** 停止进行中被引擎重启提前退回的文本；停止结果回来时从撤回文本里扣掉，避免同一条退回两次。 */
         val withdrawnDuringStop: List<String> = emptyList(),
+        /**
+         * 引擎重启时还在途（SENDING）、已立即退回输入框或芯片的发送：key = 本地 id，value = 原文。
+         * 迟到的 send 结果若是成功（旧进程退出前已收下，或引擎在新进程就绪后补发），说明消息其实已发出：
+         * 提示「该消息已发出」，并在草稿或芯片仍等于原文时撤掉退回的那份，避免用户再发一遍。
+         */
+        val returnedSending: Map<String, String> = emptyMap(),
     )
 
     private val local = MutableStateFlow(Local())
@@ -185,17 +191,21 @@ class ChatController(
      * - 乐观气泡全部清掉，但**文本一律不丢**（§5.5 Q4），按撤回规则退回（输入框为空时放回，否则进「已撤回」芯片，
      *   不覆盖草稿）：
      *   - 发送失败（FAILED）：退回；
-     *   - 已排队：引擎重启时队列随旧进程消失，本地 QUEUED 气泡与已入队、改由芯片显示的 [lastQueue] 文本都退回；
-     *     同一进程内切会话时只退回本地 QUEUED 气泡（已入 pi 队列的那部分由引擎 openSession 的停止流程处理，见 PR 已知限制）；
-     *   - 发送中（SENDING）：引擎重启时旧进程不会再处理它，立即退回（之后迟到的 send 结果不再退第二次）；
+     *   - 已排队：本地 QUEUED 气泡与已入 pi 队列、改由芯片显示的 [lastQueue] 文本都退回（同文本只退一次）。
+     *     引擎重启时队列随旧进程消失；同一进程内切换或新建会话时，pi 先 abort 再 dispose 旧会话，
+     *     旧的 steering / followUp 队列同样直接丢弃、不会发出，而契约里 newSession / openSession 没有交还撤回文本的通道，
+     *     所以两种情况都由这里从 [lastQueue]（此时仍是旧会话的快照）救回，并把它置空；
+     *   - 发送中（SENDING）：引擎重启时立即退回，并记进 [Local.returnedSending]：迟到的失败结果不再退第二次，
+     *     迟到的成功结果提示「该消息已发出」并撤掉退回的那份；
      *     同一进程内切会话时 pi 仍可能收下它，先记进 [Local.orphanSends]，等 send 结果：失败才退回，成功则已由引擎接管；
      *   - 已发出（SENT）：pi 已收下并开始处理，历史里有，不退回。
      * 草稿本身保留。
      */
     private fun resetSessionLocal(sameProcess: Boolean) {
         var dropped: List<DialogEntry> = emptyList()
-        val engineQueue = if (sameProcess) QueueSnapshot.EMPTY else lastQueue
-        if (!sameProcess) lastQueue = QueueSnapshot.EMPTY
+        // 调用时 lastQueue 仍是旧会话 / 旧进程最后一次 queue_update 的快照（collect 里在此之后才更新）。
+        val engineQueue = lastQueue
+        lastQueue = QueueSnapshot.EMPTY
         local.update { s ->
             dropped = s.dialogs
             val texts = rescuedTexts(s.sends, engineQueue, includeSending = !sameProcess)
@@ -206,10 +216,16 @@ class ChatController(
                 emptyMap()
             }
             val all = if (sameProcess) texts else texts + s.orphanSends.values
+            val returned = if (sameProcess) {
+                s.returnedSending
+            } else {
+                s.returnedSending + s.orphanSends + s.sends.filter { it.status == Delivery.SENDING }.associate { it.id to it.text }
+            }
             s.copy(
                 composer = ComposerLogic.onWithdrawn(s.composer, all),
                 sends = emptyList(),
                 orphanSends = orphans,
+                returnedSending = returned,
                 withdrawnDuringStop = if (s.composer.stopping) s.withdrawnDuringStop + all else s.withdrawnDuringStop,
                 expanded = emptySet(),
                 dialogs = emptyList(),
@@ -342,9 +358,11 @@ class ChatController(
                 Outcome.Err(ErrCode.UNKNOWN, t.message ?: t::class.simpleName.orEmpty(), t)
             }
             val now = engine.chat.value
+            var lateDelivered = false
             local.update { s ->
+                lateDelivered = false
                 val cur = s.sends.firstOrNull { it.id == id }
-                    ?: return@update settleOrphan(s, id, r)
+                    ?: return@update settleOrphan(s, id, r).also { lateDelivered = it.second }.first
                 val next: LocalSend? = when (r) {
                     is Outcome.Ok -> when (r.value) {
                         Disposition.STARTED -> cur.copy(status = Delivery.SENT, sawRunning = now.running)
@@ -356,7 +374,8 @@ class ChatController(
                 val sends = s.sends.map { if (it.id == id) next else it }.filterNotNull()
                 s.copy(sends = Outbox.reconcile(sends, now))
             }
-            if (r is Outcome.Ok && r.value == Disposition.HANDLED) emitMessage("已由扩展命令处理")
+            if (lateDelivered) emitMessage("该消息已发出")
+            else if (r is Outcome.Ok && r.value == Disposition.HANDLED) emitMessage("已由扩展命令处理")
         }
         inflightSends += job
         job.invokeOnCompletion { inflightSends.remove(job) }
@@ -366,16 +385,30 @@ class ChatController(
     /**
      * send 结果回来时，本地条目已不在（会话切换 / 引擎重启时被清掉）：
      * - 同进程切会话留下的在途发送（[Local.orphanSends]）：失败 → 文本退回输入框（§5.5 Q4）；成功 → 已由引擎接管，只移除记录；
-     * - 其他情况（引擎重启时已立即退回，或已被引擎接管后对账移除）：什么都不做，不重复退回。
+     * - 引擎重启时已立即退回的发送（[Local.returnedSending]）：失败 → 不重复退回；成功 → 消息其实已发出，
+     *   在草稿或芯片仍等于原文时撤掉退回的那份，并返回 true（调用方提示「该消息已发出」）；
+     * - 其他情况（已被引擎接管后对账移除）：什么都不做。
      */
-    private fun settleOrphan(s: Local, id: String, r: Outcome<Disposition>): Local {
-        val text = s.orphanSends[id] ?: return s
+    private fun settleOrphan(s: Local, id: String, r: Outcome<Disposition>): Pair<Local, Boolean> {
+        s.returnedSending[id]?.let { text ->
+            val rest = s.returnedSending - id
+            if (r is Outcome.Err) return s.copy(returnedSending = rest) to false
+            return s.copy(returnedSending = rest, composer = retractReturned(s.composer, text)) to true
+        }
+        val text = s.orphanSends[id] ?: return s to false
         val rest = s.orphanSends - id
         return if (r is Outcome.Err) {
-            s.copy(orphanSends = rest, composer = ComposerLogic.onWithdrawn(s.composer, listOf(text)))
+            s.copy(orphanSends = rest, composer = ComposerLogic.onWithdrawn(s.composer, listOf(text))) to false
         } else {
-            s.copy(orphanSends = rest)
+            s.copy(orphanSends = rest) to false
         }
+    }
+
+    /** 撤掉之前退回的 [text]：草稿仍等于原文就清空；否则从芯片里去掉一条同文本；用户已改动过的草稿不碰。 */
+    private fun retractReturned(c: ComposerState, text: String): ComposerState = when {
+        c.draft.trim() == text.trim() -> c.withDraft("")
+        c.withdrawn.any { it.trim() == text.trim() } -> c.copy(withdrawn = minusEach(c.withdrawn, listOf(text)))
+        else -> c
     }
 
     private fun emitMessage(text: String) {

@@ -26,6 +26,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.put
 
@@ -584,5 +585,117 @@ class ChatControllerTest {
         // 排队文本退回（空的）输入框，只退一份。
         assertEquals("排队中的消息", e.controller.state.value.composer.draft)
         assertTrue(e.controller.state.value.composer.withdrawn.isEmpty())
+    }
+
+    // ---------- 同一进程内切换 / 新建会话：已入 pi 队列的消息不得静默丢弃 ----------
+
+    /**
+     * 镜像 Fake 引擎的 [ChatState]，但可以模拟 pi 的 switchSession / newSession：
+     * 旧会话先 abort 再 dispose，steering / followUp 队列直接丢弃、**不发** queue_update，新会话空闲。
+     */
+    private class SwitchEngine(val fake: FakeEngineClient, scope: kotlinx.coroutines.CoroutineScope) : EngineClient by fake {
+        var file: String? = "/root/.pi/agent/sessions/a.jsonl"
+        private var mirror = true
+        private val flow = kotlinx.coroutines.flow.MutableStateFlow(fake.chat.value.copy(sessionFile = file))
+        override val chat: kotlinx.coroutines.flow.StateFlow<io.github.zr987459.pigo.contract.ChatState> get() = flow
+
+        init {
+            scope.launch { fake.chat.collect { if (mirror) flow.value = it.copy(sessionFile = file) } }
+        }
+
+        fun switchTo(newFile: String?) {
+            mirror = false
+            file = newFile
+            flow.value = io.github.zr987459.pigo.contract.ChatState(model = fake.chat.value.model, sessionFile = newFile)
+        }
+
+        override suspend fun answerUi(id: String, value: String?, confirmed: Boolean?, cancelled: Boolean) {}
+    }
+
+    private fun TestScope.queueThenSwitch(newFile: String?, draftAfterQueue: String?): ChatController {
+        val engine = SwitchEngine(FakeEngineClient(backgroundScope, stepDelayMs = 100), backgroundScope)
+        val c = ChatController(engine, backgroundScope, ChatConfig(stopSlowHintMs = 20_000))
+        runCurrent()
+        finishOneTurn(c)
+        goRunning(c)
+        c.setDraft("排队中的消息")
+        c.submit()
+        runCurrent()
+        // 已进入 pi 队列、以芯片显示，本地气泡已被对账吸收。
+        assertEquals(listOf("排队中的消息"), c.state.value.chat.queue.followUp)
+        assertTrue(c.state.value.rows.none { it is ChatRow.User && it.localId != null })
+        if (draftAfterQueue != null) c.setDraft(draftAfterQueue)
+
+        engine.switchTo(newFile)
+        runCurrent()
+        return c
+    }
+
+    @Test
+    fun switchSessionWhileQueuedReturnsTextToInputOnce() = runTest {
+        val c = queueThenSwitch("/root/.pi/agent/sessions/b.jsonl", draftAfterQueue = null)
+        assertEquals("排队中的消息", c.state.value.composer.draft)
+        assertTrue(c.state.value.composer.withdrawn.isEmpty())
+        assertTrue(c.state.value.chat.queue.isEmpty)
+        // 之后再无任何事件或结果把它退第二次。
+        drain()
+        assertEquals("排队中的消息", c.state.value.composer.draft)
+        assertTrue(c.state.value.composer.withdrawn.isEmpty())
+    }
+
+    @Test
+    fun newSessionWhileQueuedWithDraftGoesToWithdrawnChipOnce() = runTest {
+        val c = queueThenSwitch(newFile = null, draftAfterQueue = "我正在写的")
+        assertEquals("我正在写的", c.state.value.composer.draft)
+        assertEquals(listOf("排队中的消息"), c.state.value.composer.withdrawn)
+        drain()
+        assertEquals("我正在写的", c.state.value.composer.draft)
+        assertEquals(listOf("排队中的消息"), c.state.value.composer.withdrawn)
+    }
+
+    /**
+     * 引擎重启时在途的发送已立即退回；若迟到的结果其实是成功（旧进程已收下或新进程补发），
+     * 提示「该消息已发出」并撤掉退回的那份，避免用户再发一遍。
+     */
+    @Test
+    fun lateOkAfterRestartRetractsReturnedTextAndTellsUser() = runTest {
+        val e = restartEnv()
+        finishOneTurn(e.controller)
+        goRunning(e.controller)
+        e.engine.sendDelayMs = 10_000
+        e.controller.setDraft("重启时在途的消息")
+        e.controller.submit()
+        runCurrent()
+
+        e.engine.st.value = EngineStatus.Starting
+        runCurrent()
+        assertEquals("重启时在途的消息", e.controller.state.value.composer.draft)
+
+        advanceTimeBy(20_000)
+        runCurrent()
+        assertEquals("", e.controller.state.value.composer.draft)
+        assertTrue(e.controller.state.value.composer.withdrawn.isEmpty())
+        assertEquals(
+            "该消息已发出",
+            kotlinx.coroutines.withTimeout(1_000) { e.controller.messages.first { it == "该消息已发出" } },
+        )
+    }
+
+    @Test
+    fun lateOkAfterRestartLeavesEditedDraftAlone() = runTest {
+        val e = restartEnv()
+        finishOneTurn(e.controller)
+        goRunning(e.controller)
+        e.engine.sendDelayMs = 10_000
+        e.controller.setDraft("重启时在途的消息")
+        e.controller.submit()
+        runCurrent()
+        e.engine.st.value = EngineStatus.Starting
+        runCurrent()
+        // 用户在退回的文本上继续改了：不能替用户清掉。
+        e.controller.setDraft("重启时在途的消息，再补一句")
+        advanceTimeBy(20_000)
+        runCurrent()
+        assertEquals("重启时在途的消息，再补一句", e.controller.state.value.composer.draft)
     }
 }
