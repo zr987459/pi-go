@@ -4,7 +4,7 @@
 
 状态说明：**已引入** = 仓库里已有；**计划引入** = DESIGN.md 已确定，将由对应工作流引入；**不使用** = 明确排除。
 
-pi-go 自身许可证：仓库暂未包含 LICENSE 文件。建议 Apache-2.0，由仓库所有者在 `mvp/scaffold` 合入前决定；在此之前 pi-go 代码默认保留所有权利。
+pi-go 自身许可证：**Apache-2.0**（见根目录 `LICENSE`，Copyright 2026 zr987459）。随 APK 分发的独立可执行程序（如 proot）按其各自许可证分发，见 §2。
 
 ## 1. PiMet 代码
 
@@ -38,15 +38,22 @@ GPL/LGPL 义务：mvp/runtime 引入时在 `core/runtime/NOTICE-runtime.md` 记�
 
 ## 3. Gradle 依赖
 
-| 组件 | 许可证 | 用途 | 状态 |
-|---|---|---|---|
-| AndroidX、Jetpack Compose、Material 3、DataStore | Apache-2.0 | 界面、偏好存储 | 计划引入（mvp/scaffold） |
-| kotlinx.coroutines、kotlinx.serialization | Apache-2.0 | 协程、JSON | 计划引入（mvp/scaffold） |
-| OkHttp 4.12 | Apache-2.0 | 下载 | 计划引入（mvp/scaffold 声明，mvp/runtime 使用） |
-| Apache Commons Compress | Apache-2.0 | tar.gz 解压（替代 TarGzipExtractor） | 计划引入（mvp/scaffold 声明，mvp/runtime 使用） |
-| multiplatform-markdown-renderer-m3（mikepenz） | Apache-2.0 | Markdown 渲染 | 计划引入（mvp/scaffold 声明，mvp/chat-ui 使用） |
-| Termux terminal-emulator / terminal-view v0.118.0 | Apache-2.0 | 浮动终端 | 第二期 |
-| Shizuku API / provider 13.1.5 | MIT | 特权操作 | 第三期 |
+版本统一写在 `gradle/libs.versions.toml`（mvp/scaffold 维护）。「已声明」= 已写入版本目录并加到对应模块的 `build.gradle.kts`，由括号中的工作流开始在代码中使用。
+
+| 组件 | 版本 | 许可证 | 用途 | 状态 |
+|---|---|---|---|---|
+| Android Gradle Plugin、Gradle wrapper | 8.7.3、8.11.1 | Apache-2.0 | 构建（不进 APK） | 已引入（mvp/scaffold） |
+| Kotlin 标准库、Compose 编译器插件 | 2.1.0 | Apache-2.0 | 语言与编译 | 已引入（mvp/scaffold） |
+| AndroidX Core、Activity Compose、Lifecycle、Navigation Compose | 1.15.0、1.9.3、2.8.7、2.8.5 | Apache-2.0 | 应用骨架与导航 | 已引入（mvp/scaffold） |
+| Jetpack Compose（BOM）、Material 3、Material Icons Core | BOM 2024.12.01 | Apache-2.0 | 界面 | 已引入（mvp/scaffold） |
+| kotlinx.coroutines、kotlinx.serialization | 1.9.0、1.7.3 | Apache-2.0 | 协程、JSON | 已引入（mvp/scaffold） |
+| AndroidX DataStore Preferences | 1.1.1 | Apache-2.0 | 偏好存储 | 已声明（mvp/sessions-settings 使用） |
+| OkHttp | 4.12.0 | Apache-2.0 | 下载 | 已声明（mvp/runtime 使用） |
+| Apache Commons Compress | 1.27.1 | Apache-2.0 | tar.gz 解压（替代 TarGzipExtractor） | 已声明（mvp/runtime 使用） |
+| multiplatform-markdown-renderer-m3（mikepenz） | 0.28.0 | Apache-2.0 | Markdown 渲染 | 已声明（mvp/chat-ui 使用） |
+| 仅测试（不进 APK）：JUnit 4、kotlinx-coroutines-test、OkHttp MockWebServer、AndroidX Test、Compose UI Test、JankStats（androidx.metrics） | 4.13.2 等 | JUnit 为 EPL-1.0，其余 Apache-2.0 | 单测与仪器测试 | 已声明 |
+| Termux terminal-emulator / terminal-view v0.118.0 | — | Apache-2.0 | 浮动终端 | 第二期 |
+| Shizuku API / provider 13.1.5 | — | MIT | 特权操作 | 第三期 |
 
 ## 4. 运行时由用户设备下载、不随 APK 分发的组件
 

@@ -488,7 +488,7 @@ stderr 归类（关键字由 W2 以真机日志校准，匹配不到时显示「
 3. **PiMet 的 jniLibs 二进制**：与 DSH-Folk `app/libs/` 逐字节相同、无对应源码记录 → **不使用**。改从 Termux 官方包获取（当前 Termux 打包版本：proot 5.1.107.102〔GPL-2.0〕、libtalloc 2.5.0〔上游 LGPL-3.0-or-later〕、libandroid-shmem 0.7〔BSD-3-Clause〕），钉 `.deb` 的 SHA256，在 `THIRD_PARTY_NOTICES.md` 记录版本与上游源码地址，并在每个发布 APK 的 GitHub Release 附上对应源码包，履行 GPL/LGPL 义务。proot 作为独立可执行程序随 APK 分发属「聚合」，不影响 App 代码的许可证。
 4. **不带**：`libproroot*.so`（5 个，PiMet 代码未引用，来源与许可不明）；`assets/pets/doro.codex-pet`、`elaina-2`（第三方角色素材，无授权说明）。
 5. **AGPL-3.0 的设计参考项目**（见 `THIRD_PARTY_NOTICES.md` §5）：不复制任何代码或素材，只参考公开的交互设计（工具卡片折叠、插话/排队、运行时状态机）；pi-go 的名称、界面文案、图标与形象中不出现该项目的名称、标识或吉祥物。
-6. **对 pi-go 许可证的影响**：做到第 2–5 条后，pi-go 不含任何 GPL/AGPL 代码，**可以自由选择许可证**。仓库目前没有 LICENSE 文件，也没有声明许可证；建议 **Apache-2.0**（与主要依赖一致、带专利授权），由仓库所有者在 `mvp/scaffold` 合入前决定并加入 `LICENSE`。在此之前，pi-go 代码默认保留所有权利。
+6. **对 pi-go 许可证的影响**：做到第 2–5 条后，pi-go 不含任何 GPL/AGPL 代码，**可以自由选择许可证**。仓库目前没有 LICENSE 文件，也没有声明许可证；建议 **Apache-2.0**（与主要依赖一致、带专利授权），所有者已选定 Apache-2.0（LICENSE 已加入）。在此之前，pi-go 代码默认保留所有权利。
 7. **对 PiMet 的提醒**（不影响 pi-go）：PiMet 现在原样包含 GPL-3.0 代码，若继续分发 PiMet，应按 GPL-3.0 开源或移除该代码。
 8. **防回归**：scaffold 提供 Gradle 任务 `checkLicenseHygiene`（挂到 `preBuild`）：源码中出现 `me.bmax.apatch`、`DSH-Folk`、`DSHA`，或 `jniLibs` 中出现 PiMet/DSH-Folk 那组 `.so` 的已知 SHA256 时构建失败。这样无需改 `.github/`。
 
