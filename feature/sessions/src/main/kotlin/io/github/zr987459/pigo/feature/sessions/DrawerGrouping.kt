@@ -1,5 +1,6 @@
 package io.github.zr987459.pigo.feature.sessions
 
+import io.github.zr987459.pigo.contract.SessionHit
 import io.github.zr987459.pigo.contract.SessionSummary
 import java.time.DayOfWeek
 import java.time.Instant
@@ -43,5 +44,44 @@ object DrawerGrouping {
                 s.preview.contains(q, ignoreCase = true) ||
                 SessionFormat.cwd(s).contains(q, ignoreCase = true)
         }
+    }
+
+    /** 接了 W4 SessionIndex 时的分节：先「置顶」，再按工作目录分组（组按最近更新倒序）。 */
+    data class Section(val key: String, val label: String, val sessions: List<SessionSummary>)
+
+    /**
+     * 以仓库列表为准（删除 / 恢复立即生效），[pinned] 来自 SessionIndex 的元数据。
+     * 置顶会话只出现在「置顶」节；其余按 cwd 分组，组内按更新时间倒序。
+     */
+    fun indexed(list: List<SessionSummary>, pinned: Set<String>): List<Section> {
+        val sorted = SessionFormat.sorted(list)
+        val (top, rest) = sorted.partition { it.guestPath in pinned }
+        val out = ArrayList<Section>()
+        if (top.isNotEmpty()) out += Section("pinned", "置顶", top)
+        rest.groupBy { it.cwd }
+            .entries
+            .sortedByDescending { e -> e.value.maxOf { it.updatedAt } }
+            .forEach { (cwd, ss) -> out += Section("cwd:$cwd", SessionFormat.cwd(ss.first()), ss) }
+        return out
+    }
+
+    /** 搜索结果的一行：会话 + 命中片段（本地匹配时为 null）。 */
+    data class Found(val session: SessionSummary, val snippet: String?)
+
+    /**
+     * 合并 SessionIndex 全文搜索结果与本地筛选：索引命中在前（换成仓库里的最新摘要，已删除的丢掉），
+     * 再补上本地标题 / 预览 / 目录匹配但索引没返回的会话。[hits] 为 null（索引还没返回）时只用本地筛选。
+     */
+    fun mergeSearch(hits: List<SessionHit>?, list: List<SessionSummary>, query: String): List<Found> {
+        if (query.isBlank()) return emptyList()
+        val live = list.associateBy { it.guestPath }
+        val seen = HashSet<String>()
+        val out = ArrayList<Found>()
+        hits.orEmpty().forEach { h ->
+            val s = live[h.summary.guestPath] ?: return@forEach
+            if (seen.add(s.guestPath)) out += Found(s, h.snippet?.takeIf { it.isNotBlank() })
+        }
+        SessionFormat.sorted(filter(list, query)).forEach { s -> if (seen.add(s.guestPath)) out += Found(s, null) }
+        return out
     }
 }

@@ -422,6 +422,7 @@ private fun SessionsPage(
         .collectAsState(initial = graph.engine.chat.value.sessionFile)
     SessionsScreen(
         repository = graph.sessions,
+        index = graph.commands.sessionIndex,
         onOpenSettings = onOpenSettings,
         footer = footer,
         currentGuestPath = sessionFile,
