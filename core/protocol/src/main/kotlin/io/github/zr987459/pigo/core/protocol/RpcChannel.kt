@@ -211,7 +211,14 @@ class RpcChannel(
 
     private fun closedErr(command: RpcCommand) = Outcome.Err(ErrCode.ENGINE_EXIT, "引擎已退出，${command.type} 未完成")
 
-    private fun thread(n: String, body: () -> Unit) = Thread(body, n).apply { isDaemon = true }.start()
+    // stdout 读线程用大栈：`get_tree` 的响应是一棵与会话条目数一样深的嵌套 JSON（线性会话 = 一条长链），
+    // kotlinx 的树解析是递归的，默认栈（约 512 KB–1 MB）在几千层时会 StackOverflowError（feat/engine-rpc 实测）。
+    // 栈空间按需提交，64 MB 只是保留的虚拟地址。
+    private fun thread(n: String, body: () -> Unit) = Thread(null, body, n, READER_STACK_BYTES).apply { isDaemon = true }.start()
 
     class ChannelClosedException : IOException("pi 连接已断开")
+
+    companion object {
+        const val READER_STACK_BYTES = 64L * 1024 * 1024
+    }
 }

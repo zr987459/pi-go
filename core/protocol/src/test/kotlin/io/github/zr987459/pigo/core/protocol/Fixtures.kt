@@ -97,6 +97,10 @@ object Fixtures {
                 "result=${resultText(item.result)}" + (if (withKeys) " dur=${item.durationMs?.let { "set" }}" else "")
             is ChatItem.Notice -> "${k}NOTICE ${item.kind} ${q(item.text)}"
             is ChatItem.Raw -> "${k}RAW role=${item.role} ${item.json}"
+            is ChatItem.Compaction -> "${k}COMPACTION ${item.phase} reason=${item.reason} before=${item.tokensBefore} after=${item.tokensAfter} " +
+                "summary=${q(item.summary)} read=${item.readFiles} modified=${item.modifiedFiles} error=${q(item.errorMessage)}"
+            is ChatItem.Bash -> "${k}BASH id=${item.bashId} ${q(item.command)} running=${item.running} exit=${item.exitCode} " +
+                "cancelled=${item.cancelled} truncated=${item.truncated} exclude=${item.excludeFromContext} output=${q(item.output)}"
         }
     }
 

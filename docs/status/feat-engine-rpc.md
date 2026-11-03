@@ -14,9 +14,9 @@
 7. `docs/notices/feat-engine-rpc.md`、`docs/protocol/**`；开 PR 到 main。
 
 ## 阶段
-- [ ] 阅读与计划
-- [ ] 等待 W0 契约
-- [ ] 协议层
+- [x] 阅读与计划（15:00）
+- [ ] 等待 W0 契约（15:10 已见 feat/modules@749d7b2 契约提交，push CI 绿；PR #8 审查中）
+- [x] 协议层（15:12）：`rpc/RpcCommand.kt`、`rpc/RpcRecords.kt` 只追加；`core/protocol` 新增解析、压缩卡/bash 卡归约、C10 计时、RunResult；JVM 单测通过
 - [ ] 引擎层
 - [ ] 通知
 - [ ] 测试与 CI

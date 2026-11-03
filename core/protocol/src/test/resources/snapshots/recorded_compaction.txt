@@ -9,4 +9,4 @@ session=null model=null thinking=null status=null
 [u-0] USER SENT "#text 先聊一句"
 [a-1] ASSISTANT streaming=false stop=stop error=null
     #0 TEXT "你好，世界\u2028第二行"
-[n-2] NOTICE ERROR "压缩上下文失败：Compaction failed: Nothing to compact (session too small)"
+[n-3] NOTICE ERROR "压缩上下文失败：Compaction failed: Nothing to compact (session too small)"

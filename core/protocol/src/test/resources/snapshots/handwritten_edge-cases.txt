@@ -19,7 +19,7 @@ session=null model=null thinking=null status=null
     #2 TOOLCALL t1 bash {"command":"ls"}
 [tool-t1] TOOL bash t1 OK args={"command":"ls"} partial="README.md" result="README.md\n" dur=set
 [tool-t2] TOOL read t2 ERROR args={"path":"a"} partial=null result="ENOENT" dur=null
-[n-2] NOTICE INFO "已取消压缩上下文"
-[n-3] NOTICE ERROR "压缩上下文失败：summary failed"
-[n-4] NOTICE ERROR "重试 3 次仍失败：额度不足或请求太频繁（402/429），请检查账户余额或稍后再试"
+[n-3] NOTICE INFO "已取消压缩上下文"
+[n-5] NOTICE ERROR "压缩上下文失败：summary failed"
+[n-6] NOTICE ERROR "重试 3 次仍失败：额度不足或请求太频繁（402/429），请检查账户余额或稍后再试"
 [tool-t3] TOOL bash t3 ERROR args={"command":"sleep 100"} partial=null result=null dur=null

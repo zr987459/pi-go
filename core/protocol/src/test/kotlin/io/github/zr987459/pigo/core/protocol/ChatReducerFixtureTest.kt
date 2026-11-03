@@ -188,7 +188,8 @@ class ChatReducerFixtureTest {
         val rebuilt = ChatReducer().fromMessages(messages)
         Fixtures.assertSnapshot("handwritten_unknown-event-role.rebuilt", Fixtures.render(rebuilt))
         assertTrue(rebuilt.all<ChatItem.Raw>().any { it.role == "futureRole" })
-        assertTrue(rebuilt.all<ChatItem.Notice>().any { it.text.startsWith("执行了命令") })
+        // feat/engine-rpc：bashExecution 由提示行改为 bash 卡（C6）
+        assertTrue(rebuilt.all<ChatItem.Bash>().any { it.command == "git status" && it.exitCode == 0 })
         val tools = rebuilt.all<ChatItem.Tool>().associateBy { it.toolCallId }
         assertEquals(ToolStatus.OK, tools.getValue("call_1").status)
         assertEquals(ToolStatus.ERROR, tools.getValue("call_2").status)
