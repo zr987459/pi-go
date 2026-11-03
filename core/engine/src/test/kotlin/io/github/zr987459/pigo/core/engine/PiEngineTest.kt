@@ -1049,4 +1049,88 @@ class PiEngineTest {
         assertTrue(e.chat.value.items.filterIsInstance<ChatItem.User>().none { it.text == "旧会话消息" })
         e.close()
     }
+
+    private val s1 = "/root/.pi/agent/sessions/--root-pi-cwd--/s1.jsonl"
+
+    /** 第一个进程收到 prompt 后崩溃；之后的 get_messages 在 [failHistory] 为真时失败。 */
+    private fun crashThenHistoryFails(failHistory: java.util.concurrent.atomic.AtomicBoolean) = ScriptedRuntime { n ->
+        { cmd ->
+            when {
+                n == 1 && cmd.str("type") == "prompt" -> {
+                    ok(cmd, """{"disposition":"started"}""")
+                    emit("""{"type":"agent_start"}""")
+                    failHistory.set(true)
+                    crash(1, "boom")
+                }
+                cmd.str("type") == "get_messages" && failHistory.get() -> fail(cmd, "history error")
+                else -> basics(cmd)
+            }
+        }
+    }
+
+    @Test
+    fun reopeningSameSessionAfterHistoryFailureKeepsPendingCarry() = runBlocking {
+        // 审查 R3：崩溃 → get_messages 失败 → 按提示 openSession(同一文件) 重试，FAILED 气泡与「n 条未发出」提示仍在。
+        val failHistory = java.util.concurrent.atomic.AtomicBoolean(false)
+        val rt = crashThenHistoryFails(failHistory)
+        val e = engine(rt)
+        e.send("待保留消息")
+        waitFor { e.status.value is EngineStatus.Idle && e.chat.value.items.any { it.isNotice(NoticeKind.ERROR, "历史记录加载失败") } }
+        failHistory.set(false)
+        assertTrue(e.openSession(s1, "/root/pi-cwd") is Outcome.Ok)
+        val items = e.chat.value.items
+        val kept = items.filterIsInstance<ChatItem.User>().filter { it.text == "待保留消息" }
+        assertEquals(1, kept.size)
+        assertEquals(Delivery.FAILED, kept.single().delivery)
+        assertTrue(items.any { it.isNotice(NoticeKind.INFO, "1 条消息未发出") })
+        assertTrue("历史已重新加载", items.any { it is ChatItem.User && it.text == "旧消息" })
+        assertEquals("同一会话不发 switch_session", 0, rt.last.received.count { it.str("type") == "switch_session" })
+        assertEquals("不自动重发", 0, rt.last.received.count { it.str("type") == "prompt" })
+        e.close()
+    }
+
+    @Test
+    fun reopeningSameSessionWhileEngineDownKeepsPendingCarry() = runBlocking {
+        // 慢路径（引擎未就绪，重启进程打开）：同一会话同样接回 carry，不先清空时间线。
+        val failHistory = java.util.concurrent.atomic.AtomicBoolean(false)
+        val rt = ScriptedRuntime { n ->
+            { cmd ->
+                when {
+                    n == 1 && cmd.str("type") == "prompt" -> {
+                        ok(cmd, """{"disposition":"started"}""")
+                        emit("""{"type":"agent_start"}""")
+                        crash(1, "boom")
+                    }
+                    else -> basics(cmd)
+                }
+            }
+        }
+        val e = engine(rt)
+        e.send("引擎没起来时的消息")
+        waitFor {
+            val s = e.status.value
+            s is EngineStatus.Crashed && s.retryInMs != null
+        }
+        assertTrue(e.openSession(s1, "/root/pi-cwd") is Outcome.Ok)
+        waitFor { e.status.value is EngineStatus.Idle }
+        val items = e.chat.value.items
+        val kept = items.filterIsInstance<ChatItem.User>().filter { it.text == "引擎没起来时的消息" }
+        assertEquals(1, kept.size)
+        assertEquals(Delivery.FAILED, kept.single().delivery)
+        assertTrue(items.any { it.isNotice(NoticeKind.INFO, "1 条消息未发出") })
+        e.close()
+    }
+
+    @Test
+    fun openingAnotherSessionStillDropsPendingCarry() = runBlocking {
+        val failHistory = java.util.concurrent.atomic.AtomicBoolean(false)
+        val rt = crashThenHistoryFails(failHistory)
+        val e = engine(rt)
+        e.send("旧会话的消息")
+        waitFor { e.status.value is EngineStatus.Idle && e.chat.value.items.any { it.isNotice(NoticeKind.ERROR, "历史记录加载失败") } }
+        failHistory.set(false)
+        assertTrue(e.openSession("/root/.pi/agent/sessions/--root-pi-cwd--/s2.jsonl", "/root/pi-cwd") is Outcome.Ok)
+        assertTrue(e.chat.value.items.filterIsInstance<ChatItem.User>().none { it.text == "旧会话的消息" })
+        e.close()
+    }
 }

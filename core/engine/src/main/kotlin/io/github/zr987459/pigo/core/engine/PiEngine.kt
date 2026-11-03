@@ -501,7 +501,7 @@ class PiEngine(
 
     /**
      * 重新加载当前会话的历史（「历史加载失败」提示的重试入口）。EngineClient 接口里还没有这个方法，见 PR 说明；
-     * 在接口加上之前，界面可用 `openSession(当前会话文件, 当前 cwd)` 达到同样效果。
+     * 在接口加上之前，界面可用 `openSession(当前会话文件, 当前 cwd)` 达到同样效果（同一会话不会清掉待接回的消息）。
      */
     suspend fun reloadHistory(): Outcome<Unit> {
         val s = ensureStarted()
@@ -811,12 +811,22 @@ class PiEngine(
 
     override suspend fun openSession(guestPath: String, cwd: String): Outcome<Unit> {
         val c = conn
+        // 重新打开当前会话（「历史加载失败」提示的重试入口）：崩溃前没送达的消息（pendingCarry）要接回，不能清掉。
+        val reopenSame = guestPath == sessionFile
         if (c == null || !c.ready || cwd != currentCwd) {
             return lifecycle.withLock {
-                clearPendingCarry()
-                mutate { reducer.cleared(it) }
+                if (!reopenSame) {
+                    clearPendingCarry()
+                    mutate { reducer.cleared(it) }
+                }
                 boot(guestPath, cwd, rebuild = true, reason = "打开会话（cwd=$cwd）")
             }
+        }
+        if (reopenSame) {
+            val r = rebuildFromMessages(c, carry = snapshotPendingCarry(), live = liveRunning)
+            refreshState()
+            scope.launch(io) { stats() }
+            return r
         }
         val r = call { RpcCommand.SwitchSession(it, guestPath) }
         if (r is Outcome.Err) return r
