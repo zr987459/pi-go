@@ -1,0 +1,9 @@
+running=false queue=steer[] followUp[] retry=null
+session=null model=null thinking=null status=null
+-- transitions
+  #0 agent_start running=true
+  #10 agent_settled running=false
+-- items
+[u-0] USER SENT "#fail401 用错误的 Key"
+[a-1] ASSISTANT streaming=false stop=error error="401: {\"message\":\"Incorrect API key provided: sk-mo***\",\"type\":\"invalid_request_error\",\"code\":\"invalid_api_key\"}"
+[n-2] NOTICE ERROR "Key 错误：服务商拒绝了这个 API Key（401/403），请到设置检查"

@@ -1,0 +1,25 @@
+running=false queue=steer[] followUp[] retry=null
+session=null model=null thinking=null status=null
+-- transitions
+  #0 agent_start running=true
+  #19 queue_update queue=steer["先停一下"] followUp[]
+  #20 queue_update queue=steer[] followUp[]
+  #21 compaction_start status="正在压缩上下文…"
+  #22 compaction_end status=null
+  #23 compaction_start status="正在压缩上下文…"
+  #24 compaction_end status=null
+  #25 auto_retry_start retry=1/3 2000ms "429 rate limit"
+  #26 auto_retry_end retry=null
+  #29 agent_settled running=false
+-- items
+[u-0] USER SENT "做点事"
+[a-1] ASSISTANT streaming=false stop=toolUse error=null
+    #0 TEXT "权威文本"
+    #1 THINKING 100ms "嗯，想好了"
+    #2 TOOLCALL t1 bash {"command":"ls"}
+[tool-t1] TOOL bash t1 OK args={"command":"ls"} partial="README.md" result="README.md\n" dur=set
+[tool-t2] TOOL read t2 ERROR args={"path":"a"} partial=null result="ENOENT" dur=null
+[n-2] NOTICE INFO "已取消压缩上下文"
+[n-3] NOTICE ERROR "压缩上下文失败：summary failed"
+[n-4] NOTICE ERROR "重试 3 次仍失败：额度不足或请求太频繁（402/429），请检查账户余额或稍后再试"
+[tool-t3] TOOL bash t3 ERROR args={"command":"sleep 100"} partial=null result=null dur=null

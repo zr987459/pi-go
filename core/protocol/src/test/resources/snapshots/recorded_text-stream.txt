@@ -1,0 +1,9 @@
+running=false queue=steer[] followUp[] retry=null
+session=null model=null thinking=null status=null
+-- transitions
+  #0 agent_start running=true
+  #15 agent_settled running=false
+-- items
+[u-0] USER SENT "#text 打个招呼"
+[a-1] ASSISTANT streaming=false stop=stop error=null
+    #0 TEXT "你好，世界\u2028第二行"

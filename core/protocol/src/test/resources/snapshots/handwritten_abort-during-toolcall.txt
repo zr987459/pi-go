@@ -1,0 +1,18 @@
+running=false queue=steer[] followUp[] retry=null
+session=null model=null thinking=null status=null
+-- transitions
+  #0 agent_start running=true
+  #7 agent_settled running=false
+  #8 agent_start running=true
+  #13 agent_settled running=false
+-- items
+[u-0] USER SENT "列一下文件"
+[a-1] ASSISTANT streaming=false stop=aborted error=null
+    #0 TOOLCALL call_abort_1 bash {}
+[tool-call_abort_1] TOOL bash call_abort_1 ERROR args={} partial=null result="未执行（本轮已中止）" dur=null
+[n-2] NOTICE STOPPED "已停止"
+[u-3] USER SENT "再试一次"
+[a-4] ASSISTANT streaming=false stop=toolUse error=null
+    #0 TOOLCALL call_abort_2 read {"path":"README.md"}
+[tool-call_abort_2] TOOL read call_abort_2 ERROR args={"path":"README.md"} partial=null result="未执行（本轮已中止）" dur=null
+[n-5] NOTICE STOPPED "已停止"

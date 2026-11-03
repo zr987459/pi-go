@@ -1,0 +1,14 @@
+running=false queue=steer[] followUp[] retry=null
+session=null model=null thinking=null status=null
+-- transitions
+  #0 agent_start running=true
+  #9 queue_update queue=steer[] followUp["#text 做完再说这个"]
+  #28 queue_update queue=steer[] followUp[]
+  #40 agent_settled running=false
+-- items
+[u-0] USER SENT "#slow 慢慢说"
+[a-1] ASSISTANT streaming=false stop=stop error=null
+    #0 TEXT "片段0 片段1 片段2 片段3 片段4 片段5 片段6 片段7 片段8 片段9 片段10 片段11 片段12 片段13 片段14 "
+[u-2] USER SENT "#text 做完再说这个"
+[a-3] ASSISTANT streaming=false stop=stop error=null
+    #0 TEXT "你好，世界\u2028第二行"

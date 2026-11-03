@@ -1,0 +1,22 @@
+running=false queue=steer[] followUp[] retry=null
+session=null model=null thinking=null status=null
+-- items
+[u-0] USER SENT "列出目录"
+[a-1] ASSISTANT streaming=false stop=toolUse error=null
+    #0 THINKING "想一下"
+    #1 TEXT "我来看看"
+    #2 TOOLCALL call_1 bash {"command":"ls"}
+    #3 TOOLCALL call_2 read {"path":"x"}
+[tool-call_1] TOOL bash call_1 OK args={"command":"ls"} partial=null result="README.md" dur=null
+[tool-call_2] TOOL read call_2 ERROR args={"path":"x"} partial=null result="ENOENT" dur=null
+[tool-orphan] TOOL bash orphan OK args=null partial=null result="" dur=null
+[n-2] NOTICE INFO "执行了命令：git status（退出码 0）"
+[n-3] NOTICE INFO "分支摘要：之前的分支"
+[n-4] NOTICE COMPACTION "已压缩上下文"
+[raw-5] RAW role=futureRole {"role":"futureRole","payload":{"a":1},"timestamp":7}
+[u-6] USER SENT "继续"
+[a-7] ASSISTANT streaming=false stop=aborted error=null
+    #0 TEXT "做到一半"
+[n-8] NOTICE STOPPED "已停止"
+[a-9] ASSISTANT streaming=false stop=error error="429 Too Many Requests: rate limit"
+[n-10] NOTICE ERROR "额度不足或请求太频繁（402/429），请检查账户余额或稍后再试"
