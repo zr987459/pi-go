@@ -200,7 +200,7 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
                         // 抽屉开着时聊天页的「返回 = 退到后台」让位给关抽屉（审查 Nit ①，旋转/切深色后也成立）。
                         drawerOpen = drawerOpen,
                         onConfigureProvider = { id -> navController.navigate(Routes.provider(id)) { launchSingleTop = true } },
-                        onOpenFile = { navController.navigate(Routes.FILES) { launchSingleTop = true } },
+                        onOpenFile = { path -> navController.navigate(Routes.files(path)) },
                         onToast = ::toast,
                     )
                 }
@@ -232,7 +232,30 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
                 }
                 composable(Routes.SKILLS) { SkillsPage(graph, onBack = { navController.navigateTopLevel(Destination.Chat) }) }
                 composable(Routes.USAGE) { UsagePage(graph, onBack = { navController.navigateTopLevel(Destination.Chat) }) }
-                composable(Routes.FILES) { FilesPage(onBack = { if (!navController.popBackStack()) navController.navigateTopLevel(Destination.Chat) }) }
+                composable(
+                    Routes.FILES_PATTERN,
+                    arguments = listOf(navArgument("path") { type = NavType.StringType; nullable = true; defaultValue = null }),
+                ) { entry ->
+                    FilesPage(
+                        graph,
+                        openPath = entry.arguments?.getString("path"),
+                        onNewSessionHere = { dir ->
+                            scope.launch {
+                                when (val r = graph.engine.newSession(dir)) {
+                                    is Outcome.Ok -> navController.navigateTopLevel(Destination.Chat)
+                                    is Outcome.Err -> toast(sessionErrorText("新建会话", r))
+                                }
+                            }
+                        },
+                        onMention = { path ->
+                            val c = graph.chatDeps.controller
+                            val d = c.state.value.composer.draft
+                            c.setDraft((if (d.isBlank()) "" else d.trimEnd() + " ") + "@" + path + " ")
+                            navController.navigateTopLevel(Destination.Chat)
+                        },
+                        onBack = { if (!navController.popBackStack()) navController.navigateTopLevel(Destination.Chat) },
+                    )
+                }
                 // 完整页面版会话列表（抽屉之外的入口，保留路由以兼容深链接/测试）。
                 composable(Destination.Sessions.route) {
                     SessionsPage(
@@ -275,6 +298,7 @@ private fun ChatPage(
     var noModel by remember { mutableStateOf(false) }
     var picker by remember { mutableStateOf(false) }
     var usage by remember { mutableStateOf(false) }
+    var attach by remember { mutableStateOf(false) }
     var levels by remember { mutableStateOf<List<String>>(emptyList()) }
     // 从设置层取「是否配置过模型」；模型变化（保存设置后引擎重启）时重新读取。
     LaunchedEffect(model) {
@@ -295,8 +319,8 @@ private fun ChatPage(
         onNewChat = onNewChat,
         // 顶栏「模型▾」→ W2 的模型选择弹层（思考强度在同一弹层里）。
         onModelClick = { picker = true },
-        // 「+」→ W3 的附件弹层；W3 合入前给出提示（ChatScreen 对 null 显示「暂不支持」）。
-        onAttachClick = null,
+        // 「+」→ W3 的附件弹层（拍照、相册、文件）。
+        onAttachClick = { attach = true },
         topBanner = if (noModel) {
             { NoModelBanner(onOpenModelSettings) }
         } else {
@@ -365,6 +389,7 @@ private fun ChatPage(
             )
         }
     }
+    if (attach) AttachSheetBridge(graph) { attach = false }
     if (usage) {
         ModalBottomSheet(onDismissRequest = { usage = false }, modifier = Modifier.testTag("sheet:usage")) {
             UsageContent(graph)

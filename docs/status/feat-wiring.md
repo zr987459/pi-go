@@ -12,6 +12,7 @@
 7. 每次推送前 merge origin/main；W1/W3 合入后切真实实现。
 
 ## 进度
+- 已 merge origin/main（f9097eb，W3 feat/files PR #9）→ 74dc68b；BindingMode.workspace 切 REAL（WorkspaceServices），抽屉「文件」→ FilesHost，「+」→ AttachmentSheet，轮末汇总点文件 → 文件预览，FilesRuntime 在 Application 启动时登记。
 - 导航：设置首页（服务商与登录 / 代理与费用 / 运行环境与高级 / 导出）、服务商页与配置页（回填 savedFields）、自定义端点、会话树、技能与模板、用量、文件（占位）；模型选择弹层 + 用量弹层；审查 Nit ①–⑤ 已处理。
 - THIRD_PARTY_NOTICES.md 已并入 docs/notices（feat-commands、feat-models、feat-modules）。
 - 仪器冒烟 WiringSmokeTest（①–⑥，缺条件时 Assume 跳过）；AppSmokeTest 按新入口更新；真机清单 docs/testing/feat-wiring-device-checklist.md。

@@ -53,8 +53,8 @@ class AppGraph(context: Context) {
     // 模型目录、服务商与登录、代理与费用显示（W2）
     val models: ModelsBindings.Models by lazy { ModelsBindings.models(BindingMode.models, ctx, runtime, secrets, engine) }
 
-    // 文件、附件、导出（W3，合入前 Fake）
-    val workspace: WorkspaceBindings.Workspace by lazy { WorkspaceBindings.workspace(BindingMode.workspace, ctx, runtime) }
+    // 文件、附件、导出（W3）
+    val workspace: WorkspaceBindings.Workspace by lazy { WorkspaceBindings.workspace(BindingMode.workspace, ctx, runtime, engine, extras) }
 
     // 会话索引、草稿、自动命名、技能与模板（W4）
     val commands: CommandsGraph by lazy { CommandsBindings.graph(BindingMode.commands, ctx, runtime, engine, extras, launchEnv) }

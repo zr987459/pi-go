@@ -2,7 +2,17 @@ package io.github.zr987459.pigo.nav
 
 import android.graphics.BitmapFactory
 import android.util.Base64
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Box
+import androidx.compose.runtime.CompositionLocalProvider
+import io.github.zr987459.pigo.feature.files.FilesDeps
+import io.github.zr987459.pigo.feature.files.FilesHost
+import io.github.zr987459.pigo.feature.files.attach.AttachmentController
+import io.github.zr987459.pigo.feature.files.attach.AttachmentSheet
+import io.github.zr987459.pigo.feature.files.ui.LocalFilesBackHandler
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -113,7 +123,7 @@ internal fun SettingsHub(onOpen: (String) -> Unit, onBack: () -> Unit) {
             HubRow("服务商与登录", "42 个服务商的 Key / OAuth、自定义端点", "hub:providers") { onOpen(Routes.PROVIDERS) }
             HubRow("代理、费用显示与会话默认", "HTTP 代理、人民币换算", "hub:network") { onOpen(Routes.NETWORK) }
             HubRow("运行环境与高级", "修复运行环境、旧版模型设置", "hub:advanced") { onOpen(Routes.ADVANCED) }
-            HubRow("导出", "导出会话为 HTML / Markdown（文件功能合入后可用）", "hub:export") { onOpen(Routes.FILES) }
+            HubRow("文件与导出", "浏览工作区、Git 改动；导出会话在会话列表长按或文件页", "hub:export") { onOpen(Routes.FILES) }
         }
     }
 }
@@ -242,11 +252,57 @@ internal fun UsagePage(graph: AppGraph, onBack: () -> Unit) {
     SubPage("用量", "usage", onBack) { UsageContent(graph, Modifier.verticalScroll(rememberScrollState())) }
 }
 
-/** 文件页：W3（feat/files，PR #9）合入后换成真实的文件浏览/预览。 */
+/** 文件页（W3 FilesHost）：从当前会话的 cwd 开始；[openPath] 直接打开某个文件（轮末汇总里点文件）。 */
 @Composable
-internal fun FilesPage(onBack: () -> Unit) {
-    SubPage("文件", "files", onBack) {
-        Text("文件浏览、预览与导出由文件功能分支提供，合入后在这里打开。", Modifier.padding(16.dp).testTag("files:pending"))
+internal fun FilesPage(graph: AppGraph, openPath: String?, onNewSessionHere: (String) -> Unit, onMention: (String) -> Unit, onBack: () -> Unit) {
+    val sessionFile by remember(graph) { graph.engine.chat.map { it.sessionFile }.distinctUntilChanged() }
+        .collectAsState(initial = graph.engine.chat.value.sessionFile)
+    val sessions by graph.sessions.observe().collectAsState(initial = emptyList())
+    val cwd = sessions.firstOrNull { it.guestPath == sessionFile }?.cwd?.ifBlank { null } ?: FilesDeps.DEFAULT_CWD
+    AppBackdrop(Modifier.testTag("page:files")) {
+        Box(Modifier.fillMaxSize().statusBarsPadding()) {
+            CompositionLocalProvider(LocalFilesBackHandler provides { enabled, cb -> BackHandler(enabled, cb) }) {
+                FilesHost(
+                    graph.workspace.deps,
+                    sessionCwd = cwd,
+                    onClose = onBack,
+                    openPath = openPath,
+                    onNewSessionHere = onNewSessionHere,
+                    onMention = { node -> onMention(node.guestPath) },
+                )
+            }
+        }
+    }
+}
+
+/** 与 App 同寿的附件控制器（输入框「+」）。 */
+private var attachSingleton: Pair<AppGraph, AttachmentController>? = null
+
+internal fun attachmentController(graph: AppGraph): AttachmentController =
+    attachSingleton?.takeIf { it.first === graph }?.second
+        ?: AttachmentController(
+            graph.workspace.attachments,
+            graph.appScope,
+            cwd = { FilesDeps.DEFAULT_CWD },
+            supportsImages = { graph.engine.chat.value.model?.let { m -> (m.raw["input"] as? kotlinx.serialization.json.JsonArray)?.any { (it as? kotlinx.serialization.json.JsonPrimitive)?.content == "image" } ?: true } ?: true },
+        ).also { attachSingleton = graph to it }
+
+/**
+ * 输入框「+」→ W3 附件弹层。关闭弹层时把处理好的附件交给聊天控制器：图片进待发列表，文件以引用文字追加到草稿。
+ */
+@Composable
+internal fun AttachSheetBridge(graph: AppGraph, onDone: () -> Unit) {
+    val att = remember(graph) { attachmentController(graph) }
+    AttachmentSheet(att) {
+        val (refs, images) = att.compose("")
+        val chat = graph.chatDeps.controller
+        if (images.isNotEmpty()) chat.addImages(images)
+        if (refs.isNotBlank()) {
+            val d = chat.state.value.composer.draft
+            chat.setDraft(if (d.isBlank()) refs.trim() + " " else d.trimEnd() + "\n" + refs.trim() + " ")
+        }
+        att.clear()
+        onDone()
     }
 }
 
@@ -314,5 +370,7 @@ object Routes {
     const val SKILLS = "skills"
     const val USAGE = "usage"
     const val FILES = "files"
+    const val FILES_PATTERN = "files?path={path}"
     fun provider(id: String) = "provider/$id"
+    fun files(path: String?) = if (path == null) FILES else "files?path=" + android.net.Uri.encode(path)
 }

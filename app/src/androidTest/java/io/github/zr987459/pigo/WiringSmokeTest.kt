@@ -38,7 +38,7 @@ import org.junit.runner.RunWith
  * 需要外部条件的用例用 [Assume] 跳过而不是失败：
  * - ①④⑤ 需要真实模型 Key：`-Pandroid.testInstrumentationRunnerArguments.pigoProvider=deepseek
  *   -Pandroid.testInstrumentationRunnerArguments.pigoKey=sk-...`（不写进仓库）。
- * - ②④⑤ 需要 W1（feat/engine-rpc）的真实 EngineExtras；⑥ 需要 W3（feat/files）。合入前 BindingMode 为 FAKE，自动跳过。
+ * - ②④⑤ 需要 W1（feat/engine-rpc）的真实 EngineExtras，合入前 BindingMode.extras 为 FAKE，自动跳过。⑥ 用 W3 真实文件页。
  */
 @RunWith(AndroidJUnit4::class)
 class WiringSmokeTest {
@@ -93,7 +93,7 @@ class WiringSmokeTest {
     /** ② 「+」选一张图发给支持看图的模型，时间线显示缩略图（UserImages 附加项）。 */
     @Test
     fun imageSendShowsThumbnail() {
-        Assume.assumeTrue("需要 W1 真实 EngineExtras 与 W3 附件弹层", BindingMode.extras == Mode.REAL && BindingMode.workspace == Mode.REAL)
+        Assume.assumeTrue("需要 W1 真实 EngineExtras（W3 已合入）", BindingMode.extras == Mode.REAL)
         val png = ImageInput("image/png", "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", 1, 1, "dot.png")
         rule.runOnUiThread { graph.chatDeps.controller.addImages(listOf(png)) }
         waitTag("chat:attachments")
@@ -156,6 +156,7 @@ class WiringSmokeTest {
         f.writeText(text)
         drawer("nav:files")
         waitTag("page:files")
+        waitText("pigo-smoke.txt")
         rule.onNode(hasText("pigo-smoke.txt")).performClick()
         waitText(text)
         assertTrue(f.delete())

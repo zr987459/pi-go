@@ -20,8 +20,8 @@ object BindingMode {
      * feat/engine-rpc（PR #13）合入 main 前用 Fake；合入后切 REAL（ExtrasBindings.real）。
      */
     val extras: Mode = Mode.FAKE
-    /** W3 的 Workspace（文件、附件、导出）。feat/files（PR #9）合入前用 Fake。 */
-    val workspace: Mode = Mode.FAKE
+    /** W3 的 Workspace（文件、附件、导出），feat/files（PR #9）已合入 main。 */
+    val workspace: Mode = Mode.REAL
     /** W4 会话索引、草稿、自动命名、技能与模板（feature/commands，已在 main）。 */
     val commands: Mode = Mode.REAL
 }
