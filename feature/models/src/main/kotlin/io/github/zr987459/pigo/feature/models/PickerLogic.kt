@@ -93,3 +93,21 @@ object PickerLogic {
         else -> level
     }
 }
+
+/** 服务商配置表单提交什么（审查第 1 轮 Nit：可选字段填过一次就清不掉）。纯函数，便于单测。 */
+object ProviderFormLogic {
+    /**
+     * - 密文字段：留空 = 保持原值，所以空的不提交；
+     * - 非密文字段：回填过或用户改过（[shown]）的，留空也提交空串 = 清除；没显示过旧值的空字段不提交，避免误清。
+     */
+    fun fieldsToSave(fields: List<io.github.zr987459.pigo.contract.ProviderField>, values: Map<String, String>, shown: Set<String>): Map<String, String> =
+        buildMap {
+            for (f in fields) {
+                val v = values[f.envVar].orEmpty()
+                when {
+                    v.isNotBlank() -> put(f.envVar, v)
+                    !f.secret && f.envVar in shown -> put(f.envVar, "")
+                }
+            }
+        }
+}

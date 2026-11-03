@@ -67,6 +67,13 @@ class RealAuthManager(
         }
     }
 
+    /** 已保存的**非密文**字段（区域、项目 id 等），供服务商配置页回填；密文字段不在这里返回。 */
+    suspend fun savedFields(provider: String): Map<String, String> {
+        val spec = ProviderSpecs.get(provider) ?: return emptyMap()
+        val secret = spec.allFields.filter { it.secret }.map { it.envVar }.toSet()
+        return config.providerFields(provider).filter { (k, v) -> k !in secret && v != null }.mapValues { it.value!! }
+    }
+
     override fun observe(): Flow<Map<String, AuthState>> = flow {
         if (states.value == null) recompute()
         emitAll(states)

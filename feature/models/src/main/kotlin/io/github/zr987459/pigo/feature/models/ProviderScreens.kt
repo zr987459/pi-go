@@ -129,6 +129,11 @@ fun ProviderConfigScreen(
     auth: AuthManager,
     onChanged: () -> Unit = {},
     modifier: Modifier = Modifier,
+    /**
+     * 读已保存的非密文字段（区域、项目、API 版本等）用来回填表单；W5 接 `RealAuthManager.savedFields`。
+     * 默认读不到：此时只有用户动过的可选字段才会按「留空 = 清除」提交，没看到的旧值不会被误清。
+     */
+    savedFields: suspend (String) -> Map<String, String> = { emptyMap() },
 ) {
     val ctx = LocalContext.current
     val clipboard = LocalClipboardManager.current
@@ -137,6 +142,17 @@ fun ProviderConfigScreen(
     val state = states[provider.id] ?: AuthState.None
     var key by remember { mutableStateOf("") }
     val extra = remember { mutableStateMapOf<String, String>() }
+    /** 已回填或用户改过的非密文字段：保存时这些字段留空 = 清除。 */
+    val shown = remember { mutableStateMapOf<String, Boolean>() }
+    LaunchedEffect(provider.id) {
+        val saved = runCatching { savedFields(provider.id) }.getOrDefault(emptyMap())
+        for (f in provider.fields) {
+            if (f.secret) continue
+            val v = saved[f.envVar] ?: continue
+            if (extra[f.envVar].isNullOrEmpty()) extra[f.envVar] = v
+            shown[f.envVar] = true
+        }
+    }
     var message by remember { mutableStateOf<String?>(null) }
     var step by remember { mutableStateOf<OAuthStep?>(null) }
     var loginJob by remember { mutableStateOf<Job?>(null) }
@@ -233,7 +249,7 @@ fun ProviderConfigScreen(
             }
             provider.fields.forEach { f ->
                 OutlinedTextField(
-                    extra[f.envVar].orEmpty(), { extra[f.envVar] = it },
+                    extra[f.envVar].orEmpty(), { extra[f.envVar] = it; shown[f.envVar] = true },
                     label = { Text(f.label + if (f.required) "" else "（可选）") },
                     placeholder = { f.hint?.let { Text(it) } },
                     singleLine = true,
@@ -244,7 +260,7 @@ fun ProviderConfigScreen(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
                 Button(onClick = {
                     scope.launch {
-                        val r = auth.setApiKey(provider.id, key.ifBlank { null }, extra.filterValues { it.isNotBlank() })
+                        val r = auth.setApiKey(provider.id, key.ifBlank { null }, ProviderFormLogic.fieldsToSave(provider.fields, extra, shown.keys))
                         message = when (r) { is Outcome.Ok -> { key = ""; onChanged(); "已保存，重启 pi 后生效" }; is Outcome.Err -> r.message }
                     }
                 }, modifier = Modifier.testTag("provider.save")) { Text("保存") }

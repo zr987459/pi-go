@@ -83,4 +83,21 @@ class PickerLogicTest {
         assertEquals(listOf("qwen-token-plan-cn"), ProviderListLogic.filter(ps, "通义").map { it.id })
         assertTrue(ProviderListLogic.kindsText(ps.first { it.id == "anthropic" }).contains("账号登录"))
     }
+
+    /** 审查第 1 轮 Nit：回填过的可选字段清空后要提交空串（清除）；密文留空不提交（保持原值）；没显示过的空字段不提交。 */
+    @Test fun optionalFieldsCanBeClearedButUnseenOnesAreKept() {
+        val fields = listOf(
+            io.github.zr987459.pigo.contract.ProviderField("AZURE_OPENAI_API_KEY", "API Key", secret = true),
+            io.github.zr987459.pigo.contract.ProviderField("AZURE_OPENAI_API_VERSION", "API 版本", secret = false, required = false),
+            io.github.zr987459.pigo.contract.ProviderField("AZURE_OPENAI_RESOURCE_NAME", "资源名", secret = false, required = false),
+        )
+        val out = ProviderFormLogic.fieldsToSave(
+            fields,
+            mapOf("AZURE_OPENAI_API_KEY" to "", "AZURE_OPENAI_API_VERSION" to "", "AZURE_OPENAI_RESOURCE_NAME" to ""),
+            shown = setOf("AZURE_OPENAI_API_VERSION"),
+        )
+        assertEquals(mapOf("AZURE_OPENAI_API_VERSION" to ""), out)
+        val filled = ProviderFormLogic.fieldsToSave(fields, mapOf("AZURE_OPENAI_RESOURCE_NAME" to "res"), shown = emptySet())
+        assertEquals(mapOf("AZURE_OPENAI_RESOURCE_NAME" to "res"), filled)
+    }
 }
