@@ -1,3 +1,5 @@
+> **审查第 2 轮修复：修复2 进行中**（2026-11-03 17:35 CST）：先 merge origin/main（f9097eb），再修 Important 1（停止/放弃重试错配）、Important 2（fork 后 get_messages 失败未作废）与 Nit。
+
 # feat/engine-rpc（W1）状态
 
 > **修复1 已完成**（2026-11-03 17:10 CST）：PR #13 审查第 1 轮 Important 4 条、Nit 4 条已修，明细与测试结果见下文与 PR 描述。
