@@ -87,3 +87,105 @@
 | `nav/PiGoNavHost.kt`、`PiGoDrawer.kt`、`WiredPages.kt` | **重写**。导航只剩四个目的地：安装 → 会话（形态由 `UiForm` 决定）→ 模型设置 → 关于。旧的设置首页、文件、用量、技能等页面删除，并入动作表 |
 
 ---
+
+## 2. 对照清单逐项覆盖（`docs/pi-features.md` §1–§13）
+
+### 2.0 读表说明
+
+- **入口类型**：
+  - 「⌘」：UI 形态的命令中心（顶栏 ⌘ 键，或在输入框敲 `/`），可搜索，按组列出全部动作。
+  - 「常驻」：UI 形态始终可见的控件。
+  - 「/x」：终端形态的斜杠命令，也会出现在 `/` 补全里。
+  - 「键条」：终端形态编辑器下方的触屏按键条。
+- **动作 id**：`PiActions` 里的 id，§7.3 的覆盖测试按 id 核对。
+- 「同上」只用于同一节里紧挨着的上一行。
+- 凡标「两者只做说明」的项，命令中心里都有一条「说明」条目，点开后解释为什么手机上不适用。所以覆盖测试仍要求它有入口，并不是漏掉。
+
+### 2.1 清单 §1 CLI 与运行模式
+
+| 清单条目 | 动作 id | 终端形态 | UI 形态 |
+|---|---|---|---|
+| 交互 TUI | —（形态本身） | `TermSurface` 全屏 | `CalmSurface` |
+| print `-p` / `--mode json` | `help.modes` | `/help` 中说明 | ⌘「运行模式说明」。两者只做说明：手机上不需要跑一次就退出，`!` 和 rpc 已覆盖 |
+| `--mode rpc` | —（底座） | 底座 | 底座 |
+| `pi install/remove/update/list/config` | `packages` | `/packages` 列表（安装 / 移除 / 更新 / 配置），也可以直接 `!pi install …` | ⌘「扩展与包」页：列表、安装（输入 npm/git/本地路径）、移除、更新 |
+| `pi auth print-*` | `help.auth` | `!pi auth …` | ⌘「凭据打印说明」。只做说明，不放按钮，避免把密钥显示到屏幕上 |
+| `pi mcp …` | `mcp` | `/mcp` | ⌘「MCP 服务器」 |
+| `--provider/--model` | `model.select` | 页脚模型段、`/model` | 常驻：顶栏模型胶囊 |
+| `--api-key` | `help.apikey` | 说明 | ⌘ 说明。不做，理由同清单：密钥会进进程参数。凭据统一写 `auth.json` |
+| `--system-prompt` / `--append-system-prompt` | `context.system` | `/settings › 系统提示`，编辑 `SYSTEM.md`、`APPEND_SYSTEM.md` | ⌘「系统提示」编辑页 |
+| `-c/-r/--session/--session-id` | `session.resume` | `/resume` | 常驻：左上 ☰ 打开会话列表 |
+| `--fork` | `session.fork` | `/fork` | 消息长按 › 从这里分叉；⌘「分叉」 |
+| `--session-dir`、`--no-session`、`-n` | `settings.sessionDir`、`session.newEphemeral`、`session.name` | `/settings`、`/new --ephemeral`、`/name` | ⌘ 对应三条；常驻：点标题改名；「＋」长按 › 临时会话 |
+| `--models` | `model.scoped` | `/scoped-models` | 模型面板「常用」页签（星标、拖动排序） |
+| `-nt/-nbt/-t/-xt` | `settings.tools` | `/settings › 工具` | ⌘「工具开关」 |
+| `--thinking` | `thinking.select` | 编辑器边框色、`/thinking` | 常驻：输入框左下思考胶囊 |
+| `-e/-ne` | `packages`（扩展页签） | `/settings › 扩展` | ⌘「扩展与包 › 扩展」 |
+| `--no-mcp` | `mcp`（总开关） | `/mcp` | ⌘「MCP 服务器」顶部总开关 |
+| `--skill/-ns` | `skills` | `/skill:名` 补全；页眉列出技能 | ⌘「技能」页；`/` 面板技能组 |
+| `--prompt-template/-np` | `templates` | `/模板名` 补全 | `/` 面板模板组；⌘「提示模板」页 |
+| `--theme/--use-theme/--no-themes` | `appearance` | `/settings › 主题`（dark / light / system，以及已装主题） | ⌘「外观」：浅 / 深 / 跟随系统。终端形态主题单独选 |
+| `-nc` | `settings.contextFiles` | `/settings` | ⌘「上下文文件」顶部开关 |
+| `--export` | `session.export` | `/export [path]` | 会话菜单 › 导出；⌘ |
+| `--list-models` | `model.select` | `/model` | 模型面板 |
+| `--verbose` | `session.info` | 页眉（`quietStartup=false`） | ⌘「会话信息 › 已加载资源」 |
+| `--tui-mode` | `help.tuiMode` | 只有全屏 | ⌘ 说明（手机上只有全屏） |
+| `-a/-na` | `trust` | `/trust`；首次打开项目时弹信任选择器 | 首次打开带 `.pi/` 的目录时弹窗；⌘「项目信任」 |
+| `--offline` | `settings.network` | `/settings › 网络 › 离线` | ⌘「pi 设置 › 网络」 |
+| `-h/-v` | `help`、`about` | `/help`、页眉版本 | ⌘「帮助」「关于」 |
+
+### 2.2 清单 §2.1 RPC 命令（33 个）
+
+| 命令 | 动作 id | 终端形态 | UI 形态 |
+|---|---|---|---|
+| `prompt` | `send` | 编辑器回车，或键条 ⏎ | 常驻：发送键 |
+| `steer` | `send`（生成中） | 生成中回车 | 生成中发送键文字变「引导」 |
+| `follow_up` | `send.followUp` | Alt+Enter；键条 ⇣ | 发送键长按 › 排队 |
+| `abort` | `abort` | Esc；键条 Esc | 常驻：停止键 |
+| `clear_queue` | `queue.dequeue` | Alt+↑；键条 ↑队 | 队列条「撤回」 |
+| `new_session` | `session.new` | `/new` | 常驻：顶栏 ＋ |
+| `get_state` | —（状态源） | 页脚 | 顶栏状态点、会话信息 |
+| `get_messages` | —（恢复会话） | 重建消息区 | 同左 |
+| `set_model` | `model.select` | `/model`、Ctrl+L、点页脚 | 模型胶囊 → 模型面板 |
+| `cycle_model` | `model.cycle` | Ctrl+P；页脚模型段左右滑 | 模型胶囊左右滑；⌘「下一个模型」 |
+| `get_available_models` | —（数据） | 选择器 | 同左 |
+| `set_thinking_level` | `thinking.select` | `/thinking` | 思考胶囊点开 |
+| `cycle_thinking_level` | `thinking.cycle` | Shift+Tab；点编辑器边框 | 思考胶囊单击循环、长按展开 |
+| `get_available_thinking_levels` | —（数据） | 选择器 | 同左 |
+| `set_steering_mode` / `set_follow_up_mode` | `settings.queue` | `/settings` | ⌘「pi 设置 › 队列」 |
+| `compact` | `session.compact` | `/compact [说明]` | 顶栏上下文环 → 「立即压缩」（可填说明）；⌘ |
+| `set_auto_compaction` | `settings.compaction` | `/settings` | ⌘「pi 设置 › 压缩」 |
+| `set_auto_retry` / `abort_retry` | `settings.retry`、`retry.abort` | `/settings`；状态行 Esc 取消重试 | ⌘「pi 设置 › 重试」；重试横条的「取消」 |
+| `bash` / `abort_bash` | `bash`、`bash.abort` | `!cmd` / `!!cmd`，Esc 中止 | 输入 `!` 进入命令模式（输入框变等宽，按钮变「运行」）；「＋ › 运行命令」；运行中停止键中止 |
+| `get_session_stats` | `session.info` | `/session` | 上下文环点开 → 会话信息页 |
+| `export_html` | `session.export` | `/export` | 会话菜单 › 导出 |
+| `switch_session` | `session.resume` | `/resume` | 会话列表点选 |
+| `fork` / `get_fork_messages` | `session.fork` | `/fork` 选择器 | 消息长按；⌘「分叉」打开用户消息列表 |
+| `clone` | `session.clone` | `/clone` | 会话菜单 › 复制会话 |
+| `get_entries` | —（增量同步） | 底座 | 底座 |
+| `get_tree` | `session.tree` | `/tree` | 会话菜单 › 分支树 |
+| `get_last_assistant_text` | `copy.last` | `/copy`；Ctrl+X | 助手消息长按 › 复制；⌘「复制最后回复」 |
+| `set_session_name` | `session.name` | `/name` | 点标题改名 |
+| `get_commands` | —（补全数据） | `/` 补全 | `/` 面板与 ⌘ 的「扩展命令」组 |
+| 桥接补齐：会话列表 / 原地切分支 / 标签 / 热重载 / 登录 / 导入 | `session.resume` / `session.tree` / `tree.label` / `reload` / `auth.login` / `session.import` | 见各命令 | 见各命令。实现见 §5.4 |
+
+### 2.3 清单 §2.2 RPC 事件
+
+两种形态都只消费 `ChatController.state`，事件的归约只做一次（`ChatReducer`）。
+
+| 事件 | 终端形态 | UI 形态 |
+|---|---|---|
+| `agent_start/end`、`agent_settled` | 状态行 loader 与计时出现或消失 | 发送键和停止键互换；顶栏状态点 |
+| `turn_start/end` | 不显示，只计入页脚统计 | 不显示，只计入会话信息 |
+| `message_start/update/end` | 流式 Markdown 块（等宽） | 流式正文（无气泡） |
+| thinking 增量 | `thinkingText` 色思考块，Ctrl+T 或点击折叠 | 「思考了 N 秒」折叠行 |
+| toolcall 增量、`tool_execution_*` | 三态底色工具块（pending/success/error） | 过程行：状态点、动词、目标、时长，可展开 |
+| `queue_update` | 编辑器上方队列列表 | 输入框上方队列条 |
+| `entry_appended` | `customMessage` 色块 | 灰色系统行 |
+| `session_info_changed` | 页脚会话名 | 顶栏标题 |
+| `thinking_level_changed` | 编辑器边框色 | 思考胶囊 |
+| `compaction_start/end` | 「压缩中…」加摘要块 | 压缩卡（可展开摘要：目标、约束、进度……） |
+| `auto_retry_*`、`summarization_retry_*` | 状态行倒计时「重试 2/3」 | 重试横条加取消 |
+| `bash_execution_update` | `!` 输出实时滚动（ANSI） | 等宽输出块 |
+| `extension_error` | 红色提示行 | 吐司加 ⌘「诊断」 |
+| `extension_ui_request`（select/confirm/input/editor/notify/setStatus/setWidget/setTitle/set_editor_text） | pi 风格弹层；setStatus 显示在页脚；setWidget 显示在编辑器上方 | 底部面板；状态显示在顶栏副标题；widget 显示在输入框上方 |
