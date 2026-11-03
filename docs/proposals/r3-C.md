@@ -570,3 +570,115 @@ pi 的设置本来就是一个斜杠命令而不是 App 设置，所以这样放
 - 切换形态时做 120ms 交叉淡化。**只淡化渲染层，不重建状态**（§5）。
 
 ---
+
+## 5. 两种形态的切换与共享层
+
+### 5.1 分层
+
+```
+                ┌───────────── 视图层（可互换，零业务状态）─────────────┐
+                │  TermSurface (feature/term)    CalmSurface (feature/chat/ui/calm) │
+                └──────────────▲───────────────────────▲─────────────┘
+                               │ state: StateFlow       │ actions: PiActions
+┌──────────────────────────── SessionHost（app 单例，与进程同寿）────────────────────────────┐
+│ engine: EngineClient + extras   chat: ChatController (ChatScreenState)                     │
+│ draft: MutableStateFlow<DraftState>  (文字/光标/图片/@引用/!模式；DraftStore 持久化)       │
+│ overlay: OverlayStack  (选择器/扩展对话框/确认框的「模型」，不是 Composable)               │
+│ form: MutableStateFlow<UiForm>  (TERM | CALM，存 DataStore)                                │
+│ promptHistory, scrollAnchor: MutableStateFlow<String?>  (按 ChatItem.key 记录阅读位置)     │
+│ PiActions (动作表)   PiSettings (settings.json)   SessionCatalog (会话列表/导入/删除撤销) │
+└────────────────────────────────────────────────────────────────────────────────────────────┘
+                               │
+                    PiEngine ── pi --mode rpc（唯一进程） ── pigo-bridge.ts（-e 加载）
+```
+
+### 5.2 切换
+
+- **入口**：
+  - UI 形态顶栏右端 ⇄；
+  - 终端形态键条最右「⌂UI」，或页脚右端的 `[UI]` 键帽；
+  - 本地命令 `/ui`、`/term`；
+  - 外接键盘的 `Ctrl+Alt+T`（pi 没有占用这个组合）。
+- **实现**：
+  ```kotlin
+  val form by host.form.collectAsState()
+  Crossfade(form, animationSpec = tween(120)) { f ->
+      when (f) { UiForm.TERM -> TermSurface(host); UiForm.CALM -> CalmSurface(host) }
+  }
+  ```
+  `TermSurface` 和 `CalmSurface` 只订阅 `host` 里的 Flow，并调用 `host.actions`。切换只是让其中一个离开组合：
+  - 引擎、控制器、Flow 都在 `SessionHost` 里，不受影响；
+  - 正在流式输出的消息继续写进 `ChatReducer`，新形态一订阅就看到最新内容；
+  - 草稿不在 Composable 里，所以不会丢；
+  - IME 焦点在切换后重新请求，光标位置取 `draft.selection`。
+- **弹层不丢**：两个形态都按 `host.overlay.top` 渲染（终端画 `TermSelectList`，UI 画 `CalmSheetList`）。扩展 `extension_ui_request` 的 id 与超时由 `ChatController` 持有，切换期间继续计时，不会被当成取消。
+- **阅读位置**：各形态离开时，把当前首个可见块的 `ChatItem.key` 写入 `scrollAnchor`；进入时 `scrollToItem(indexOf(anchor))`。正在贴底跟随的保持贴底。
+- **生命周期**：`SessionHost` 由 `AppGraph` 持有。旋转、切深色、切形态都不重建；进程被系统杀掉后按 `ResumePolicy` 加 `DraftStore` 恢复。
+
+### 5.3 `PiActions` 动作表（覆盖清单的机制）
+
+```kotlin
+data class PiAction(
+  val id: String,                 // "session.fork"
+  val title: String,              // "从消息分叉"
+  val group: ActionGroup,         // SESSION / MODEL / SETTINGS / RESOURCES / EXT / HELP
+  val slash: List<String>,        // ["fork"]
+  val featureRefs: List<String>,  // 对应清单条目，如 ["§2.1 fork", "§3 /fork", "§5 分叉 / 复制"]
+  val ui: UiEntry,                // Command(⌘) | Persistent(tag) | LongPress | Explain(text)
+  val term: TermEntry,            // Slash | KeyStrip(key) | Footer(segment) | Explain(text)
+  val run: suspend ActionScope.(args: String?) -> ActionResult, // 打开 overlay / 调 rpc / 写文件
+)
+```
+
+- `run` 只写一次，两种形态共用。
+- `ActionResult.Overlay(model)` 把一个与形态无关的面板模型（列表、表单、确认、文本）压进 `overlay` 栈，由各形态自己画。所以「pi 设置」「技能」「MCP」「树」等页面的**逻辑只写一份**。
+
+### 5.4 补齐 RPC 缺口：`pigo-bridge.ts`
+
+随 App 打包 `assets/pi/pigo-bridge.ts`，由 `EngineConfig` 用 `-e` 加载。它注册以下隐藏命令，结果通过 `extension_ui_request` 的 `notify`/`setStatus` 加 JSON 前缀回传：
+- `/pigo:tree-nav <entryId> [--summarize]` → `ctx.navigateTree`
+- `/pigo:label <entryId> <text>` → `pi.setLabel`
+- `/pigo:reload` → `ctx.reload()`
+- `/pigo:switch <path>` → `ctx.switchSession`
+
+文件型功能（`settings.json`、`auth.json`、`models.json`、`mcp.json`、`keybindings.json`、SYSTEM/AGENTS 文件、会话导入、信任）由 Kotlin 直接读写，写完调 `/pigo:reload`。`/share`、`/bug`、`/changelog`、包管理用 `GuestRunner` 执行 `pi` CLI。
+
+---
+
+## 6. 模型配置（唯一的设置项）
+
+**入口**：设置页（☰ 底部的齿轮）只有一项「模型」；另外从模型胶囊进入的模型面板底部有「管理服务商」。
+
+```
+设置 › 模型
+┌────────────────────────────────────┐
+│ 默认模型   claude-sonnet-4.5 · high ›│  ← defaultProvider/Model/ThinkingLevel
+│ 常用模型   4 个 ›                    │  ← enabledModels（=/scoped-models）
+├ 已连接 ─────────────────────────────┤
+│ ● Anthropic   账号 · Claude Max   › │
+│ ● DeepSeek    Key ···a1f3          › │
+├ 全部服务商（42）  🔍 ───────────────┤
+│ ○ Amazon Bedrock         区域/Key › │
+│ ○ Azure OpenAI           资源/Key › │
+│ …                                   │
+├ 自定义 ─────────────────────────────┤
+│ ＋ 添加自定义服务商（OpenAI/Anthropic/…兼容）│
+│ ● my-vllm   http://10.0.0.2:8000   › │
+├ 高级 ───────────────────────────────┤
+│ 思考预算 thinkingBudgets · 每模型思考档 modelThinkingLevels · 刷新模型目录 │
+└────────────────────────────────────┘
+```
+
+- **服务商页**：沿用 W2 的 `ProviderConfigScreen` 逻辑（OAuth、Key、多字段、回填 `savedFields`、测试），只换视觉。OAuth 走 Custom Tab，回调后自动完成，备选为粘贴代码；Key 只显示末四位。
+- **自定义服务商**：沿用 `CustomProviderScreen` 加 `ModelDiscovery`/`ProviderTester`。字段包括 baseUrl、api 类型（openai-completions / openai-responses / anthropic-messages / bedrock-converse-stream / mistral-conversations…）、Key（可写 `!命令`）、headers、模型列表（自动发现，可手动加）、modelOverrides、compat。
+- **会话内切换**：
+  - **模型面板**（UI：点模型胶囊；终端：`/model`、点页脚）三个页签：
+    - 「全部」：可搜索，已配置的在前，未配置的灰显，点了跳服务商页，配好后自动选回刚才点的那个模型；
+    - 「常用」：星标、拖动排序、每模型固定思考档；
+    - 「最近」。
+  - 选择调 `set_model`，**生成中也可切**，提示「下一轮生效」。
+  - **思考强度**：UI 形态的胶囊单击走 `cycle_thinking_level`，长按弹 7 档（只列 `get_available_thinking_levels` 返回的）；终端形态点编辑器边框或用 `/thinking`。
+  - 「设为默认」写 `settings.json` 的 default*（与 pi 的 Ctrl+S 同义）。
+- **两种形态共用同一套面板模型**（§5.3），所以终端里的 `/login`、`/model` 和 UI 里的设置页数据完全一致。
+
+---
