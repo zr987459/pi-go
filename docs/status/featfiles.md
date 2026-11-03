@@ -1,10 +1,14 @@
 # feat/files（W3）状态
 
-- 状态：**已开始**（2026-11-03 14:51 CST）
-- 当前阶段：通读 docs/feature-gap.md（feat/gap）§3.2 W3 与 §3.3 归属表、Pi-Web、pi 1.5.0 rpc-types.d.ts、dsh-Go 的对应部分。
-- 分支说明：本分支暂从 main 切出，仅放状态文件；W0（feat/modules）契约提交出现且 CI 绿后 `git merge origin/feat/modules` 再开工（不 rebase、不强推）。
+- 状态：**开发中**（2026-11-03 15:20 CST）
+- 已合入 origin/feat/modules（W0 契约 749d7b2，CI 绿），merge 提交 2be0478。
+
+## 进度
+- [x] core/workspace：GuestPaths（越界/符号链接）、RootfsWorkspace（WorkspaceFs）、GitParse（porcelain v2、统一 diff）、ImagePrep + EXIF、WorkspaceAttachments（AttachmentProcessor）、WorkspaceSessionExporter（Markdown/JSONL/HTML）
+- [ ] 单测（路径越界、git 夹具、图片压缩、重名序号、导出）
+- [ ] feature/files 界面：文件树、预览、Git 与 diff、附件弹层、输出查看器、导出分享、Share Target
+- [ ] 仪器测试与 Compose 测试（编译；本地无模拟器）
+- [ ] PR
 
 ## 计划
-1. 读文档与上游，确认 W3 的功能清单、允许改范围、验收项。
-2. 等 W0 契约（contract/EngineExtras.kt 等）就绪后合入，按归属表在本工作流模块内实现；契约缺方法时在本模块加适配层。
-3. 补单测，跑本地测试，CI 绿后开 PR 到 main，移植来源记入 docs/notices/feat-files.md。
+按 docs/feature-gap.md §3.2 W3：只改 core/workspace/src/**、feature/files/src/**、docs/notices/feat-files.md、本文件。FilesBindings 需 app 依赖 :core:workspace/:feature:files（app/build.gradle.kts 归 scaffold），见 PR 描述。
