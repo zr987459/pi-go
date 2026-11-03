@@ -151,7 +151,7 @@ W1–W4 都从“合入 W0 之后的 main”切出，互相不等待。凡是需
 - 内容：
   1. `settings.gradle.kts` 加入 `:core:catalog`、`:core:workspace`、`:feature:models`、`:feature:files`、`:feature:commands`、`:feature:usage`；为每个新模块写好 `build.gradle.kts` 和空的 `Placeholder.kt`。
   2. `gradle/libs.versions.toml` 加入已知要用的依赖：Coil（图片缩略图）、`androidx.browser`（Custom Tab，OAuth 用）、`androidx.exifinterface`。
-  3. `core/contract/**` **只新增文件，不改已有签名**：
+  3. `core/contract/**` **只新增文件，不改已有签名**（下面是规划时的草案，方法名以合入后的 `EngineExtras.kt`、`Catalog.kt`、`Workspace.kt` 为准）：
      - `contract/EngineExtras.kt`：`interface EngineExtras { sendWithImages(text, images: List<ImageInput>, mode); commands(): Outcome<List<SlashCommand>>; forkMessages(); fork(entryId); clone(); tree(): Outcome<SessionTree>; compact(instructions: String?): Outcome<CompactResult>; setAutoCompaction(Boolean); setAutoRetry(Boolean); setSteeringMode(String); setFollowUpMode(String); bash(command, excludeFromContext): Flow<BashChunk>; abortBash(); exportHtml(): Outcome<String>; lastAssistantText(): Outcome<String?>; fullStats(): Outcome<UsageStats>; val runEvents: SharedFlow<RunOutcome> }`，以及上面用到的数据类。
      - `contract/Catalog.kt`：`ProviderInfo`、`CatalogModel`、`AuthKind { API_KEY, OAUTH_DEVICE, OAUTH_PKCE, CLOUD_ENV }`、`interface ModelCatalog`、`interface AuthManager`（Key 读写、OAuth 开始、轮询、登出、状态）。
      - `contract/Workspace.kt`：`FileNode`、`interface WorkspaceFs`（list、read、stat、importFromUri、exportToUri、gitStatus、gitDiff）。
@@ -162,7 +162,7 @@ W1–W4 都从“合入 W0 之后的 main”切出，互相不等待。凡是需
 #### W1 `feat/engine-rpc`：引擎接上 pi 1.5.0 的全部 RPC
 
 - 功能：C1（引擎侧 `images`）、C3（`get_commands`）、C6（`bash`/`abort_bash`/`bash_execution_update`）、C8（`get_last_assistant_text`）、S1（`get_fork_messages`/`fork`/`clone`/`get_tree`）、S6（`get_entries` 游标）、U1 和 U2（完整 `get_session_stats`，压缩后置空）、U3（`compact` 及事件归约，时间线压缩卡片数据）、M8（四个模式开关）、E1（`export_html`）、N1（任务通知通道与 `RunOutcome` 事件：完成、出错、需要回答）、C10 的数据部分（本轮改动文件、耗时、速率，作为 `ChatState` 的派生字段）。
-- 允许改：`core/protocol/src/**`、`core/engine/src/**`（含 `EngineService`、manifest、测试与夹具）、`core/contract/src/main/**/rpc/RpcCommand.kt` 与 `rpc/RpcRecords.kt`（**只追加新的 data class 和事件类型**，W0 之后由 W1 独占）、`core/contract/src/main/**/Chat.kt` 中 `ChatItem` 的**新增子类**（压缩卡、bash 卡；不改已有子类）、`app/src/main/java/**/di/EngineBindings.kt`、`docs/protocol/**`、`docs/notices/feat-engine-rpc.md`。
+- 允许改：`core/protocol/src/**`、`core/engine/src/**`（含 `EngineService`、manifest、测试与夹具）、`core/contract/src/main/**/rpc/RpcCommand.kt` 与 `rpc/RpcRecords.kt`（**只追加新的 data class 和事件类型**，W0 之后由 W1 独占）（压缩卡、bash 卡、用户图片、轮末汇总一律通过 W0 契约里的 `EngineExtras.timelineExtras`（`TimelineExtra`）输出，**不新增 `ChatItem` 子类**：`feature/chat` 对 sealed `ChatItem` 的穷尽 `when` 会因此编译失败）、`app/src/main/java/**/di/EngineBindings.kt`、`docs/protocol/**`、`docs/notices/feat-engine-rpc.md`。
 - 不许改：`EngineClient` 已有方法签名（新能力都走 `EngineExtras`）。
 - 验收（可测）：
   - JVM 单测：每个新命令的 JSON 与 1.5.0 `rpc-types.d.ts` 字段一致（序列化快照）；`images` 往返；`bash_execution_update` 按 id 归到对应 bash 卡；`compact` 响应和事件归约出一张压缩卡（含 tokensBefore/After）；`contextUsage.percent == null` 时 `contextPercent == null`。
@@ -207,7 +207,7 @@ W1–W4 都从“合入 W0 之后的 main”切出，互相不等待。凡是需
 - 内容：
   - 顶栏“模型▾”`onModelClick` → W2 的模型选择弹层；思考强度芯片并入同一个弹层。
   - 输入框“+”`onAttachClick` → W3 的附件弹层；`/` 候选面板（W4）挂到输入框上方。
-  - 顶栏上下文百分比 → W4 的用量弹层；时间线渲染新的 `ChatItem` 子类（压缩卡、bash 卡）和轮末汇总。
+  - 顶栏上下文百分比 → W4 的用量弹层；时间线按 `anchorKey` 渲染 `TimelineExtra`（压缩卡、bash 卡、用户图片、轮末汇总）。
   - 消息长按菜单：复制、复制 Markdown、从这里分叉。
   - 抽屉入口：文件、会话树、技能与模板、用量；会话列表接入 W4 的搜索、分组、置顶。
   - 设置页入口：服务商与登录（W2）、代理、会话默认设置（M8）、导出。
@@ -226,7 +226,7 @@ W1–W4 都从“合入 W0 之后的 main”切出，互相不等待。凡是需
 | `settings.gradle.kts`、`gradle/**`、所有 `build.gradle.kts` | W0（之后回到 scaffold 维护者） | 新依赖写在 PR 描述里，由维护者合入 main，各分支 rebase |
 | `core/contract/**` 已有文件 | 冻结 | 接口问题写到 PR 描述，W5 之后统一处理 |
 | `core/contract/**/rpc/RpcCommand.kt`、`rpc/RpcRecords.kt` | W1（只追加） | 其他工作流不碰 |
-| `core/contract/**/Chat.kt` 中新增的 `ChatItem` 子类 | W1（只追加） | W4 只读、渲染组件放自己的模块 |
+| `core/contract/**/Chat.kt` | 冻结（不加 `ChatItem` 子类） | 新时间线内容走 `TimelineExtra`，W4 的渲染组件放自己的模块 |
 | `core/contract/**/EngineExtras.kt`、`Catalog.kt`、`Workspace.kt`、`fake/**` | W0 定稿后冻结 | 发现缺方法时：在自己的模块里加扩展函数或适配层，PR 里提出，W5 统一合并 |
 | `core/protocol/**`、`core/engine/**` | W1 | — |
 | `core/store/**` | W2 | W4 的会话索引放在自己的新模块里 |
@@ -244,6 +244,8 @@ W1–W4 都从“合入 W0 之后的 main”切出，互相不等待。凡是需
   1. OAuth 凭据是否允许写进容器内的 `auth.json`（M3，涉及 DESIGN §3.10）。
   2. REVIEW.md 中 dsh-Go（AGPL）一条是否按最新授权修改。
   3. 费用换算人民币用固定汇率还是可配置汇率。
+
+**已拍板（2026-11-03）**：①允许 OAuth 凭据写入容器内 `auth.json`（权限 600、排除备份/导出/分享、日志脱敏），见 DESIGN §3.10；②REVIEW.md 已改为允许移植 dsh-Go 代码、只要求记来源，名称/标识/吉祥物仍不用；③费用默认显示美元，可选显示人民币，汇率在设置里可配置（默认 7.1），见契约 `CostDisplaySettings`。
 - 审查：沿用 REVIEW.md，每条工作流最多审 3 轮。
 
 ---

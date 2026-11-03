@@ -1,11 +1,13 @@
 # feat/modules 状态（W0 前置）
 
-**状态：已开始**（2026-11-03 14:50 CST）
+**状态：代码已推送，等待 CI**（2026-11-03 15:00 CST）
 
-## 计划
-1. 新模块骨架：core/catalog、core/workspace、feature/models、feature/files、feature/commands、feature/usage（build.gradle.kts + Placeholder）。
-2. settings.gradle.kts include；libs.versions.toml 加 Coil、androidx.browser、exifinterface。
-3. core/contract 只新增：EngineExtras.kt、Catalog.kt、Workspace.kt、fake/**（每个 Fake 一条单测）。
-4. docs/notices/ 目录与说明。
-5. REVIEW.md 按决策 2 修改；DESIGN §3.10 按决策 1 增补。
-6. 本地 assembleDebug testDebugUnitTest → 推送 → CI 绿 → PR 到 main。
+## 已完成
+- 新模块骨架：core/catalog、core/workspace、feature/models、feature/files、feature/commands、feature/usage（build.gradle.kts + Placeholder）。
+- settings.gradle.kts include；libs.versions.toml 加 coil-compose 2.7.0、androidx.browser 1.8.0、androidx.exifinterface 1.3.7。
+- core/contract 只新增：EngineExtras.kt、Catalog.kt、Workspace.kt；fake/FakeEngineExtras.kt、FakeCatalog.kt、FakeWorkspace.kt、FakeSessionData.kt；测试 ExtrasFakesTest（10 条，每个 Fake 一条）。
+- docs/notices/README.md 与 feat-modules.md。
+- REVIEW.md（决策 2）、DESIGN §3.10（决策 1）、feature-gap.md（三项决策、TimelineExtra 代替新增 ChatItem 子类）。
+
+## 说明
+- 本地沙箱的 JDK/SDK 已丢失（沙箱重置），本轮以 CI 作为编译与单测依据。
