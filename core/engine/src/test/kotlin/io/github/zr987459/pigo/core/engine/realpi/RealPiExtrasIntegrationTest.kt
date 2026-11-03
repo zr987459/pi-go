@@ -186,7 +186,9 @@ class RealPiExtrasIntegrationTest {
         turn("第二句 #length")
         val cut = engine.chat.value.items.filterIsInstance<ChatItem.Assistant>().first { it.stopReason == "length" }
         // 等 pi 把 context_edit 写盘、增量 get_entries 拉到它
-        until { (engine.entries(null) as Outcome.Ok).value.entries.any { it.type == "context_edit" } }
+        withTimeout(30_000) {
+            while ((engine.entries(null) as Outcome.Ok).value.entries.none { it.type == "context_edit" }) delay(100)
+        }
         turn("第三句 #text")
         val a3 = engine.chat.value.items.last { it is ChatItem.Assistant }
         until { engine.messageMeta.value[a3.key] != null }
