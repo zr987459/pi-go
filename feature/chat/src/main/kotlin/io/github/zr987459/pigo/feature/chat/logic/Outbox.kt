@@ -13,11 +13,24 @@ import io.github.zr987459.pigo.contract.Delivery
  */
 object Outbox {
 
-    fun userCount(chat: ChatState, text: String): Int =
-        chat.items.count { it is ChatItem.User && it.text.trim() == text.trim() }
+    /** 引擎（ChatReducer）把 user 消息里的图片块渲染成的占位文字。 */
+    const val IMAGE_PLACEHOLDER = "[图片]"
 
-    fun inQueue(chat: ChatState, text: String): Boolean =
-        chat.queue.followUp.any { it.trim() == text.trim() } || chat.queue.steering.any { it.trim() == text.trim() }
+    /**
+     * 对账用的文本：去掉图片占位再 trim。引擎把带图的 user 消息拼成「原文[图片]」、只发图时是「[图片]」，
+     * 而本地气泡记的是原文（只发图时为 ""）；两边都先归一化，带图发送才能在引擎回放后立即被吸收，不会显示两次。
+     */
+    fun matchKey(text: String): String = text.replace(IMAGE_PLACEHOLDER, "").trim()
+
+    fun userCount(chat: ChatState, text: String): Int {
+        val key = matchKey(text)
+        return chat.items.count { it is ChatItem.User && matchKey(it.text) == key }
+    }
+
+    fun inQueue(chat: ChatState, text: String): Boolean {
+        val key = matchKey(text)
+        return chat.queue.followUp.any { matchKey(it) == key } || chat.queue.steering.any { matchKey(it) == key }
+    }
 
     /** 引擎是否已经接管了这条本地气泡（接管后不再显示，并在下一次对账时移除）。 */
     fun isAbsorbed(l: LocalSend, chat: ChatState): Boolean = when (l.status) {
