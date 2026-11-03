@@ -138,3 +138,9 @@ class RingAppLog(
         }
     }
 }
+
+/** 从 APK assets 读 `pigo-bridge.ts`（DESIGN-r3 §5.6）。 */
+class AndroidBridgeSource(context: Context) : BridgeSource {
+    private val assets = context.applicationContext.assets
+    override fun open(): java.io.InputStream? = runCatching { assets.open(PigoBridge.ASSET_PATH) }.getOrNull()
+}

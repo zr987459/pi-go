@@ -34,6 +34,20 @@ data class EngineConfig(
     val uiRequestGraceMs: Long = 3_000,
     /** 额外环境变量（测试用：例如桌面上覆盖 HOME）。 */
     val extraEnv: Map<String, String> = emptyMap(),
+    /**
+     * 随包扩展 `pigo-bridge.ts` 的容器内路径（DESIGN-r3 §5.6）。文件实际存在（已安装）时才加 `-e <路径>`；
+     * null 表示不加载（只走退路）。
+     */
+    val bridgeExtension: String? = PigoBridge.GUEST_PATH,
+    /** 启动后等桥接 ready 的时间；超时视为不可用，走退路。 */
+    val bridgeReadyTimeoutMs: Long = 8_000,
+    /** 桥接命令等回复的时间（`--summarize` 的树切换要等模型写摘要，另用 [RpcTimeouts] 的压缩超时）。 */
+    val bridgeReplyTimeoutMs: Long = 30_000,
+    /**
+     * 启动参数加 `-a`（`--approve`，信任本次运行的项目目录）。默认关：它对整次运行的所有目录生效；
+     * 按目录信任改用 [ProjectTrustFile] 写 `trust.json`（docs/protocol/r3-measurements.md §2）。
+     */
+    val approveProject: Boolean = false,
 ) {
     /**
      * 命令超时：abort、get_messages 可配置；compact（10 分钟）、bash（2 小时）、export_html/fork/clone/get_tree/get_entries（60 秒）
@@ -45,8 +59,11 @@ data class EngineConfig(
         else -> RpcTimeouts.forCommand(type).let { if (it == RpcTimeouts.DEFAULT_MS) defaultTimeoutMs else it }
     }
 
-    /** §3.2 的启动参数：`pi --mode rpc [--session <file>]`，cwd 为会话 cwd，环境 = Key + 固定项。 */
-    fun spec(sessionFile: String?, cwd: String?, keyEnv: Map<String, String>): GuestSpec {
+    /**
+     * §3.2 的启动参数：`pi --mode rpc [--session <file>] [-e <pigo-bridge.ts>] [-a]`，cwd 为会话 cwd，环境 = Key + 固定项。
+     * @param withBridge 桥接扩展已安装在 [bridgeExtension]（调用方检查过文件存在）
+     */
+    fun spec(sessionFile: String?, cwd: String?, keyEnv: Map<String, String>, withBridge: Boolean = false): GuestSpec {
         val argv = buildList {
             add(piCommand)
             add("--mode")
@@ -55,6 +72,11 @@ data class EngineConfig(
                 add("--session")
                 add(sessionFile)
             }
+            if (withBridge && !bridgeExtension.isNullOrEmpty()) {
+                add("-e")
+                add(bridgeExtension)
+            }
+            if (approveProject) add("-a")
         }
         val env = LinkedHashMap<String, String>()
         env.putAll(keyEnv)
