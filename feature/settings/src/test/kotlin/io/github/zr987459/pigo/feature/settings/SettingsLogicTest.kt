@@ -71,10 +71,11 @@ class SettingsLogicTest {
             io.github.zr987459.pigo.contract.ProviderPreset("deepseek", "DeepSeek", io.github.zr987459.pigo.contract.PresetKind.PAY_AS_YOU_GO, "DEEPSEEK_API_KEY", null, ""),
             io.github.zr987459.pigo.contract.ProviderPreset("custom", "其他", io.github.zr987459.pigo.contract.PresetKind.CUSTOM_OPENAI, null, null, ""),
         )
-        assertEquals(0, settingsItemIndex("sec-models", presets, emptyList()))
-        // 标题(0) 提示(1) | 按量组头(2) deepseek(3) | 套餐组头(4) | 自定义组头(5) custom(6) | 默认模型(7)
-        assertEquals(7, settingsItemIndex("sec-default", presets, emptyList()))
-        assertEquals(8, settingsItemIndex("sec-default", presets, listOf("deepseek", "myapi")))
+        // dsh-Go 分组卡布局：大标题(0) 模型与 Key(1) | 按量卡(2) | 套餐卡(3) | 自定义卡(4) | 默认模型(5)
+        // 每组服务商在同一张卡（同一个 item）里，下标不随服务商数量和自定义端点数量变化。
+        assertEquals(1, settingsItemIndex("sec-models", presets, emptyList()))
+        assertEquals(5, settingsItemIndex("sec-default", presets, emptyList()))
+        assertEquals(5, settingsItemIndex("sec-default", presets, listOf("deepseek", "myapi")))
         assertEquals(-1, settingsItemIndex("nope", presets, emptyList()))
     }
 }
