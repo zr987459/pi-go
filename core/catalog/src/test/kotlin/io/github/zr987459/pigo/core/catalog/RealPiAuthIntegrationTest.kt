@@ -106,6 +106,7 @@ class RealPiAuthIntegrationTest {
             environment().putAll(env(extraEnv))
             environment().remove("HTTPS_PROXY"); environment().remove("https_proxy")
             environment().remove("HTTP_PROXY"); environment().remove("http_proxy")
+            redirectError(ProcessBuilder.Redirect.appendTo(File(home, "stderr.log")))
         }.start()
     }
 
@@ -117,6 +118,14 @@ class RealPiAuthIntegrationTest {
             p.outputStream.write((line + "\n").toByteArray()); p.outputStream.flush()
         }
         override suspend fun stop() { p.destroy() }
+    }
+
+    /** 超时等失败时附上脚本输出，便于定位。 */
+    private suspend fun <T> diag(session: OAuthLoginSession, block: suspend () -> T): T = try {
+        block()
+    } catch (e: Throwable) {
+        val err = File(home, "stderr.log").takeIf { it.isFile }?.readText().orEmpty().take(4000)
+        throw AssertionError("state=${session.state.value} events=${session.events.replayCache} stderr=$err", e)
     }
 
     private fun piBin() = File(piRoot!!, "dist/bundle/cli.js").absolutePath
@@ -155,7 +164,7 @@ class RealPiAuthIntegrationTest {
         }
         val proc = process(File(scripts, "pigo-auth.mjs").path, "login", "github-copilot")
         val session = OAuthLoginSession("github-copilot", ProcLines(proc), scope)
-        withTimeout(30_000) {
+        diag(session) { withTimeout(30_000) {
             val prompt = session.state.first { it is OAuthLoginSession.State.AwaitingInput } as OAuthLoginSession.State.AwaitingInput
             assertEquals("text", prompt.prompt.kind)
             session.answer(prompt.prompt.id, "") // 普通 github.com
@@ -163,7 +172,7 @@ class RealPiAuthIntegrationTest {
             assertEquals("WXYZ-0001", dc.userCode)
             val end = session.state.first { it is OAuthLoginSession.State.Succeeded || it is OAuthLoginSession.State.Failed }
             assertEquals(OAuthLoginSession.State.Succeeded, end)
-        }
+        } }
         // 凭据只在 auth.json（600），stdout 从未出现令牌
         val auth = File(agentDir, "auth.json")
         assertEquals(setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE), Files.getPosixFilePermissions(auth.toPath()))
@@ -195,7 +204,12 @@ class RealPiAuthIntegrationTest {
         }
         val proc = process(File(scripts, "pigo-auth.mjs").path, "login", "anthropic")
         val session = OAuthLoginSession("anthropic", ProcLines(proc), scope)
-        withTimeout(30_000) {
+        diag(session) { withTimeout(30_000) {
+            // pi 1.5.0 先让选登录方式：浏览器 / 复制授权码
+            val sel = session.state.first { it is OAuthLoginSession.State.AwaitingInput } as OAuthLoginSession.State.AwaitingInput
+            assertEquals("select", sel.prompt.kind)
+            assertTrue(sel.prompt.options.any { it.id == "browser" })
+            session.answer(sel.prompt.id, "browser")
             val st = session.state.first { it is OAuthLoginSession.State.AwaitingBrowser } as OAuthLoginSession.State.AwaitingBrowser
             val q = query(URI(st.url).rawQuery)
             assertEquals("S256", q["code_challenge_method"])
@@ -215,7 +229,7 @@ class RealPiAuthIntegrationTest {
             assertEquals(q["state"], body["state"]!!.jsonPrimitive.content)
             // code_verifier 与授权地址里的 code_challenge 对得上（S256）
             assertEquals(q["code_challenge"], Pkce.challengeOf(body["code_verifier"]!!.jsonPrimitive.content))
-        }
+        } }
         val cred = Json.parseToJsonElement(File(agentDir, "auth.json").readText()).jsonObject["anthropic"]!!.jsonObject
         assertEquals("oauth", cred["type"]!!.jsonPrimitive.content)
     }
