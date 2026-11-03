@@ -37,7 +37,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.zr987459.pigo.contract.AppSettingsStore
 import io.github.zr987459.pigo.contract.CatalogEntry
-import io.github.zr987459.pigo.contract.CostDisplaySettings
 import io.github.zr987459.pigo.contract.ModelCatalog
 import io.github.zr987459.pigo.contract.ModelRef
 import io.github.zr987459.pigo.contract.Outcome
@@ -85,7 +84,6 @@ fun ModelPicker(
     var error by remember { mutableStateOf<String?>(null) }
     var query by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
-    val cost = settings?.costDisplay?.collectAsState()?.value ?: CostDisplaySettings()
 
     LaunchedEffect(catalog) {
         when (val p = catalog.providers()) { is Outcome.Ok -> providers = p.value; is Outcome.Err -> error = p.message }
@@ -126,7 +124,7 @@ fun ModelPicker(
                     }
                 }
                 items(s.rows, key = { s.key + "/" + it.model.ref.toString() }) { e ->
-                    ModelRow(e, providers.firstOrNull { it.id == e.model.provider }?.displayName, cost, selected = e.model.ref == current) {
+                    ModelRow(e, providers.firstOrNull { it.id == e.model.provider }?.displayName, selected = e.model.ref == current) {
                         when (val c = PickerLogic.onClick(e)) {
                             is PickerLogic.Click.Select -> {
                                 scope.launch { catalog.markUsed(c.ref) }
@@ -159,7 +157,7 @@ fun ModelPicker(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ModelRow(e: CatalogEntry, providerName: String?, cost: CostDisplaySettings, selected: Boolean, onClick: () -> Unit) {
+private fun ModelRow(e: CatalogEntry, providerName: String?, selected: Boolean, onClick: () -> Unit) {
     val ready = e.availability == io.github.zr987459.pigo.contract.ModelAvailability.READY
     Column(
         Modifier.fillMaxWidth()
@@ -183,7 +181,7 @@ private fun ModelRow(e: CatalogEntry, providerName: String?, cost: CostDisplaySe
             if (e.model.supportsImages) AssistChip(onClick = onClick, label = { Text("看图") })
             if (!ready) AssistChip(onClick = onClick, label = { Text("未配置") })
         }
-        PickerLogic.priceText(e.model.cost, cost)?.let {
+        PickerLogic.priceText(e.model.cost)?.let {
             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
         }
     }

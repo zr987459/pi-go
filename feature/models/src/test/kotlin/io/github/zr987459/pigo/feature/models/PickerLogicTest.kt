@@ -1,7 +1,6 @@
 package io.github.zr987459.pigo.feature.models
 
 import io.github.zr987459.pigo.contract.CatalogEntry
-import io.github.zr987459.pigo.contract.CostDisplaySettings
 import io.github.zr987459.pigo.contract.CustomModel
 import io.github.zr987459.pigo.contract.ModelAvailability
 import io.github.zr987459.pigo.contract.ModelCost
@@ -59,11 +58,9 @@ class PickerLogicTest {
         assertEquals("1M", PickerLogic.contextText(1_000_000))
         assertEquals("1M", PickerLogic.contextText(1_048_576))
         assertEquals("1.5M", PickerLogic.contextText(1_500_000))
-        val usd = CostDisplaySettings()
-        assertEquals("输入 \$0.27 · 输出 \$1.10（每百万 token）", PickerLogic.priceText(ModelCost(0.27, 1.1), usd))
-        val cny = CostDisplaySettings(showCny = true, usdToCny = 7.1)
-        assertTrue(PickerLogic.priceText(ModelCost(1.0, 2.0), cny)!!.contains("约 ¥7.10"))
-        assertEquals("免费 / 套餐内", PickerLogic.priceText(ModelCost(), usd))
+        assertEquals("输入 \$0.27 · 输出 \$1.10（每百万 token）", PickerLogic.priceText(ModelCost(0.27, 1.1)))
+        assertEquals("输入 \$0.0015 · 输出 \$2.00（每百万 token）", PickerLogic.priceText(ModelCost(0.0015, 2.0)))
+        assertEquals("免费 / 套餐内", PickerLogic.priceText(ModelCost()))
         assertEquals("高", PickerLogic.thinkingLabel("high"))
     }
 

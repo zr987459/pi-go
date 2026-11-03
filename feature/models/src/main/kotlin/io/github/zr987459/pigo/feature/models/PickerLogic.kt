@@ -1,7 +1,6 @@
 package io.github.zr987459.pigo.feature.models
 
 import io.github.zr987459.pigo.contract.CatalogEntry
-import io.github.zr987459.pigo.contract.CostDisplaySettings
 import io.github.zr987459.pigo.contract.ModelAvailability
 import io.github.zr987459.pigo.contract.ModelCost
 import io.github.zr987459.pigo.contract.ModelRef
@@ -75,12 +74,16 @@ object PickerLogic {
         else -> tokens.toString()
     }
 
-    /** 每百万 token 单价：`输入 $0.30 · 输出 $1.20`；开启人民币时同时显示约合人民币。全 0 显示「免费」。 */
-    fun priceText(cost: ModelCost?, s: CostDisplaySettings): String? {
+    /** 每百万 token 单价，照 pi 显示美元：`输入 $0.30 · 输出 $1.20`。全 0 显示「免费」。 */
+    fun priceText(cost: ModelCost?): String? {
         cost ?: return null
         if (cost.input == 0.0 && cost.output == 0.0) return "免费 / 套餐内"
-        return "输入 ${s.format(cost.input)} · 输出 ${s.format(cost.output)}（每百万 token）"
+        return "输入 ${usd(cost.input)} · 输出 ${usd(cost.output)}（每百万 token）"
     }
+
+    /** 美元金额：小于 1 美分时保留 4 位小数，否则 2 位。 */
+    fun usd(v: Double): String = "$" +
+        if (v != 0.0 && kotlin.math.abs(v) < 0.01) String.format(Locale.ROOT, "%.4f", v) else String.format(Locale.ROOT, "%.2f", v)
 
     /** 中文思考强度标签（沿用聊天页的叫法）。 */
     fun thinkingLabel(level: String): String = when (level) {
