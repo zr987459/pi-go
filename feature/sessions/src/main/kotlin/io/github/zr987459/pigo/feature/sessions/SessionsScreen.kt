@@ -134,7 +134,7 @@ fun SessionsScreen(
 
     Box(modifier.fillMaxSize().testTag("page:sessions")) {
         Column(Modifier.fillMaxSize()) {
-            BrandRow(onNewChat = onNewSession?.let { f -> { scope.launch { f() } } })
+            BrandRow(onNewChat = onNewSession?.let { f -> { scope.launch { f() }; Unit } })
             SearchCapsule(query = query, onQuery = { query = it })
             FilterBar(
                 tab = tab,
