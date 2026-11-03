@@ -1,5 +1,7 @@
 # feat/wiring（W5）状态
 
+> **审查第 1 轮修复进行中**（2026-11-03 17:42 CST，接手续做）：修复1（extras 非 REAL 时传 null、隐藏依赖 extras 的入口）进行中；之后依次修 2（长按菜单旧值）、3（ModelPicker 回传 ModelRef）、4（M8 开关 + 会话导出）及 Nit。
+
 > **等待 W1**（2026-11-03 17:3x CST）：PR #13 feat/engine-rpc 仍未合入 main（main@f9097eb）。合入后：merge origin/main → `ExtrasBindings.real()` 返回 W1 的 `EngineBindings.extras(engine)`（PiEngine 本身实现 EngineExtras）→ `BindingMode.extras = REAL` → `WorkspaceBindings` 当前会话 HTML 导出改走 `extras.exportHtml` → 「从这里分叉」随 messageMeta 可用 → 全量单测。
 
 **状态：W2/W3/W4/UI 接线完成，会话面板已接 W4 SessionIndex；CI 绿（run 41610482453，2401c0e，含 `:app:assembleDebugAndroidTest`）；等 W1（PR #13）合入后切 extras 真实实现**（2026-11-03 17:3x CST，从 main@b54a507 切出）
