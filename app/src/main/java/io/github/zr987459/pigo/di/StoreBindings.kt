@@ -8,26 +8,62 @@ import io.github.zr987459.pigo.contract.fake.FakeLaunchEnvProvider
 import io.github.zr987459.pigo.contract.fake.FakeProviderConfigStore
 import io.github.zr987459.pigo.contract.fake.FakeSecretStore
 import io.github.zr987459.pigo.contract.fake.FakeSessionRepository
+import io.github.zr987459.pigo.core.store.FileSessionRepository
+import io.github.zr987459.pigo.core.store.GuestPaths
+import io.github.zr987459.pigo.core.store.KeystoreSecretStore
+import io.github.zr987459.pigo.core.store.PiProviderConfigStore
+import io.github.zr987459.pigo.feature.settings.CustomEndpointPrefill
+import java.io.File
 
-/** 存储与配置（归 mvp/sessions-settings）。scaffold 初版只含 fake 工厂。 */
+/**
+ * 存储与配置（归 mvp/sessions-settings）。
+ *
+ * real()：rootfs 固定在 `files/rootfs`（与 `RuntimeManager.hostFile` 同一规则：`/root/x` → `files/rootfs/root/x`）。
+ * [PiProviderConfigStore] 同时实现 `ProviderConfigStore` 与 `LaunchEnvProvider`，两者共用一个实例。
+ */
 object StoreBindings {
+    private val lock = Any()
+    @Volatile private var realConfig: PiProviderConfigStore? = null
+
+    private fun paths(ctx: BindingContext) = GuestPaths(File(ctx.appContext.filesDir, "rootfs"))
+
+    private fun realConfig(ctx: BindingContext, secrets: SecretStore): PiProviderConfigStore =
+        realConfig ?: synchronized(lock) {
+            realConfig ?: PiProviderConfigStore(secrets, paths(ctx)).also { realConfig = it }
+        }
+
     fun secrets(mode: Mode, ctx: BindingContext): SecretStore = when (mode) {
         Mode.FAKE -> FakeSecretStore()
-        Mode.REAL -> notWired("Store")
+        Mode.REAL -> KeystoreSecretStore(ctx.appContext)
     }
 
     fun providerConfig(mode: Mode, ctx: BindingContext, secrets: SecretStore): ProviderConfigStore = when (mode) {
         Mode.FAKE -> FakeProviderConfigStore(secrets)
-        Mode.REAL -> notWired("Store")
+        Mode.REAL -> realConfig(ctx, secrets)
     }
 
     fun launchEnv(mode: Mode, ctx: BindingContext, secrets: SecretStore): LaunchEnvProvider = when (mode) {
         Mode.FAKE -> FakeLaunchEnvProvider()
-        Mode.REAL -> notWired("Store")
+        Mode.REAL -> realConfig(ctx, secrets)
+    }
+
+    /**
+     * 设置页编辑已有自定义端点时的预填（`SettingsScreen(loadCustom = …)`）。FAKE 模式没有 models.json，返回 null。
+     * 需要 mvp/integration 在 PiGoNavHost 里传给 SettingsScreen。
+     */
+    fun customPrefill(
+        mode: Mode,
+        ctx: BindingContext,
+        secrets: SecretStore,
+    ): (suspend (String) -> CustomEndpointPrefill?)? = when (mode) {
+        Mode.FAKE -> null
+        Mode.REAL -> { id ->
+            realConfig(ctx, secrets).customProviders()[id]?.let { CustomEndpointPrefill(it.baseUrl, it.modelIds) }
+        }
     }
 
     fun sessions(mode: Mode, ctx: BindingContext): SessionRepository = when (mode) {
         Mode.FAKE -> FakeSessionRepository()
-        Mode.REAL -> notWired("Store")
+        Mode.REAL -> FileSessionRepository(paths(ctx))
     }
 }
