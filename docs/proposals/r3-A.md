@@ -404,5 +404,262 @@
 - §13 见本文 §5。
 
 ---
+## 3. 终端形态（`PiTerm`）：还原 pi TUI
 
-> （初稿：§3–§8 正在写）
+### 3.1 渲染方式
+
+- **不开伪终端，也不跑第二个 pi。** 所有内容都由 Compose 绘制，数据来自共享的 `ChatScreenState`。
+- **网格**：用等宽的「字符格」排版。行高为 1.35 倍字号，默认 13sp，可以双指缩放到 10–18sp。屏宽按格数计算（`cols = width / cellWidth`），pi 组件里依赖宽度的折行、截断和 `outputPad`，都按这个列数换算。
+- **字体**：西文用 JetBrains Mono（OFL-1.1）。中日韩字符回退到系统等宽字体或 Noto Sans Mono CJK，按 East Asian Width 规则占 2 格。框线**不用制表符拼**，用 `drawBehind` 直接画线，这样中文混排时边框不会错位。
+- **列表**：外层用一个 `LazyColumn`。每个 pi 组件（用户消息、助手消息、思考、工具、bash、压缩、自定义消息）对应一个 item。item 内部用 `AnnotatedString` 着色，Markdown 用同一个 `MarkdownSegments`，按 pi 的 `md*` token 上色。流式更新时只重组最后一个 item，沿用 chat-ui 的 `StreamingJankTest` 作为门槛：慢帧低于 5%。
+- **ANSI**：bash 输出和工具输出用现有的 `feature/files/…/Ansi.kt` 解析，支持 16、256 色和真彩色，移到 `feature/term` 里复用。
+
+### 3.2 配色
+
+- 把 pi 1.5.0 的 `theme/dark.json` 和 `theme/light.json` **原样打包**到 `feature/term/src/main/assets/pi-theme/`（MIT，在 notices 里记来源）。
+- 运行时解析 `vars`，做 okhsl 到 sRGB 的换算，生成 56 个 token 对应的 `PiColors`。
+- `system` 主题跟随安卓的深浅色。
+- 支持 `~/.pi/agent/themes/*.json` 自定义主题，读法相同，用 `/settings` › 主题 选择，写入 `settings.json` 的 `theme`。
+- 状态栏和导航栏颜色取 `PiColors.background`，做到沉浸式。
+
+### 3.3 布局（竖屏）
+
+```
+┌──────────────────────────────────────┐
+│ pi v1.5.0   ~/proj                   │ ← 页眉（可折叠：上下文文件、技能、扩展、模型范围）
+│ ── AGENTS.md · 2 skills · 1 ext ──   │
+│                                      │
+│ ▌帮我把 README 翻成英文               │ ← userMessageBg
+│                                      │
+│ ⠿ thinking… (斜体 thinkingText)       │
+│ ┌ read README.md:1-80 ───────────── ┐│ ← toolSuccessBg，默认折叠
+│ │ # pi-go …                     ⋯ ││
+│ └──────────────────────────────────┘│
+│ 好的，以下是英文版 …                  │ ← Markdown（md* token）
+│                                      │
+│ ⠋ Working… 12s  · 重试 1/3            │ ← 状态行（loader、计时、setStatus）
+│ ↳ steer: 顺便改一下标题               │ ← 队列
+│╭──────────────────────────────────╮  │ ← 编辑器，边框颜色 = 思考档位
+││ > _                              │  │   以 ! 开头时边框为 bashMode 色
+│╰──────────────────────────────────╯  │
+│ ~/proj (main) • 翻译  ↑12k ↓3k R8k $0.04  42%/200k  (anthropic) sonnet • high │ ← 页脚（可横向滚动，各段可点）
+│ [Esc][Tab][⇣][↑Q][^C][⌃O][/][@][!][⌕][⤢][⇄UI] │ ← 按键条
+└──────────────────────────────────────┘
+```
+
+- 页脚完全照 pi 的 `footer.js` 排版。屏幕放不下时，第二行可以横向滚动，不截断。
+- **形态切换键 `⇄UI`** 固定在按键条最右边；页脚右端也有一个。
+
+### 3.4 编辑器
+
+- 用 `BasicTextField` 加自绘边框，可以多行，最多 8 行，超过后内部滚动。
+- **软键盘回车 = 换行，按键条 ⏎（或外接键盘 Enter）= 发送**。这一点和清单 §9 一致。也可以在 `/settings` 里改成「回车发送」。
+- 输入 `/` 时，编辑器上方弹出补全浮层，最多显示 `autocompleteMaxVisible` 条，按扩展、技能、模板、内置命令分组，并显示 description 和 `argument-hint`。点按或 Tab 补全。
+- 输入 `@` 时弹出文件模糊检索，范围是 cwd。
+- 生成中按回车 = 引导；⇣ = 排队；↑Q = 把队列撤回到编辑器。
+- 编辑器为空时，按键条的 ↑↓ 翻历史提示。历史取自当前会话的用户消息，加上 `DraftStore` 里的历史记录。
+
+### 3.5 按键条与快捷键
+
+- 按键条上的键：Esc、Tab、⇣（Alt+Enter）、↑Q（Alt+↑）、^C、⌃O、/、@、!、⌕、⤢（Ctrl+G 全屏编辑）、⇄UI。
+- 长按某个键会弹出它的次要动作。例如长按 ^C 是「退出（停止引擎）」，长按 ⌃O 是「全部折叠」。
+- 页脚模型名：点按 = Ctrl+L，左右滑 = Ctrl+P / Shift+Ctrl+P。
+- 点编辑器边框 = Shift+Tab，循环思考档位。
+- 连按两次 Esc = `doubleEscapeAction`。
+- 接外接键盘时，用 `onPreviewKeyEvent` 读取 `keybindings.json`（缺省时用 pi 的默认键位），完全按 pi 的键位执行；`/hotkeys` 显示的就是这张表。
+
+### 3.6 工具块与思考块
+
+- 工具块用三种背景：`toolPendingBg`、`toolSuccessBg`、`toolErrorBg`。
+- 标题按 pi 各工具的 `renderCall` 格式（`read path:1-80`、`$ cmd`、`edit path`），输出用 `toolOutput` 色。
+- 默认折叠，只显示前几行，和 pi 的行为一致。点按展开一个，⌃O 展开全部。
+- `edit` 显示三色 diff（复用 `LineDiff`）。
+- 截断的输出显示 `full_output_path`，点按会用 `!cat` 打开完整输出。
+- 思考块用 `thinkingText` 色、斜体，点按或 Ctrl+T 折叠。`hideThinkingBlock` 设置生效。
+- 运行中的工具，在块的标题后面显示 spinner 和计时。回合结束（`agent_settled`）后仍未走到终态的工具，标为「未执行」或「已中断」。这沿用 chat-ui 第 2 轮审查的修复。
+
+### 3.7 选择器与扩展 UI
+
+- 一个通用的 `PiSelector`：上面是搜索框，中间是列表，选中项用 `selectedBg`，底部是 pi 风格的按键提示行，提示里的每一项也是可点的按钮。
+- `/model`、`/thinking`、`/scoped-models`、`/resume`、`/tree`、`/fork`、`/settings`、`/login`、`/trust`、主题选择，以及扩展的 `select`、`confirm`、`input`、`editor`，全部用这个组件。
+- `/session`、`/hotkeys`、`/changelog` 这类「文本输出」，作为 `customMessage` 色块插入消息区。它们是本地生成的，不写入会话文件。
+
+---
+
+## 4. UI 形态（`PiPlain`）：极简原生界面
+
+### 4.1 原则
+
+1. **一页为主**：只有一个对话页。其余功能都是底部面板，或者从对话页推进去的一层二级页（模型配置、分支树、pi 设置、关于），不会超过两层。
+2. **内容优先**：没有卡片阴影、渐变、玻璃效果、吉祥物、插画。界面只靠留白、字重和一种强调色来区分层次。
+3. **所有 pi 功能都能从「/」到达**；常用功能另外放快捷入口（见 §0）。
+
+### 4.2 视觉
+
+- **颜色**：浅色背景 `#FAFAF9`、正文 `#1C1C1E`、次要文字 `#8A8A8E`、分隔线 `#E7E7E5`；深色背景 `#0F0F10`、正文 `#EDEDED`、次要文字 `#8E8E93`、分隔线 `#262628`。强调色只有一个，取 pi `dark.json` 的 accent（偏紫），用于发送键、选中状态和链接。成功、失败只用很小的状态点表示，不铺大面积颜色。
+- **字体**：正文用系统 sans（中文为 Noto Sans CJK），16sp，行高 1.55；代码和工具输出用 JetBrains Mono 13sp；标题 600 字重。不出现第三种字号以外的大字。
+- **间距**：8dp 网格；消息之间 16dp；屏幕左右边距 20dp。
+- **动效**：只用 150–200ms 的淡入淡出和高度展开，曲线为 standard easing，不用弹跳。流式文字不加打字机动画，直接追加。形态切换做 120ms 交叉淡入。
+
+### 4.3 对话页线框
+
+```
+┌───────────────────────────────┐
+│ ☰  翻译 README          ⇄  ⋯ │ ← 标题（点按改名、打开会话菜单）、形态切换、菜单
+│    ~/proj · 思考中 12s        │ ← 副标题：cwd、状态（扩展 setStatus 也显示在这里）
+├───────────────────────────────┤
+│                               │
+│        帮我把 README 翻成英文 ▐│ ← 用户消息：右对齐浅灰块
+│                               │
+│ ◦ 思考了 6 秒                 │ ← 折叠行
+│ ● 读取 README.md       0.2s   │ ← 过程行（点按展开）
+│ ● 编辑 README.md  +12 −9 1.1s │
+│                               │
+│ 好的，英文版如下……            │ ← 助手正文，无边框
+│                               │
+│ ┄ 已压缩 150k → 32k ┄         │ ← 压缩卡（点按看摘要）
+├───────────────────────────────┤
+│ 引导：顺便改一下标题   撤回   │ ← 队列条
+│ [sonnet ▾] [高 ◔]      ◑ 42%  │ ← 模型胶囊（可滑动）、思考胶囊、上下文环
+│ ╭──────────────────────────╮  │
+│ │ /  发消息…           ＋  ↑ │  │ ← 「/」= ⌘ 面板；＋ = 图片、相机、文件(@)、剪贴板
+│ ╰──────────────────────────╯  │   ↑ = 发送；生成中变成 ■ 停止或「引导」
+└───────────────────────────────┘
+```
+
+- 生成中，发送键的状态是：
+  - 输入框为空时显示 ■ 停止；
+  - 有文字时显示「引导」；
+  - 长按显示「排队 / 停止」。
+  这样解决了第 1 轮 Q4 的问题：有草稿时也能停止。
+- **会话菜单（⋯）**：分支树、复制会话、导出（HTML / JSONL）、分享链接、搜索本会话、全部展开 / 折叠、会话信息、切换形态。
+- **侧边栏（☰）**：上方是 ＋新对话（长按选临时会话或指定目录），接着是搜索框和「⋯」菜单（排序、只看已命名、显示路径、导入会话），下面是会话列表，左滑删除并可在 5 秒内撤销，长按可重命名。底部两项：设置（模型）、关于与外观。
+
+### 4.4 ⌘ 面板（「/」）
+
+```
+┌───────────────────────────────┐
+│ ⌕ 搜索命令                    │
+│ 常用   新对话 · 压缩 · 分叉 · 复制回复 · 会话信息 │
+│ 会话   恢复 · 分支树 · 复制会话 · 导入 · 导出 · 分享 · 改名 · 一次性提问 │
+│ 模型   选模型 · 思考强度 · 常用模型 · 登录 · 退出登录 │
+│ 资源   技能… · 模板… · 扩展命令… · 上下文文件 · 扩展与包 · MCP · 工具 │
+│ 项目   信任此项目 · 重新加载 │
+│ 应用   设置 · pi 设置 · 快捷键 · 更新日志 · 诊断 · 报告问题 · 退出 │
+└───────────────────────────────┘
+```
+
+- 数据来自 `PiCommandRegistry` 和 `get_commands`。
+- 每一项都显示 pi 的原命令名，比如「分支树 /tree」，这样终端用户也能对上号。
+
+### 4.5 关键组件
+
+- `PlainMessage`：用户消息、助手消息、思考、过程行、bash 块、压缩卡、系统行。
+- `PlainComposer`：输入框、＋、「/」、发送；`!` 命令模式；`@` 检索；图片缩略图条。
+- `PlainSheet`：所有面板的统一容器，带拖动条、标题和可选的搜索框。
+- `ModelPill`、`ThinkingPill`、`ContextRing`。
+- `PlainSettingsList`：schema 编辑器，按开关、选项、数字、文本、列表几种类型渲染。
+
+---
+
+## 5. 两种形态切换与共享层
+
+### 5.1 分层
+
+```
+                 ┌─────────── PiPlain（UI 形态渲染） ───────────┐
+FormHost ── when(form) ┤                                         ├── 同一个 state、同一个 actions
+                 └─────────── PiTerm （终端形态渲染） ───────────┘
+                                   │
+     ChatController（应用级单例，已存在于 AppGraph.chatDeps）
+     ├─ ChatScreenState：消息行、流式消息、工具状态、队列、草稿、附件、对话框、横条
+     ├─ PiActions：submit / steer / followUp / stop / cycleModel / … / run(PiAction)
+     └─ UiSession：两种形态共用的「打开中的面板」状态（见 5.3）
+                                   │
+     PiCommandRegistry（core/picmd）── EngineExtras / PiEngine（唯一的 pi --mode rpc）
+```
+
+- `FormMode { TERMINAL, PLAIN }` 只存在两个地方：`AppSettings`，用于记住上次的形态；以及 `CompositionLocal`。**`ChatController` 不知道当前是哪种形态。**
+- 切换形态只改 `CompositionLocal` 的值，不调用 `recreate()`，不重新导航，`NavBackStackEntry` 也不变。两套主题都通过 `CompositionLocal` 提供，切换后同一帧内就生效。
+- 输入框的文字、光标、选区，存在 controller 的 `composer` 里，类型为 `TextFieldValue`，两个编辑器读写同一个值。附件、`@` 引用、`!` 模式也一样。
+- **滚动位置**：两种形态的列表都用 `entryId` 作为 key。切换前记下当前可见的第一条的 `entryId` 和偏移，切换后滚动到同一条。如果原来停在底部（跟随流式输出），切换后继续跟随。
+
+### 5.2 入口
+
+- 终端形态：按键条的 `⇄UI`，以及页脚右端。
+- UI 形态：顶栏的 `⇄`，以及会话菜单。
+- 两种形态里都可以输入 `/ui`、`/term`。这两个是本地命令，不发给 pi。
+- 外接键盘：Ctrl+Shift+U（pi 没有占用这个组合）。
+
+### 5.3 切换时不能丢的东西
+
+| 状态 | 存放位置 | 切换时 |
+|---|---|---|
+| 流式生成中的回复 | `ChatReducer` → `ChatState` | 继续流式输出，不发 abort |
+| 队列、重试倒计时、压缩进度 | 同上 | 原样显示 |
+| 草稿、光标、附件、`!`/`@` 状态 | `ChatController.composer` + `DraftStore` | 原样带过去 |
+| 扩展阻塞对话框（`select`/`confirm`/`input`/`editor`） | `ChatController.dialogs`（已存在） | 另一种形态立刻显示同一个 id 的对话框，不回复 cancelled |
+| 打开中的面板（模型选择器、`/tree` 等） | `UiSession.openPanel: PanelRequest?` | 另一种形态打开对应的视图。注意：选择器里**输入到一半的搜索词**也放在 `UiSession` |
+| 引擎进程 | `EngineService`（应用级） | 不受影响 |
+
+### 5.4 引擎层要保证的事
+
+- 形态切换不发出任何 RPC 命令。测试里断言切换前后命令日志没有新增。
+- `MainActivity` 的配置变更（例如旋转）沿用现在的处理方式。形态切换不触发 Activity 重建。
+
+---
+
+## 6. 模型配置（唯一的设置项）
+
+### 6.1 设置首页
+
+```
+设置
+──────────────────────────
+模型
+  默认模型        sonnet-4.5 · 高 ›
+  常用模型        5 个 ›
+  服务商          已配置 3 / 42 ›
+  自定义服务商    1 个 ›
+  网络代理        http://127.0.0.1:7890 ›
+──────────────────────────
+pi 设置（settings.json） ›         ← 二级：schema 编辑器
+关于与外观 ›                       ← 版本、外观、手势与快捷键、更新日志、诊断、后台保活说明
+```
+
+用户说「设置里只保留模型配置」。首页的主体只有模型。另外两行是二级入口，是为了满足「pi 的功能一项不少」和安卓宿主的需要。它们放在最底部，并且做得很轻。
+
+### 6.2 服务商列表
+
+- 分组显示：「已配置」「订阅登录（OAuth）」「API Key」「云平台（Bedrock / Vertex / Azure / Cloudflare）」「自定义」。
+- 每行显示服务商名、认证方式图标、状态点。
+- 数据来自 W2 已经实现的 42 个服务商目录（`CatalogRepository`，按 pi 版本缓存）。
+- 搜索框支持拼音首字母，例如输入「qw」可以找到 qwen。
+- **服务商详情页**：
+  - Key 输入（存 Keystore，然后写 `auth.json`）或「用账号登录」；
+  - 云平台额外的字段（region、resource、account id）；
+  - 测试连接；
+  - 退出登录；
+  - 「⋯」里有复制凭据给外部客户端（见 2.1）。
+- **自定义服务商**：
+  - 字段包括 `baseUrl`、`api`（下拉选 openai-completions、openai-responses、anthropic-messages、google-generative-ai、bedrock-converse-stream、mistral-conversations）、Key、headers；
+  - 「获取模型列表」自动回填 contextWindow、reasoning 和是否支持图片输入；
+  - 每个模型的 cost、`compat`、`modelOverrides` 放在「高级」里；
+  - 保存后写 `models.json`，并调用 `/reload`。
+
+### 6.3 会话内切换模型与思考强度
+
+- **模型胶囊**：点按打开模型面板（UI 形态是半屏面板，终端形态是 `/model` 选择器）。面板从上到下：
+  - 搜索框；
+  - 「常用」（`enabledModels`，可以给每个模型固定思考档位，例如 `sonnet:high`）；
+  - 「可用」（`get_available_models`）；
+  - 「其他」：未配置凭据的模型灰显，点按会进入该服务商的配置页，配好后自动回到对话并选中这个模型。这是 PR #14 已有的 PendingModel 逻辑。
+- 每行显示上下文窗口、是否推理、是否支持图片、单价（美元）。
+- 底部操作：「设为默认」（写 `defaultProvider`、`defaultModel`、`defaultThinkingLevel`）、「刷新目录」。
+- 左右滑动胶囊 = `cycle_model`，只在常用模型之间循环。生成中也可以切换，从下一轮开始生效，并给出提示。
+- **思考胶囊**：点按 = `cycle_thinking_level`；长按列出全部档位，只显示当前模型支持的（`get_available_thinking_levels`）。模型不支持推理时隐藏。终端形态里，编辑器边框颜色表示当前档位（`thinkingOff`…`thinkingMax`）。
+- 费用一律按 pi 给的美元显示，订阅账号显示 `(sub)`。不做人民币换算，因为 pi 没有这个功能。
+
+---
+
+> （§7–§8 正在写）
