@@ -4,6 +4,8 @@ import io.github.zr987459.pigo.contract.fake.FakeChatReducer
 import io.github.zr987459.pigo.contract.fake.FakeEngineClient
 import io.github.zr987459.pigo.contract.fake.FakeFixtures
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
@@ -177,5 +179,45 @@ class FakeEngineReplayTest {
         drain()
         assertTrue(engine.chat.value.items.filterIsInstance<ChatItem.User>().any { it.text == "新的一条" })
         assertFalse(engine.chat.value.running)
+    }
+
+    @Test
+    fun sendDuringStopJoinStartsExactlyOneReplayThatStopCanStop() = runTest {
+        val engine = FakeEngineClient(backgroundScope, stepDelayMs = 10, clock = { 0L })
+        engine.send("第一条")
+        advanceTimeBy(50)
+        runCurrent()
+        assertTrue(engine.chat.value.running)
+
+        // stop() 先拿锁并在 cancelAndJoin 旧回放时挂起；send() 正好在这段 join 期间到达。
+        val stopping = launch { engine.stop() }
+        val sending = async { engine.send("并发的") }
+        runCurrent()
+        assertTrue(stopping.isCompleted)
+        assertEquals(Outcome.Ok(Disposition.STARTED), sending.await())
+
+        // stop 的收尾（已停止 / agent_settled）全部落在旧一轮：「已停止」在新气泡之前，且只有一条。
+        val items = engine.chat.value.items
+        val stoppedAt = items.indexOfFirst { it is ChatItem.Notice && it.kind == NoticeKind.STOPPED }
+        val newUserAt = items.indexOfFirst { it is ChatItem.User && it.text == "并发的" }
+        assertTrue("收尾落到了新一轮：$items", stoppedAt in 0 until newUserAt)
+        assertEquals(1, items.count { it is ChatItem.Notice && it.kind == NoticeKind.STOPPED })
+
+        // 新一轮在输出，且 busy 属于它：再 send 只能排队，不会开第二段并发回放。
+        advanceTimeBy(25)
+        runCurrent()
+        assertTrue(engine.chat.value.running)
+        assertEquals(Outcome.Ok(Disposition.QUEUED), engine.send("第三条"))
+
+        // 随后 stop 能停住它：撤回排队消息，之后不再有任何输出。
+        val withdrawn = (engine.stop() as Outcome.Ok).value
+        assertEquals(listOf("第三条"), withdrawn.followUp)
+        val afterStop = engine.chat.value
+        assertFalse(afterStop.running)
+        drain()
+        assertEquals("stop 之后不应再有任何输出", afterStop, engine.chat.value)
+        assertTrue(engine.chat.value.items.filterIsInstance<ChatItem.User>().none { it.text == "第三条" })
+        assertEquals(1, engine.chat.value.items.count { it is ChatItem.User && it.text == "并发的" })
+        assertTrue(engine.status.value is EngineStatus.Idle)
     }
 }

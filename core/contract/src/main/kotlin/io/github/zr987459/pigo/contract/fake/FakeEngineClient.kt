@@ -16,9 +16,12 @@ import io.github.zr987459.pigo.contract.SendMode
 import io.github.zr987459.pigo.contract.SessionStats
 import io.github.zr987459.pigo.contract.rpc.EngineEvent
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -38,6 +41,9 @@ import kotlinx.serialization.json.JsonObject
  * - 空闲时 `send()` 回放 [FakeFixtures.demoTurn]（第一条消息）或 [FakeFixtures.simpleTurn]；
  * - 生成中 `send()` 进入队列（QUEUED），本轮结束后逐条作为下一回合发出，只发一次；
  * - `stop()` 先清队列（返回撤回文本）再中止回放。
+ *
+ * 并发约定：[busy]、[replayJob]、队列只在 [mutex] 内读写；`stop()` 在锁内等旧回放结束并完成全部收尾，
+ * 期间到达的 `send()` 只能在收尾之后拿到锁；回放协程只有在 [replayJob] 仍是自己时才清理状态。
  */
 class FakeEngineClient(
     private val scope: CoroutineScope,
@@ -72,7 +78,7 @@ class FakeEngineClient(
     /** 回放任意事件序列（同步完成，不受 stepDelay 影响之外的调度）。 */
     suspend fun replay(events: List<EngineEvent>, delayMs: Long = stepDelayMs) {
         for (e in events) {
-            if (delayMs > 0) delay(delayMs)
+            if (delayMs > 0) delay(delayMs) else currentCoroutineContext().ensureActive()
             apply(e)
         }
     }
@@ -100,16 +106,24 @@ class FakeEngineClient(
     private fun startTurn(text: String) {
         replayJob?.cancel()
         val events = if (turns++ == 0) FakeFixtures.demoTurn(text) else FakeFixtures.simpleTurn(text)
-        replayJob = scope.launch {
+        // LAZY：先登记为当前回放再启动，保证协程里的 drainQueue() 看到的 replayJob 一定是自己。
+        val job = scope.launch(start = CoroutineStart.LAZY) {
             replay(events)
             drainQueue()
         }
+        replayJob = job
+        job.start()
     }
 
-    /** 逐条发出排队消息；确认队列为空后才清除 [busy]，与 send() 之间没有空档。 */
+    /**
+     * 逐条发出排队消息；确认队列为空后才清除 [busy]，与 send() 之间没有空档。
+     * 只有 [replayJob] 仍是当前协程时才动状态：已被 stop() 或新一轮取代的旧回放直接退出。
+     */
     private suspend fun drainQueue() {
+        val self = currentCoroutineContext()[Job]
         while (true) {
             val next = mutex.withLock {
+                if (replayJob !== self) return
                 val t = pendingSteer.removeFirstOrNull() ?: pendingFollowUp.removeFirstOrNull()
                 if (t == null) {
                     busy = false
@@ -133,17 +147,15 @@ class FakeEngineClient(
         )
     }
 
-    override suspend fun stop(): Outcome<QueueSnapshot> {
-        val (withdrawn, job) = mutex.withLock {
-            val snap = QueueSnapshot(pendingSteer.toList(), pendingFollowUp.toList())
-            pendingSteer.clear()
-            pendingFollowUp.clear()
-            val j = replayJob
-            replayJob = null
-            busy = false
-            snap to j
-        }
-        // 等回放协程真正结束，之后不会再有任何输出。
+    override suspend fun stop(): Outcome<QueueSnapshot> = mutex.withLock {
+        val withdrawn = QueueSnapshot(pendingSteer.toList(), pendingFollowUp.toList())
+        pendingSteer.clear()
+        pendingFollowUp.clear()
+        val job = replayJob
+        replayJob = null
+        busy = false
+        // 在锁内等旧回放真正结束：它此刻只可能挂起在 delay() 或等待本锁，二者都可取消，不会死锁。
+        // 收尾也在锁内完成，join 期间到达的 send() 只能在收尾之后开始新一轮，收尾不会落到新一轮上。
         job?.cancelAndJoin()
         apply(EngineEvent.QueueUpdate(emptyList(), emptyList(), JsonObject(emptyMap())))
         if (_chat.value.running) {
@@ -157,13 +169,15 @@ class FakeEngineClient(
             apply(EngineEvent.AgentEnd(JsonArray(emptyList()), willRetry = false, raw = JsonObject(emptyMap())))
             apply(EngineEvent.AgentSettled(aborted = true, raw = JsonObject(emptyMap())))
         }
-        return Outcome.Ok(withdrawn)
+        Outcome.Ok(withdrawn)
     }
 
     override suspend fun newSession(cwd: String?): Outcome<Unit> {
         stop()
-        turns = 0
-        _chat.value = ChatState(model = model, thinkingLevel = _chat.value.thinkingLevel, contextPercent = 0.0)
+        mutex.withLock {
+            turns = 0
+            _chat.value = ChatState(model = model, thinkingLevel = _chat.value.thinkingLevel, contextPercent = 0.0)
+        }
         return Outcome.Ok(Unit)
     }
 

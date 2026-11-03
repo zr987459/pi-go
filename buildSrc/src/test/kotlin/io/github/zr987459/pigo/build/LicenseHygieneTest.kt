@@ -4,6 +4,7 @@ import java.io.File
 import java.nio.file.Files
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -71,13 +72,22 @@ class LicenseHygieneTest {
 
     @Test
     fun onlyModuleRootOutputsAreSkipped() {
+        // 用 .so（不受 isSource 过滤，任何位置都按哈希检查）才能真正测到 isSkipped 分支。
         write("core/runtime/build.gradle.kts", "plugins {}\n")
-        write("core/runtime/build/generated/G.kt", "$plantedPackage\n")      // 模块输出：跳过
-        write("build/tmp/T.kt", "$plantedPackage\n")                         // 根输出：跳过
-        write("core/runtime/src/main/res/raw/build.json", "{\"a\":\"$plantedPackage\"}\n")
-        val v = LicenseHygiene.scan(root)
-        assertEquals(v.joinToString(), 1, v.size)
-        assertTrue(v.single().file.path.endsWith("build.json"))
+        val moduleOut = write("core/runtime/build/intermediates/liba.so", "pretend binary a") // 模块根输出：跳过
+        val rootOut = write("build/tmp/libb.so", "pretend binary b")                          // 仓库根输出：跳过
+        val notModule = write("core/build/libc.so", "pretend binary c")                       // core 不是模块根：扫描
+        val inSrc = write("core/runtime/src/main/res/raw/build/libd.so", "pretend binary d")  // src 下的 build 目录：扫描
+        val bad = listOf(moduleOut, rootOut, notModule, inSrc).map { LicenseHygiene.sha256(it) }.toSet()
+        assertEquals(4, bad.size)
+
+        val v = LicenseHygiene.scan(root, badSo = bad)
+        assertEquals(v.joinToString(), listOf("libc.so", "libd.so"), v.map { it.file.name }.sorted())
+
+        assertTrue(LicenseHygiene.isSkipped(root, File(root, "core/runtime/build")))
+        assertTrue(LicenseHygiene.isSkipped(root, File(root, "build")))
+        assertFalse(LicenseHygiene.isSkipped(root, File(root, "core/build")))
+        assertFalse(LicenseHygiene.isSkipped(root, File(root, "core/runtime/src/main/res/raw/build")))
     }
 
     @Test
