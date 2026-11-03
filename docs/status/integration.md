@@ -1,16 +1,17 @@
 # mvp/integration 进度
 
-状态：**进行中**（2026-11-03 13:1x CST）
+状态：**代码与文档已交付，等待真机验收**（2026-11-03 13:2x CST）
 
 ## 已完成
-- [x] 从 main（635dfdc）切出，普通 merge `origin/mvp/engine`（e82843e）→ c91ffca。
+- [x] 从 main（635dfdc）切出，普通 merge `origin/mvp/engine`（e82843e）。推送前再次 fetch：engine 未合入 main 且无新提交，无需再 merge。
 - [x] BindingMode 四组全部切为 REAL。
-- [x] 导航接入真实页面：聊天 ↔ 会话（当前会话、打开/新建/删除当前会话）↔ 设置（Key 末 4 位、引擎重启、运行环境、自定义端点预填）。
+- [x] 导航接入真实页面：聊天 ↔ 会话 ↔ 设置；自定义端点预填经 nav 传入设置页。
 - [x] 「去设置模型」：错误卡 / 失败气泡 / 未配置模型横条 → `settings?focus=models`。
-- [x] Pi-Web 缺口 a–e（停止收起对话框、获取模型列表、测试连接、重试黄条、阶段提示）+ 单测。
-- [x] app/src/androidTest 冒烟测试。
+- [x] Pi-Web 缺口 a–e + 单测；THIRD_PARTY_NOTICES 记录来源。
+- [x] app/src/androidTest 冒烟测试（CI 只编译）。
+- [x] docs/testing/mvp-acceptance.md（§5 全表逐条标注）。
+- [x] CI（Android debug build）绿；本地单测 318 个，1 个失败为 pre-existing（见验收文档 R7），9 个跳过（需真 pi）。
 
-## 进行中
-- [ ] CI 绿
-- [ ] docs/testing/mvp-acceptance.md
-- [ ] 推送前再 fetch 并 merge engine/main；开 PR
+## 未完成（见验收文档「遗留问题」）
+- 真机验收 §5 全表；G7 通知；L3 重命名入口；G8 大会话名称。
+- 不打 v0.1.0。
