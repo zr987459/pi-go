@@ -438,8 +438,11 @@ fun ToolCard(tool: ChatItem.Tool, phase: ToolPhase = ToolPhase.of(tool.status, l
                     formatDuration(tool.durationMs!!),
                     style = MaterialTheme.typography.labelSmall,
                     color = colors.textFaint,
-                    modifier = Modifier.testTag("tool:time"),
+                    modifier = Modifier.testTag("tool:time").semantics { contentDescription = "完成，用时 ${formatDuration(tool.durationMs!!)}" },
                 )
+                // 成功但引擎没给耗时：仍显示 ✓，读屏念「完成」（旧版行为）。
+                phase == ToolPhase.OK ->
+                    AppIcon(AppIcons.check, "完成", size = 16.dp, tint = colors.textFaint, modifier = Modifier.testTag("tool:done"))
             }
             Spacer(Modifier.width(4.dp))
             StreamChevron(expanded, if (expanded) "收起" else "展开")
@@ -555,7 +558,12 @@ private fun ErrorCard(row: ChatRow.Error, actions: RowActions, modifier: Modifie
                 CodeWell { Box(Modifier.padding(12.dp)) { Text(row.info.raw, style = AppType.mono(12), color = scheme.onSurface) } }
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        // FlowRow：360dp 宽屏上三个胶囊放不下一行时换行，不挤窄「重试」。
+        @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+        androidx.compose.foundation.layout.FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             if (row.info.raw != null) {
                 QuietChip(if (showRaw) "收起原文" else "查看原文", onClick = { showRaw = !showRaw })
             }

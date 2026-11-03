@@ -1,5 +1,8 @@
 package io.github.zr987459.pigo.nav
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.key
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Spacer
@@ -111,7 +114,27 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
                 is Outcome.Ok -> navController.navigateTopLevel(Destination.Chat)
                 is Outcome.Err -> toast(sessionErrorText("新建会话", r))
             }
+            runCatching { graph.sessions.refresh() }
         }
+    }
+
+    // 抽屉打开时按返回键先关抽屉（审查 R1）。每次打开都重新注册一次回调，
+    // 保证它排在聊天页 / 设置页等页面自己的返回回调之后（后注册者优先）。
+    val drawerOpen = drawerState.targetValue == DrawerValue.Open || drawerState.isOpen
+    key(drawerOpen) {
+        BackHandler(enabled = drawerOpen) { scope.launch { drawerState.close() } }
+    }
+
+    // 抽屉里的会话列表：抽屉打开、当前会话变化、运行环境就绪时都重新读取（抽屉内容关着时也组合，
+    // SessionsScreen 自己的首次 refresh 只在启动时跑一次）。
+    val currentSession = graph.engine.chat.collectAsState().value.sessionFile
+    LaunchedEffect(drawerState) {
+        snapshotFlow { drawerState.targetValue }.collect { v ->
+            if (v == DrawerValue.Open) runCatching { graph.sessions.refresh() }
+        }
+    }
+    LaunchedEffect(currentSession, runtimeStatus.phase) {
+        if (runtimeStatus.phase == Phase.READY) runCatching { graph.sessions.refresh() }
     }
 
     // dsh-Go 的外壳：没有底部导航栏，页面切换都在左侧抽屉里（手势从左边缘拉出，scrim 渐暗）。
@@ -138,7 +161,17 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
         Box(Modifier.fillMaxSize()) {
             NavHost(navController, startDestination = start.route, modifier = Modifier.fillMaxSize()) {
                 composable(Destination.Onboarding.route) {
-                    OnboardingScreen(graph.runtime, onDone = { navController.navigateTopLevel(Destination.Chat) })
+                    OnboardingScreen(
+                        graph.runtime,
+                        onDone = { navController.navigateTopLevel(Destination.Chat) },
+                        // 已装好（从抽屉进来）时左上角是返回；首次安装时引导页是起点，给「≡」打开抽屉。
+                        onBack = if (runtimeStatus.phase == Phase.READY) {
+                            { navController.navigateTopLevel(Destination.Chat) }
+                        } else {
+                            null
+                        },
+                        onOpenMenu = { scope.launch { drawerState.open() } },
+                    )
                 }
                 composable(Destination.Chat.route) {
                     ChatPage(
@@ -161,7 +194,7 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
                     SETTINGS_PATTERN,
                     arguments = listOf(navArgument("focus") { type = NavType.StringType; nullable = true; defaultValue = null }),
                 ) { entry ->
-                    SettingsPage(graph, focus = entry.arguments?.getString("focus"))
+                    SettingsPage(graph, focus = entry.arguments?.getString("focus"), onBack = { navController.navigateTopLevel(Destination.Chat) })
                 }
             }
             SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 96.dp))
@@ -222,11 +255,16 @@ private fun SessionsPage(
         footer = footer,
         currentGuestPath = chat.sessionFile,
         onOpen = { s ->
-            when (val r = graph.engine.openSession(s.guestPath, s.cwd)) {
-                is Outcome.Ok -> onOpened()
-                is Outcome.Err -> {
-                    graph.log.w("nav", "打开会话失败：${r.code} ${r.message}")
-                    onError(sessionErrorText("打开会话", r))
+            // 点的是当前会话：只关抽屉 / 回聊天，不再调一次 openSession（审查 R1）。
+            if (s.guestPath == chat.sessionFile) {
+                onOpened()
+            } else {
+                when (val r = graph.engine.openSession(s.guestPath, s.cwd)) {
+                    is Outcome.Ok -> onOpened()
+                    is Outcome.Err -> {
+                        graph.log.w("nav", "打开会话失败：${r.code} ${r.message}")
+                        onError(sessionErrorText("打开会话", r))
+                    }
                 }
             }
         },
@@ -250,7 +288,7 @@ private fun SessionsPage(
 }
 
 @Composable
-private fun SettingsPage(graph: AppGraph, focus: String?) {
+private fun SettingsPage(graph: AppGraph, focus: String?, onBack: () -> Unit) {
     val runtimeStatus by graph.runtime.status.collectAsState()
     val scope = rememberCoroutineScope()
     val app = LocalContext.current.applicationContext
@@ -265,6 +303,7 @@ private fun SettingsPage(graph: AppGraph, focus: String?) {
         focus = focus,
         discoverModels = StoreBindings.discoverModels(BindingMode.store, graph.secrets),
         testConnection = StoreBindings.testConnection(BindingMode.store, ctx, graph.secrets, graph.runtime),
+        onBack = onBack,
     )
 }
 

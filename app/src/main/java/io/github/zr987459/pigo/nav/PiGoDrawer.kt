@@ -73,6 +73,12 @@ fun PiGoDrawer(
         GlassSurface(Modifier.width(width).fillMaxHeight().testTag("drawer"), GlassTier.Sheet, DrawerShape) {
             Box(Modifier.fillMaxSize().systemBarsPadding()) {
                 panel {
+                    // 删掉底栏后回到聊天的入口（审查 R1）：抽屉里固定一行「聊天」。
+                    DrawerRow(
+                        Destination.Chat,
+                        selected = current == Destination.Chat.route,
+                        modifier = Modifier.padding(horizontal = 10.dp),
+                    ) { onDestination(Destination.Chat) }
                     DrawerRow(
                         Destination.Onboarding,
                         selected = current == Destination.Onboarding.route,

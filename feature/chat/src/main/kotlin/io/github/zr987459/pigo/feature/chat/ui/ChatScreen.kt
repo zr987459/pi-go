@@ -172,14 +172,6 @@ fun ChatScreen(
     AppBackdrop(modifier.testTag("page:chat")) {
         Box(Modifier.fillMaxSize().imePadding()) {
             // —— 消息列表：从顶栏和输入条下面滚过 ——
-            if (rows.isEmpty()) {
-                ChatEmptyState(
-                    status = state.engineStatus,
-                    onStartEngine = controller::restartEngine,
-                    onSuggestion = { controller.setDraftFromSuggestion(it) },
-                    modifier = Modifier.fillMaxSize().padding(top = headerHeight, bottom = with(density) { bottomPx.toDp() }),
-                )
-            }
             LazyColumn(
                 state = listState,
                 reverseLayout = true,
@@ -188,6 +180,15 @@ fun ChatScreen(
                     end = AppSpace.Gutter,
                     top = headerHeight + 8.dp,
                     bottom = with(density) { bottomPx.toDp() } + 8.dp,
+            // 空会话：放在消息列表之后（位于上层），「启动引擎 / 重新连接」和建议胶囊的点击不会被列表拦住。
+            if (rows.isEmpty()) {
+                ChatEmptyState(
+                    status = state.engineStatus,
+                    onStartEngine = controller::restartEngine,
+                    onSuggestion = { controller.setDraftFromSuggestion(it) },
+                    modifier = Modifier.fillMaxSize().padding(top = headerHeight, bottom = with(density) { bottomPx.toDp() }),
+                )
+            }
                 ),
                 verticalArrangement = Arrangement.spacedBy(AppSpace.InTurn, Alignment.Bottom),
                 modifier = Modifier.fillMaxSize().testTag("chat:list"),
@@ -305,8 +306,13 @@ fun ChatScreen(
     }
 }
 
-/** 建议胶囊只往输入框里填文字（和用户自己打字一样），不新增发送逻辑。 */
-private fun ChatController.setDraftFromSuggestion(prompt: String) = setDraft(prompt)
+/** 建议胶囊只往输入框里填文字（和用户自己打字一样），不新增发送逻辑；已有草稿时追加到末尾，不覆盖。 */
+private fun ChatController.setDraftFromSuggestion(prompt: String) = setDraft(SuggestionText.merge(state.value.composer.draft, prompt))
+
+/** 建议胶囊与草稿合并：草稿为空直接填入，否则换行追加。纯函数，便于单测。 */
+internal object SuggestionText {
+    fun merge(draft: String, prompt: String): String = if (draft.isBlank()) prompt else draft.trimEnd() + "\n" + prompt
+}
 
 /** dsh-Go `greetingFor`：5–11 早上好、11–13 中午好、13–18 下午好、18–23 晚上好、其余 夜深了。 */
 fun greetingFor(time: LocalTime): String = when (time.hour) {

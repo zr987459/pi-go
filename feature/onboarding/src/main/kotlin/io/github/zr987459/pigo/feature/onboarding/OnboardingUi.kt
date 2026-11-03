@@ -15,6 +15,9 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -52,11 +55,15 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.zr987459.pigo.core.ui.AppBackdrop
 import io.github.zr987459.pigo.core.ui.AppIcon
+import io.github.zr987459.pigo.core.ui.AppIcons
+import io.github.zr987459.pigo.core.ui.ChromeIconButton
+import io.github.zr987459.pigo.core.ui.GlassTier
 import io.github.zr987459.pigo.core.ui.AppMotion
 import io.github.zr987459.pigo.core.ui.AppShape
 import io.github.zr987459.pigo.core.ui.DshTheme
@@ -71,12 +78,27 @@ internal fun OnboardingScaffold(
     step: Int,
     steps: Int,
     modifier: Modifier = Modifier,
+    nav: OnboardingNav? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     AppBackdrop(modifier) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+        // edge-to-edge：外层没有 Scaffold，这里自己避开状态栏、导航栏和输入法（步骤条、底部按钮不被挡住）。
+        Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing), contentAlignment = Alignment.TopCenter) {
             Column(Modifier.widthIn(max = 440.dp).fillMaxSize()) {
                 Box(Modifier.fillMaxWidth().height(56.dp), contentAlignment = Alignment.Center) {
+                    // 与 dsh-Go 子页面一致：左上角 44dp 圆钮（返回或「≡」打开抽屉）。
+                    if (nav != null) {
+                        Box(Modifier.align(Alignment.CenterStart).padding(start = 12.dp)) {
+                            ChromeIconButton(
+                                if (nav.isMenu) AppIcons.menu else AppIcons.back,
+                                if (nav.isMenu) "打开菜单" else "返回",
+                                nav.onClick,
+                                size = 44.dp,
+                                tier = GlassTier.Pill,
+                                modifier = Modifier.testTag(if (nav.isMenu) "onboarding:menu" else "onboarding:back"),
+                            )
+                        }
+                    }
                     OnboardingStepBar(step, steps)
                 }
                 // 可滚动 + 至少一屏高：Column 的 weight 在 verticalScroll 里不生效，所以用 heightIn(min) 由外层 BoxWithConstraints 撑开。
@@ -92,6 +114,9 @@ internal fun OnboardingScaffold(
         }
     }
 }
+
+/** 引导页左上角圆钮：[isMenu] 为 true 显示「≡」（打开抽屉），否则显示返回箭头。 */
+internal data class OnboardingNav(val isMenu: Boolean, val onClick: () -> Unit)
 
 /** OnboardingStepBar：120dp 宽、3dp 高的分段条，段间 6dp；当前段 480ms 填满。 */
 @Composable

@@ -58,7 +58,17 @@ import io.github.zr987459.pigo.core.ui.DshTheme
  * 安装中 / 失败 / 完成 = `runtime_setup_page.dart` 的进度页（184dp 环形进度 + 百分比、标题、说明、元信息行、底部按钮）。
  */
 @Composable
-fun OnboardingScreen(runtime: RuntimeManager, onDone: () -> Unit, modifier: Modifier = Modifier) {
+/**
+ * @param onBack 左上角返回圆钮（运行环境已就绪、从抽屉进来时回聊天）；安装进行中不显示。
+ * @param onOpenMenu 没有 [onBack] 时显示「≡」打开抽屉（首次安装时引导页是起点）。
+ */
+fun OnboardingScreen(
+    runtime: RuntimeManager,
+    onDone: () -> Unit,
+    modifier: Modifier = Modifier,
+    onBack: (() -> Unit)? = null,
+    onOpenMenu: (() -> Unit)? = null,
+) {
     val vm: OnboardingViewModel = viewModel { OnboardingViewModel(runtime) }
     val ui by vm.state.collectAsStateWithLifecycle()
     val status by runtime.status.collectAsStateWithLifecycle()
@@ -79,6 +89,12 @@ fun OnboardingScreen(runtime: RuntimeManager, onDone: () -> Unit, modifier: Modi
         onToggleLog = { vm.toggleLog() },
         onDone = onDone,
         modifier = modifier,
+        nav = when {
+            ui.mode == OnboardingViewModel.Mode.RUNNING -> null
+            onBack != null -> OnboardingNav(isMenu = false, onClick = onBack)
+            onOpenMenu != null -> OnboardingNav(isMenu = true, onClick = onOpenMenu)
+            else -> null
+        },
     )
 
     if (ui.confirmingAbort) {
@@ -123,6 +139,7 @@ internal fun OnboardingContent(
     onToggleLog: () -> Unit,
     onDone: () -> Unit,
     modifier: Modifier = Modifier,
+    nav: OnboardingNav? = null,
 ) {
     val view = setupViewOf(ui.mode, status.phase)
     val step = when (view) {
@@ -130,11 +147,11 @@ internal fun OnboardingContent(
         SetupView.INSTALLING, SetupView.FAILED -> 2
         SetupView.DONE -> 3
     }
-    OnboardingScaffold(step = step, steps = 3, modifier = modifier.testTag("page:onboarding")) {
+    OnboardingScaffold(step = step, steps = 3, modifier = modifier.testTag("page:onboarding"), nav = nav) {
         if (view == SetupView.CONFIRM) {
-            ConfirmView(ui, status, preflight, onStart)
+            ConfirmView(ui, status, preflight, onStart, onToggleLog)
         } else {
-            ProgressView(view, ui, status, onStart, onAbort, onToggleLog, onDone)
+            ProgressView(view, ui, status, preflight, onStart, onAbort, onToggleLog, onDone)
         }
     }
 
@@ -165,6 +182,7 @@ private fun ColumnScope.ConfirmView(
     status: RuntimeStatus,
     preflight: Preflight?,
     onStart: () -> Unit,
+    onToggleLog: () -> Unit,
 ) {
     val colors = DshTheme.colors
     val resume = ui.mode == OnboardingViewModel.Mode.ABORTED || status.phase == Phase.BROKEN
@@ -205,16 +223,25 @@ private fun ColumnScope.ConfirmView(
         enabled = canStart,
         modifier = Modifier.fillMaxWidth().testTag("onboarding:start"),
     )
-    if (!canStart) {
-        preflight?.blockingReason?.let {
-            Text(
-                it,
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-            )
-        }
+    if (!canStart) BlockingReason(preflight)
+    // 中止后（或上次安装留下了日志）仍能查看日志。
+    if (ui.log.isNotEmpty()) {
+        Spacer(Modifier.height(8.dp))
+        OnboardingOutlinedButton("查看日志", onToggleLog, Modifier.fillMaxWidth().testTag("onboarding:showLog"))
+    }
+}
+
+/** 预检不通过的原因（开始安装与「重试（换镜像）」共用）。 */
+@Composable
+private fun BlockingReason(preflight: Preflight?) {
+    preflight?.blockingReason?.let {
+        Text(
+            it,
+            color = MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.bodySmall,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp).testTag("onboarding:blocking"),
+        )
     }
 }
 
@@ -224,6 +251,7 @@ private fun ColumnScope.ProgressView(
     view: SetupView,
     ui: OnboardingViewModel.UiState,
     status: RuntimeStatus,
+    preflight: Preflight?,
     onStart: () -> Unit,
     onAbort: () -> Unit,
     onToggleLog: () -> Unit,
@@ -287,9 +315,13 @@ private fun ColumnScope.ProgressView(
     }
     Spacer(Modifier.weight(2f))
     when (view) {
-        SetupView.FAILED -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            OnboardingOutlinedButton("查看日志", onToggleLog, Modifier.weight(1f))
-            OnboardingFilledButton("重试（换镜像）", onStart, Modifier.weight(1f).testTag("onboarding:start"))
+        SetupView.FAILED -> Column(Modifier.fillMaxWidth()) {
+            val canStart = preflight?.canStart == true
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OnboardingOutlinedButton("查看日志", onToggleLog, Modifier.weight(1f))
+                OnboardingFilledButton("重试（换镜像）", onStart, Modifier.weight(1f).testTag("onboarding:start"), enabled = canStart)
+            }
+            if (!canStart) BlockingReason(preflight)
         }
         SetupView.DONE -> OnboardingFilledButton("进入聊天", onDone, Modifier.fillMaxWidth().testTag("onboarding:enter"))
         else -> {

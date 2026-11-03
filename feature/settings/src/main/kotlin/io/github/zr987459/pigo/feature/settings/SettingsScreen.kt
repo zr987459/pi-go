@@ -5,10 +5,12 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -123,6 +125,7 @@ data class CustomEndpointPrefill(val baseUrl: String, val modelIds: List<String>
  * @param focus 打开时滚动到的区块（[SettingsFocus]）。
  * @param discoverModels 自定义端点「获取模型列表」：(id, baseUrl, rawKey) → 模型 id 列表；rawKey 为空表示用已保存的 Key。
  * @param testConnection 「测试连接」；为 null 时不显示按钮。
+ * @param onBack 左上角返回圆钮；为 null 时不显示。
  * @param onModelClick 「选择默认模型」入口；为 null 时用本页的默认模型对话框（现有行为）。
  *   留给 features 工作流接完整的模型选择器。
  */
@@ -140,6 +143,7 @@ fun SettingsScreen(
     discoverModels: (suspend (id: String, baseUrl: String, rawKey: String) -> Outcome<List<String>>)? = null,
     testConnection: (suspend (ConnectionTarget) -> ConnectionCheck)? = null,
     onModelClick: (() -> Unit)? = null,
+    onBack: (() -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
@@ -210,6 +214,24 @@ fun SettingsScreen(
         Scaffold(
             containerColor = Color.Transparent,
             snackbarHost = { SnackbarHost(snackbar) },
+            // 与 dsh-Go 子页面一致：左上角 44dp 返回圆钮（同 BackgroundGuidePage）。
+            topBar = {
+                if (onBack != null) {
+                    androidx.compose.foundation.layout.Row(
+                        Modifier.fillMaxWidth().statusBarsPadding().height(56.dp).padding(horizontal = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        io.github.zr987459.pigo.core.ui.ChromeIconButton(
+                            AppIcons.back,
+                            "返回",
+                            onBack,
+                            size = 44.dp,
+                            tier = io.github.zr987459.pigo.core.ui.GlassTier.Pill,
+                            modifier = Modifier.testTag("settings:back"),
+                        )
+                    }
+                }
+            },
         ) { padding ->
             LazyColumn(
                 Modifier.padding(padding).fillMaxSize().testTag("settings:list"),
