@@ -223,6 +223,8 @@ fun ComposerBar(
     onAttachClick: (() -> Unit)? = null,
     onVoiceClick: (() -> Unit)? = null,
     onUnsupported: (String) -> Unit = {},
+    /** 点上下文小环：打开用量弹层（W4 U1–U3，W5 接线）；为 null 时只显示不响应。 */
+    onContextClick: (() -> Unit)? = null,
 ) {
     // 光标位置留在界面里；草稿文本同步到控制器（旋转、切页都不丢）。只有程序改写草稿（revision 变化）时才回写输入框。
     var field by remember { mutableStateOf(TextFieldValue(composer.draft, TextRange(composer.draft.length))) }
@@ -309,7 +311,13 @@ fun ComposerBar(
                 )
                 Spacer(Modifier.width(8.dp))
                 if (contextPercent != null) {
-                    ContextRing(contextPercent, Modifier.align(Alignment.CenterVertically).padding(end = 6.dp))
+                    ContextRing(
+                        contextPercent,
+                        Modifier
+                            .align(Alignment.CenterVertically)
+                            .then(if (onContextClick != null) Modifier.clip(CircleShape).clickable(onClick = onContextClick).testTag("chat:usage") else Modifier)
+                            .padding(end = 6.dp),
+                    )
                 }
                 Box {
                     val mode = when {

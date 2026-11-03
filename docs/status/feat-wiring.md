@@ -12,4 +12,5 @@
 7. 每次推送前 merge origin/main；W1/W3 合入后切真实实现。
 
 ## 进度
+- 聊天页插槽：时间线附加项（按 anchorKey）、`/` 候选面板、消息长按菜单（复制、复制 Markdown、从这里分叉）、待发图片胶囊、上下文小环 → 用量弹层。
 - 依赖装配：app 依赖 core:catalog/core:workspace/feature:models/files/commands/usage；AppGraph 新增 extras（Fake，等 W1）、models（REAL，CatalogGraph）、workspace（Fake，等 W3）、commands（REAL，CommandsGraph，传 launchEnv）；ChatController 带上 extras 与草稿存储。
