@@ -4,6 +4,7 @@ import io.github.zr987459.pigo.contract.ErrCode
 import io.github.zr987459.pigo.contract.Outcome
 import io.github.zr987459.pigo.contract.SessionRepository
 import io.github.zr987459.pigo.contract.SessionSummary
+import io.github.zr987459.pigo.contract.session.PendingDelete
 import java.io.File
 import java.io.IOException
 import java.nio.file.AtomicMoveNotSupportedException
@@ -31,7 +32,11 @@ import kotlinx.coroutines.withContext
 class FileSessionRepository(
     private val paths: GuestPaths,
     private val io: CoroutineDispatcher = Dispatchers.IO,
+    private val clock: () -> Long = System::currentTimeMillis,
 ) : SessionRepository {
+
+    /** 最近一次 [deleteWithUndo] 的记录（DESIGN-r3 §8.1：撤销只由本类实现，`SessionCatalog` 只调用）。 */
+    @Volatile private var lastDelete: PendingDelete? = null
 
     private data class CacheKey(val path: String, val size: Long, val mtime: Long)
 
@@ -93,6 +98,54 @@ class FileSessionRepository(
             src.parentFile?.let { if (it.list()?.isEmpty() == true) it.delete() }
             rescanLocked()
             Outcome.Ok(paths.guestPath(dest) ?: dest.path)
+        }
+    }
+
+    /**
+     * 删除并允许撤销（DESIGN-r3 ③）：仍是移进回收目录（D1），返回的 [PendingDelete] 在
+     * [PendingDelete.undoUntilMillis]（[UNDO_WINDOW_MILLIS] = 5 秒）之前可用 [undoDelete] / [undoLastDelete] 撤销。
+     * 只记最近一次；新的删除会替换旧记录（旧的仍在回收目录，不丢）。
+     */
+    suspend fun deleteWithUndo(guestPath: String): Outcome<PendingDelete> =
+        when (val r = moveToTrash(guestPath)) {
+            is Outcome.Ok -> {
+                val p = PendingDelete(originalPath = guestPath, trashPath = r.value, undoUntilMillis = clock() + UNDO_WINDOW_MILLIS)
+                lastDelete = p
+                Outcome.Ok(p)
+            }
+            is Outcome.Err -> r
+        }
+
+    /** 撤销最近一次删除；超过 5 秒或没有可撤销的删除时返回错误。成功后文件回到原路径（原文件名，不加后缀）。 */
+    suspend fun undoLastDelete(): Outcome<String> {
+        val p = lastDelete ?: return Outcome.Err(ErrCode.UNKNOWN, "没有可撤销的删除")
+        return undoDelete(p)
+    }
+
+    /** 撤销指定的删除，要求仍在撤销期内、原路径未被占用。 */
+    suspend fun undoDelete(pending: PendingDelete): Outcome<String> = withContext(io) {
+        mutex.withLock {
+            if (clock() > pending.undoUntilMillis) return@withLock Outcome.Err(ErrCode.UNKNOWN, "已超过撤销时间")
+            val src = try {
+                paths.hostFile(pending.trashPath)
+            } catch (e: IllegalArgumentException) {
+                return@withLock Outcome.Err(ErrCode.UNKNOWN, e.message ?: "路径无效")
+            }
+            val dest = try {
+                paths.hostFile(pending.originalPath)
+            } catch (e: IllegalArgumentException) {
+                return@withLock Outcome.Err(ErrCode.UNKNOWN, e.message ?: "路径无效")
+            }
+            if (!paths.isInside(src, paths.trashDir) || !src.isFile) {
+                return@withLock Outcome.Err(ErrCode.UNKNOWN, "回收目录里没有这个会话")
+            }
+            if (!paths.isInside(dest, paths.sessionsDir)) return@withLock Outcome.Err(ErrCode.UNKNOWN, "原路径不在会话目录")
+            val moved = move(src, dest)
+            if (moved != null) return@withLock Outcome.Err(ErrCode.UNKNOWN, "撤销失败：$moved")
+            src.parentFile?.let { if (it.list()?.isEmpty() == true) it.delete() }
+            if (lastDelete == pending) lastDelete = null
+            rescanLocked()
+            Outcome.Ok(pending.originalPath)
         }
     }
 
@@ -182,10 +235,13 @@ class FileSessionRepository(
         }
     }
 
-    internal companion object {
+    companion object {
+        /** 删除后可撤销的时长（DESIGN-r3 §7.3 `UndoDeleteTest`）。 */
+        const val UNDO_WINDOW_MILLIS = 5_000L
+
         private val TRASH_SUFFIX = Regex("~\\d+$")
 
-        fun uniqueTarget(dir: File, name: String): File {
+        internal fun uniqueTarget(dir: File, name: String): File {
             var f = File(dir, name)
             if (!f.exists()) return f
             val stem = name.removeSuffix(".jsonl")
@@ -197,7 +253,7 @@ class FileSessionRepository(
             }
         }
 
-        fun stripTrashSuffix(name: String): String =
+        internal fun stripTrashSuffix(name: String): String =
             name.removeSuffix(".jsonl").replace(TRASH_SUFFIX, "") + ".jsonl"
     }
 }
