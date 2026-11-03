@@ -1,12 +1,15 @@
 package io.github.zr987459.pigo.feature.usage.logic
 
+import io.github.zr987459.pigo.contract.AppSettingsStore
 import io.github.zr987459.pigo.contract.CompactResult
+import io.github.zr987459.pigo.contract.CostDisplaySettings
 import io.github.zr987459.pigo.contract.EngineExtras
 import io.github.zr987459.pigo.contract.ErrCode
 import io.github.zr987459.pigo.contract.ForkResult
 import io.github.zr987459.pigo.contract.Outcome
 import io.github.zr987459.pigo.contract.SessionTree
 import io.github.zr987459.pigo.contract.UsageStats
+import io.github.zr987459.pigo.contract.fake.FakeAppSettingsStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -15,17 +18,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-/** 人民币换算的设置（决策 3）：默认只显示美元；打开后按汇率显示「约 ¥」。 */
-interface CnyRateSetting {
-    /** null = 不显示人民币。 */
-    fun rate(): Double?
-    fun setRate(rate: Double?)
-}
-
-class InMemoryCnyRate(private var value: Double? = null) : CnyRateSetting {
-    override fun rate(): Double? = value
-    override fun setRate(rate: Double?) { value = rate }
-}
+/**
+ * 人民币换算（决策 3）走 W0 契约的 [AppSettingsStore.costDisplay] / [AppSettingsStore.setCostDisplay]，
+ * 由设置存储持久化，重启不丢（审查第 1 轮 Nit）。界面上的「汇率」= 打开人民币显示时的 `usdToCny`，关闭时为 null。
+ */
+internal fun CostDisplaySettings.cnyRateOrNull(): Double? = if (showCny) usdToCny else null
 
 /** 用量弹层的状态（U1–U3）。 */
 data class UsageUiState(
@@ -47,9 +44,10 @@ data class UsageUiState(
 class UsageController(
     private val extras: EngineExtras,
     private val scope: CoroutineScope,
-    private val cny: CnyRateSetting = InMemoryCnyRate(),
+    /** 真实实现由 W5 接线时传入（app 的设置存储）；默认是内存实现，仅供界面开发与测试。 */
+    private val settings: AppSettingsStore = FakeAppSettingsStore(),
 ) {
-    private val _state = MutableStateFlow(UsageUiState(cnyRate = cny.rate()))
+    private val _state = MutableStateFlow(UsageUiState(cnyRate = settings.costDisplay.value.cnyRateOrNull()))
     val state: StateFlow<UsageUiState> = _state.asStateFlow()
 
     /** 本会话是否出现过上下文统计：压缩后 percent 为 null 时据此显示「压缩后待更新」。 */
@@ -58,6 +56,13 @@ class UsageController(
 
     init {
         scope.launch { extras.usageState.collect { s -> if (s != null) apply(s) } }
+        // 设置在别处（设置页）改了汇率或开关，这里跟着变。
+        scope.launch {
+            settings.costDisplay.collect { cd ->
+                val rate = cd.cnyRateOrNull()
+                _state.update { s -> s.copy(cnyRate = rate, costCny = rate?.let { UsageFormat.cny(s.stats?.costUsd, it) }) }
+            }
+        }
     }
 
     fun refresh() {
@@ -87,7 +92,17 @@ class UsageController(
     }
 
     fun setCnyRate(rate: Double?) {
-        cny.setRate(rate)
+        val cur = settings.costDisplay.value
+        val next = if (rate == null) cur.copy(showCny = false) else cur.copy(showCny = true, usdToCny = rate)
+        scope.launch {
+            try {
+                settings.setCostDisplay(next)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                _state.update { it.copy(error = "保存汇率失败：" + (t.message ?: "未知错误")) }
+            }
+        }
         _state.update { s -> s.copy(cnyRate = rate, costCny = rate?.let { UsageFormat.cny(s.stats?.costUsd, it) }) }
     }
 
@@ -98,7 +113,7 @@ class UsageController(
         }
         if (s.context != null) hadContext = true
         val c = s.context
-        val rate = cny.rate()
+        val rate = settings.costDisplay.value.cnyRateOrNull()
         _state.update {
             it.copy(
                 stats = s,

@@ -8,7 +8,8 @@ import io.github.zr987459.pigo.feature.usage.logic.CompactionSummary
 import io.github.zr987459.pigo.feature.usage.logic.ContextBar
 import io.github.zr987459.pigo.feature.usage.logic.DiffKind
 import io.github.zr987459.pigo.feature.usage.logic.EditToolDiff
-import io.github.zr987459.pigo.feature.usage.logic.InMemoryCnyRate
+import io.github.zr987459.pigo.contract.CostDisplaySettings
+import io.github.zr987459.pigo.contract.fake.FakeAppSettingsStore
 import io.github.zr987459.pigo.feature.usage.logic.LineDiff
 import io.github.zr987459.pigo.feature.usage.logic.SessionTreeController
 import io.github.zr987459.pigo.feature.usage.logic.SessionTreeRows
@@ -37,7 +38,7 @@ class UsageLogicTest {
     @Test
     fun usageShowsTokensCostAndContextBar() = runTest {
         val extras = FakeEngineExtras()
-        val c = UsageController(extras, backgroundScope, InMemoryCnyRate(7.1))
+        val c = UsageController(extras, backgroundScope, FakeAppSettingsStore(cost = CostDisplaySettings(showCny = true, usdToCny = 7.1)))
         c.refresh()
         settle()
         val s = c.state.value
@@ -50,6 +51,30 @@ class UsageLogicTest {
 
         c.setCnyRate(null)
         assertNull(c.state.value.costCny)
+    }
+
+    /** 审查第 1 轮 Nit：汇率写进契约的 AppSettingsStore（持久化由设置存储负责），新的控制器（重启后）读得回来。 */
+    @Test
+    fun cnyRatePersistsThroughAppSettingsStore() = runTest {
+        val settings = FakeAppSettingsStore()
+        val c = UsageController(FakeEngineExtras(), backgroundScope, settings)
+        c.refresh(); settle()
+        assertNull("默认只显示美元", c.state.value.costCny)
+        c.setCnyRate(7.3)
+        settle()
+        assertEquals(CostDisplaySettings(showCny = true, usdToCny = 7.3), settings.costDisplay.value)
+
+        val again = UsageController(FakeEngineExtras(), backgroundScope, settings)
+        again.refresh(); settle()
+        assertEquals(7.3, again.state.value.cnyRate!!, 0.0)
+        assertEquals("约 ¥3.29", again.state.value.costCny)
+
+        // 设置页那边关掉人民币显示，弹层跟着变
+        settings.setCostDisplay(settings.costDisplay.value.copy(showCny = false))
+        settle()
+        assertNull(again.state.value.cnyRate)
+        assertNull(again.state.value.costCny)
+        assertEquals("关闭时保留汇率", 7.3, settings.costDisplay.value.usdToCny, 0.0)
     }
 
     @Test
