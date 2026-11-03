@@ -168,7 +168,7 @@ private fun CalmSurfaceBody(host: SessionHost, modifier: Modifier, onOpenSetting
 
         // ☰ 会话列表
         AnimatedVisibility(view.drawerOpen, enter = fadeIn(tween(180)), exit = fadeOut(tween(180))) {
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.32f)).clickable(
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.32f)).testTag("calm:drawerScrim").clickable(
                 interactionSource = remember { MutableInteractionSource() }, indication = null,
             ) { view.drawerOpen = false })
         }

@@ -313,9 +313,9 @@ private fun FieldRow(f: FormField, value: String, onChange: (String) -> Unit) {
                     )
                 }
             }
-            is PiSettingType.Number -> InlineField(value, if (t.integer) KeyboardType.Number else KeyboardType.Decimal, f.enabled) { s ->
+            is PiSettingType.Number -> InlineField(value, if (t.integer) KeyboardType.Number else KeyboardType.Decimal, f.enabled, onChange = { s ->
                 if (s.isEmpty() || s.toDoubleOrNull() != null || s == "-") onChange(s)
-            }
+            })
             PiSettingType.Str -> InlineField(value, KeyboardType.Text, f.enabled, onChange)
             PiSettingType.StrList -> InlineField(value, KeyboardType.Text, f.enabled, onChange, hint = "多个值用逗号分隔")
             PiSettingType.Bool -> Unit
