@@ -180,15 +180,6 @@ fun ChatScreen(
                     end = AppSpace.Gutter,
                     top = headerHeight + 8.dp,
                     bottom = with(density) { bottomPx.toDp() } + 8.dp,
-            // 空会话：放在消息列表之后（位于上层），「启动引擎 / 重新连接」和建议胶囊的点击不会被列表拦住。
-            if (rows.isEmpty()) {
-                ChatEmptyState(
-                    status = state.engineStatus,
-                    onStartEngine = controller::restartEngine,
-                    onSuggestion = { controller.setDraftFromSuggestion(it) },
-                    modifier = Modifier.fillMaxSize().padding(top = headerHeight, bottom = with(density) { bottomPx.toDp() }),
-                )
-            }
                 ),
                 verticalArrangement = Arrangement.spacedBy(AppSpace.InTurn, Alignment.Bottom),
                 modifier = Modifier.fillMaxSize().testTag("chat:list"),
@@ -203,6 +194,16 @@ fun ChatScreen(
                         )
                     }
                 }
+            }
+
+            // 空会话：放在消息列表之后（位于上层），「启动引擎 / 重新连接」和建议胶囊的点击不会被列表拦住。
+            if (rows.isEmpty()) {
+                ChatEmptyState(
+                    status = state.engineStatus,
+                    onStartEngine = controller::restartEngine,
+                    onSuggestion = { controller.setDraftFromSuggestion(it) },
+                    modifier = Modifier.fillMaxSize().padding(top = headerHeight, bottom = with(density) { bottomPx.toDp() }),
+                )
             }
 
             // —— 顶栏：滚过内容时铺一层由背景色到透明的渐隐（dsh-Go TopFade） ——
