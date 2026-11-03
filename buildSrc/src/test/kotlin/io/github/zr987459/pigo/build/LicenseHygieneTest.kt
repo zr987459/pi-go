@@ -112,7 +112,8 @@ class LicenseHygieneTest {
 
     @Test
     fun badSoListIsComplete() {
-        assertEquals(15, LicenseHygiene.knownBadSoSha256.size)
+        // 15 → 13：两份 libandroidshmem.so 的哈希经核对为 Termux 官方 BSD-3-Clause 构建，已从名单移除（见 LicenseHygiene.kt 注释）
+        assertEquals(13, LicenseHygiene.knownBadSoSha256.size)
         assertTrue(LicenseHygiene.knownBadSoSha256.all { it.matches(Regex("[0-9a-f]{64}")) })
     }
 }
