@@ -8,18 +8,19 @@
 3. 补单测和截图快照，作为验收证据。
 4. PR #15 合入后，把 main merge 进本分支（不 rebase），再开 PR 到 main，盯 CI 变绿。
 
-## 进度（2026-11-04 08:00 CST）
-- [x] 读完设计：§3、§5、§7、§8 和派发表 ⑤
-- [x] `theme/PiColor.kt`、`theme/PiTheme.kt`：从 pi-tui 移植 okhsl/oklch 转换；`assets/pi-theme/{dark,light}.json` 原样打包；`PiThemeTokensTest`，夹具由 node 跑 pi 包生成
-- [x] `text/CellWidth.kt`：格宽计算，宽字符区间表由 node 跑 get-east-asian-width 1.6.0 生成
-- [x] `format/Footer.kt`：逐行移植 footer.js；`FooterSnapshotTest` 的 7 组输入与 node 跑 FooterComponent 的输出逐行比对
-- [ ] 本地编译与单测（feature:term:testDebugUnitTest 正在跑首轮）
-- [ ] `format/TermFormatter.kt`（ChatItem → 行；markdown、工具三态、diff、思考块、截断提示）+ `TermFormatterGoldenTest`
-- [ ] `KeyBindings` + `SwitchChordNoConflictTest`（夹具：pi 默认键位表）
-- [ ] Compose：`TermSurface`（字符网格、页眉、状态行、编辑器、补全浮层、页脚、键条、`TermSelectList`）
-- [ ] `TermCoverageTest`（androidTest）、切换夹具、截图
-- [ ] `docs/notices/r3-term.md`
+## 进度（2026-11-04 08:02 CST）
+- [x] 主题：PiColor / PiThemeLoader，dark/light 原样打包；PiThemeTokensTest 通过
+- [x] 格宽：CellWidth，宽字符表来自 get-east-asian-width 1.6.0
+- [x] 页脚：Footer 移植 footer.js；FooterSnapshotTest 7 组宽度，结果与 node 一致
+- [x] 外接键盘：KeyBindings 与 KeyChords；SwitchChordNoConflictTest 通过（Ctrl+Alt+T 未被占用）
+- [x] 排版：TermFormatter 与 Markdown；TermFormatterGoldenTest 80 列 0/145 行差异
+- [x] Compose：TermSurface（消息区、状态行、队列、widget、编辑器、斜杠补全、页脚、键条、双指缩放、阅读位置）与 TermOverlay（全部 OverlayModel）
+- [x] TermInputTest（JVM 静态核对每个动作的终端入口）
+- [x] androidTest：TermCoverageTest、TermFormSwitchFixtureTest 已写好；本地取不到 androidx.test 依赖，靠 CI 的 assembleDebugAndroidTest 编译
+- [x] 快照：TermScreenSnapshotTest 输出整屏 JSON，`feature/term/snapshots/*.png` 由 render.py 渲染
+- [x] 已 merge main（de09f66，PR #15）
+- [ ] 开 PR，盯 CI
 
 ## 下一步（接手者看这里）
-1. 跑 `./gradlew --offline :feature:term:testDebugUnitTest`，修编译错误。
-2. 写 TermFormatter 和 golden 测试：用 node 跑 pi 的 components（assistant-message、tool-execution 等）在 80 列下的渲染结果作夹具。
+1. CI 若在 assembleDebugAndroidTest 报 androidTest 编译错误，就改 `feature/term/src/androidTest/**`。
+2. 遗留：慢帧门槛（1000 条 delta）未做；`fullscreenCopyOnSelect` 选中即复制未做；`@` 文件模糊搜索的候选源没有（SessionHost 没有暴露 workspace），只做了插入 `@`；外接键盘仪器测试未写。
