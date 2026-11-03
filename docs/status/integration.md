@@ -1,6 +1,6 @@
 # mvp/integration 进度
 
-> **审查第 2 轮修复：进行中**（2026-11-03 14:0x CST 接手，基于 6952439）：Important（warmUp 打开旧会话与抢先发送竞态）、Nit（空串运行标记误显示「被中断」、改地址后旧模型仍可选）修复中。
+> **审查第 2 轮修复：已推送，等待 CI**（2026-11-03 CST，普通 merge origin/mvp/engine 8d811e2，随后 mvp/engine 已合入 main，再普通 merge origin/main c211cd1）：Important（预热与抢先发送竞态：WarmUpGate 闸门 + openSession 前复核）、Nit（空串运行标记不打开旧会话；改地址/Key 清空旧模型列表）均已修复并补单测；修法见 PR #7 描述「审查第 2 轮修复」。PiEngine 侧「仅在未启动时以目标会话 boot」需要 engine 处理。
 
 > **审查第 1 轮修复：已推送，等待 CI**（2026-11-03 CST，基于 a4f6ecc）：Important 1–5 全部修复（Key 不进 argv、模型获取取消竞态、多次重试黄条、L5 冷启动回到上次会话、打开/新建会话失败提示），Nit 6–10 全部处理；修法与测试见 PR #7 描述「审查第 1 轮修复」。
 

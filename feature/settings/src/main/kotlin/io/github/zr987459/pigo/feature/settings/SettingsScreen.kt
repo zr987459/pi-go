@@ -531,9 +531,10 @@ private fun CustomDialog(
     var models by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var saving by remember { mutableStateOf(false) }
-    var discovered by remember { mutableStateOf<List<String>>(emptyList()) }
-    var discovering by remember { mutableStateOf(false) }
-    var discoverMsg by remember { mutableStateOf<String?>(null) }
+    var discovery by remember { mutableStateOf(DiscoveryUi()) }
+    val discovered = discovery.discovered
+    val discovering = discovery.running
+    val discoverMsg = discovery.message
     val discoverGate = remember { LatestOnly() }
     var testing by remember { mutableStateOf(false) }
     var check by remember { mutableStateOf<ConnectionCheck?>(null) }
@@ -545,33 +546,27 @@ private fun CustomDialog(
         val d = discoverModels ?: return
         if (url.isBlank() || !keyReady) return
         val token = discoverGate.begin()
-        discovering = true
-        discoverMsg = null
+        discovery = discovery.started()
         try {
             val r = discoverGate.run(
                 token,
                 onError = { Outcome.Err(io.github.zr987459.pigo.contract.ErrCode.UNKNOWN, it.message ?: "") },
             ) { d(id.ifBlank { preset.provider }, url, key) } ?: return
             when (r) {
-                is Outcome.Ok -> {
-                    discovered = r.value
-                    discoverMsg = "找到 ${r.value.size} 个模型，点选加入（也可以手动填写）"
-                }
-                is Outcome.Err -> {
-                    discovered = emptyList()
-                    discoverMsg = "获取模型列表失败：${r.message.ifBlank { "未知错误" }}。可以在下面手动填写模型 id。"
-                }
+                is Outcome.Ok -> discovery = discovery.succeeded(r.value)
+                is Outcome.Err -> discovery = discovery.failed(r.message)
             }
         } finally {
-            if (discoverGate.isLatest(token)) discovering = false
+            if (discoverGate.isLatest(token)) discovery = discovery.finished()
         }
     }
 
     // 地址和 Key 都填好后停顿片刻自动获取一次（输入过程中不反复请求）。
     LaunchedEffect(url, key, existing) {
-        // 输入变了：之前发出的请求一律作废，按钮先恢复可点（旧请求可能还卡在网络上）。
+        // 输入变了：之前发出的请求一律作废，按钮先恢复可点（旧请求可能还卡在网络上）；
+        // 旧地址取到的模型列表和提示一并清掉，不能再点选加入（审查第 2 轮 Nit）。
         discoverGate.invalidate()
-        discovering = false
+        discovery = discovery.inputChanged()
         if (discoverModels == null || url.isBlank() || !keyReady) return@LaunchedEffect
         kotlinx.coroutines.delay(800)
         discover()

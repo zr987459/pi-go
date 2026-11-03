@@ -42,4 +42,28 @@ class ResumePolicyTest {
         val list = listOf(s("/root/.pi/agent/sessions/z.jsonl", 5), s("/root/.pi/agent/sessions/m.jsonl", 5))
         assertEquals("/root/.pi/agent/sessions/m.jsonl", ResumePolicy.coldStartTarget(false, list)?.guestPath)
     }
+
+    // ---------------- 审查第 2 轮 ----------------
+
+    @Test fun emptyMarkerNeverOpensAnOldSession() {
+        val list = listOf(s("/root/.pi/agent/sessions/a.jsonl", 100), s("/root/.pi/agent/sessions/b.jsonl", 200))
+        // 被中断时还没有会话文件：不打开旧会话，否则「上一轮被系统中断」会挂到并未中断的会话上
+        assertNull(ResumePolicy.coldStartTarget("", { true }, list))
+        // 正常结束：回到最近会话
+        assertEquals("/root/.pi/agent/sessions/b.jsonl", ResumePolicy.coldStartTarget(null, { true }, list)?.guestPath)
+        // 标记指向仍存在的会话：交给引擎
+        assertNull(ResumePolicy.coldStartTarget("/root/.pi/agent/sessions/a.jsonl", { true }, list))
+        // 标记指向已删除的会话：回到最近会话
+        assertEquals("/root/.pi/agent/sessions/b.jsonl", ResumePolicy.coldStartTarget("/root/.pi/agent/sessions/gone.jsonl", { false }, list)?.guestPath)
+    }
+
+    @Test fun autoOpenOnlyWhileEngineUntouched() {
+        val idle = io.github.zr987459.pigo.contract.ChatState()
+        assertTrue(ResumePolicy.mayAutoOpen(null, io.github.zr987459.pigo.contract.EngineStatus.Stopped, idle))
+        assertFalse("已有当前会话", ResumePolicy.mayAutoOpen("/x.jsonl", io.github.zr987459.pigo.contract.EngineStatus.Stopped, idle))
+        assertFalse("引擎已在启动（用户抢先发送）", ResumePolicy.mayAutoOpen(null, io.github.zr987459.pigo.contract.EngineStatus.Starting, idle))
+        assertFalse("正在生成", ResumePolicy.mayAutoOpen(null, io.github.zr987459.pigo.contract.EngineStatus.Stopped, idle.copy(running = true)))
+        val withMsg = idle.copy(items = listOf(io.github.zr987459.pigo.contract.ChatItem.User("u1", "你好", io.github.zr987459.pigo.contract.Delivery.SENDING)))
+        assertFalse("界面上已有消息", ResumePolicy.mayAutoOpen(null, io.github.zr987459.pigo.contract.EngineStatus.Stopped, withMsg))
+    }
 }
