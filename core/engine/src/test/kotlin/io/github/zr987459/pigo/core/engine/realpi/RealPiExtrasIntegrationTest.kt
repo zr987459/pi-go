@@ -1,5 +1,6 @@
 package io.github.zr987459.pigo.core.engine.realpi
 
+import kotlinx.coroutines.launch
 import io.github.zr987459.pigo.contract.BashEvent
 import io.github.zr987459.pigo.contract.ChatItem
 import io.github.zr987459.pigo.contract.ImageInput
@@ -95,6 +96,33 @@ class RealPiExtrasIntegrationTest {
         // pi 在新会话有助手消息后才落盘：再跑一轮，新文件出现
         turn("分叉后 #text")
         assertTrue(File(engine.currentSessionFile!!).isFile)
+    }
+
+    /**
+     * 审查第 1 轮 Important#1：真 pi 1.5.0 普通消息不发 entry_appended。第二轮进行中的任意时刻，
+     * 新用户气泡都不能配到第一轮用户消息的 entryId；轮末新气泡配到内容为「第二句」的那条 user entry。
+     */
+    @Test
+    fun messageMetaNeverPairsNewBubbleWithPreviousEntryMidTurn() = runBlocking {
+        engine.start()
+        turn("第一句 #text")
+        until { engine.messageMeta.value.size >= 2 }
+        val firstUser = engine.chat.value.items.first { it is ChatItem.User }
+        val firstEntry = engine.messageMeta.value.getValue(firstUser.key).entryId
+        val bad = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val watch = scope.launch {
+            engine.messageMeta.collect { m -> m.forEach { (k, v) -> if (v.entryId == firstEntry && k != firstUser.key) bad += k } }
+        }
+        turn("第二句")
+        val second = engine.chat.value.items.last { it is ChatItem.User }
+        until { engine.messageMeta.value[second.key] != null }
+        watch.cancel()
+        assertTrue("轮中错配：$bad", bad.isEmpty())
+        val secondEntry = engine.messageMeta.value.getValue(second.key).entryId
+        assertNotEquals(firstEntry, secondEntry)
+        val entries = (engine.entries(null) as Outcome.Ok).value
+        val e = entries.entries.single { it.id == secondEntry }
+        assertTrue("配到的条目应是「第二句」：${e.preview}", e.preview.contains("第二句"))
     }
 
     @Test
