@@ -682,3 +682,132 @@ data class PiAction(
 - **两种形态共用同一套面板模型**（§5.3），所以终端里的 `/login`、`/model` 和 UI 里的设置页数据完全一致。
 
 ---
+
+## 7. 模块拆分与并行工作流（5 条，文件范围互不重叠）
+
+### 7.1 工作流
+
+| # | 分支 | 文件范围（独占） | 内容 | 依赖 |
+|---|---|---|---|---|
+| 1 | `r3/host` | `core/contract/**`、`core/protocol/**`、`core/engine/**`、`core/workspace/**`、`feature/chat/src/main/**`（**不含** `ui/**`）、`feature/commands/**`、新模块 `core/session/**`、`settings.gradle.kts`、`gradle/**`、所有模块的 `build.gradle.kts`（scaffold 角色）、`docs/r3/coverage-map.tsv` | **第一次推送（≤1 小时）**：<br>- `SessionHost`/`PiAction`/`OverlayModel`/`DraftState`/`UiForm` 接口加 Fake（`FakeSessionHost`，带可编程流式输出）；<br>- 建空模块 `feature/term`（只有 build 文件和占位）；<br>- 写出 `PiActions` 的完整 id 列表，`run` 先占位。<br>**之后**：<br>- 实现 `SessionHost`、`PiActions.run`、`PiSettings`、`SessionCatalog`（含导入和删除撤销）、`pigo-bridge.ts` 与 `-e` 加载、`@` 搜索；<br>- 把 `CompactionSummary`、`LineDiff`、`SessionTreeRows`、`Ansi`、`OutputViewer` 的逻辑**复制**进 `core/session`；<br>- 删除 `AutoNamer`/`AutoTitle`/`GitParse`（只留分支名）、`TurnStats` 的每轮卡部分 | 无（最先开始） |
+| 2 | `r3/term` | `feature/term/**`（不含 `build.gradle.kts`） | `TermSurface`、`TermFormatter`（纯函数）、`PiThemeLoader` 与两份主题 JSON、`TermSelectList`、键条、外接键盘 `keybindings.json`、`wcwidth` | 基于 `r3/host` 第一次推送，开发期用 `FakeSessionHost` |
+| 3 | `r3/calm` | `feature/chat/src/main/**/ui/**`、`core/ui/**`、`feature/sessions/**`、`feature/onboarding/**` | `CalmSurface`、⌘ 命令中心、`CalmSheetList`（画全部 `OverlayModel`）、会话列表（`/resume` 的 UI 形态）、`CalmTheme`；删除 dsh 组件、空会话建议胶囊、`DrawerStyle` | 同上 |
+| 4 | `r3/models` | `feature/models/**`、`core/catalog/**`、`core/store/**`、`feature/settings/**` | 设置页只剩模型；服务商列表、服务商配置、自定义服务商、模型面板（全部 / 常用 / 最近）提供成 `OverlayModel` 加 Composable（**两种形态各一套皮**：Calm 的放在本模块 `ui/calm`，Term 的以 `OverlayModel` 交给 term 画）；删汇率（`ModelPrefsStore`、`RealAppSettingsStore`、`NetworkAndCostScreen`）、`DshComponents`；`SessionDefaults` 改为写 `PiSettings`；回收站改撤销（`FileSessionRepository`） | 同上 |
+| 5 | `r3/app` | `app/**`（含 `androidTest`）、`feature/usage/**`、`feature/files/**`、`THIRD_PARTY_NOTICES.md`、`docs/testing/**` | `AppGraph` 装配 `SessionHost`；导航只剩安装 → 会话（`Crossfade(form)`）→ 模型设置 → 关于；删除 `WiredPages` 的旧页面；**删除** `feature/usage`（整模块）、`feature/files` 的浏览器、预览、Git、`FilesHost`、`FilesController`、`Highlight`；附件、分享、导出保留；吉祥物全仓残留检查；NOTICE 增加 pi 主题 JSON 与 wcwidth；写真机清单；**写两个硬性验收的仪器测试**（§7.4） | 等 1–4 合入后收尾，但从第一天起就能先删「只被 app 引用」的东西 |
+
+### 7.2 删除如何安全进行
+
+- **谁的范围谁删。** 每个文件只有一个工作流能改，所以删除也只能由它的属主做。上表已经把每一项删除落到属主：
+  - `feature/usage`、`feature/files` 的浏览器部分由 r3/app 删；
+  - dsh 主题由 r3/calm 删；
+  - 汇率、DshComponents 由 r3/models 删；
+  - AutoNamer、GitParse 由 r3/host 删。
+- **先断引用，再删文件。** 某文件被别的工作流范围引用时：
+  1. 引用方先在自己的 PR 里去掉引用（或改指向 `core/session` 的新位置）；
+  2. 属主等这个 PR 合入 main 后再删。
+  
+  例：`feature/usage/CompactionSummary` 由 r3/host 复制进 `core/session`，r3/calm 和 r3/term 改用新位置，最后 r3/app 删除整个 `feature/usage`。
+- **模块级删除**（`settings.gradle.kts` 里去掉 `include(":feature:usage")`）由 r3/host 在 r3/app 的删除 PR 合入**之后**单独提一个只改这一行的小 PR，避免两边同时改 gradle。
+- 每条工作流每次推送前都 `git fetch && git merge origin/main`（不 rebase、不 force），冲突在自己范围内解决。
+- **合入顺序**：host（第一次推送）→ models → calm ∥ term → host（实现完成）→ app（收尾）→ host（去掉 include）。
+
+### 7.3 硬性要求 ①：UI 形态覆盖清单全部功能（可执行验收）
+
+1. **覆盖映射文件** `docs/r3/coverage-map.tsv`（r3/host 维护）。清单 §1–§11 每一张表的每一行一条，格式：`清单节号<TAB>行首单元格原文<TAB>动作id或 BASE/FORM/NA`。
+   - `BASE`：底座，例如 `get_entries`；
+   - `FORM`：形态本身；
+   - `NA`：清单写明不适用，例如 powershell。
+2. **JVM 单测** `core/session/src/test/.../PiFeatureCoverageTest.kt`：
+   - 解析 `docs/pi-features.md`：取每个 `|` 表格的数据行首列，跳过表头和分隔行，得到全部条目。断言每条在 `coverage-map.tsv` 里都有映射，**一条都不能缺**。清单新增行而映射没跟上时，测试会失败。
+   - 断言每个映射到的动作 id 都在 `PiActions.all` 里，并且 `ui != null && term != null`。`Explain` 也算入口，但必须有非空说明文字。
+   - 断言 `PiActions` 里没有未被任何清单条目引用的孤儿动作（`featureRefs` 非空）。
+   - 跑法：`./gradlew :core:session:testDebugUnitTest --tests '*PiFeatureCoverageTest*'`。在沙盒里可用 kotlinc + JUnit 直接跑，文档路径通过系统属性传入。
+3. **仪器测试** `app/src/androidTest/.../UiCoverageTest.kt`（r3/app 写）：
+   - 用 `FakeSessionHost` 启动 UI 形态，遍历 `PiActions.all`：
+     - `UiEntry.Command`：打开 ⌘，搜索标题，点 `action:<id>`，断言出现该动作声明的结果标记（`overlay:<id>`、rpc 调用记录或 `explain:<id>`）；
+     - `UiEntry.Persistent`：断言常驻控件 `testTag` 可见且可点；
+     - `UiEntry.LongPress`：在固定夹具消息上长按，断言菜单项存在。
+   - `TermCoverageTest` 对终端形态做同样的事：输入 `/别名` 回车，或点键条键。
+   - 跑法：`./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=io.github.zr987459.pigo.UiCoverageTest`。
+4. **人工复核**：r3/app 在 PR 描述里贴 `coverage-map.tsv` 的统计（条目总数、各动作数、NA 数及理由）。
+
+### 7.4 硬性要求 ②：生成中切换不中断、不重启、上下文与草稿保留（可执行验收）
+
+**JVM**：`core/session/src/test/.../SessionHostFormSwitchTest.kt`（r3/host）。用带计数的 `FakeEngineClient`：
+1. 开始一条流式回复（每 50ms 吐一段），并设置草稿为「草稿abc」，带 1 张图片、`@a.kt` 引用、光标位于 3；
+2. 在 `running == true` 期间连续 `host.form.value = TERM/CALM` 切换 20 次；
+3. 断言：
+   - `engine.startCount == 1 && restartCount == 0 && abortCount == 0`；
+   - `chat.state` 是同一实例，最后一条助手消息的文本是全部分段按顺序拼接，没有丢段也没有重复；
+   - `agent_settled` 只出现一次；
+   - `draft.value` 与切换前逐字段相等；
+   - `overlay` 栈不变；
+   - `sessionFile` 不变。
+
+**仪器（真机或模拟器）**：`app/src/androidTest/.../FormSwitchStreamingTest.kt`（r3/app），两档：
+
+- **A 档（无 Key，CI 可跑）**：`BindingMode` 注入 `FakeSessionHost` 的慢速流（10 秒），步骤同 JVM 版，经真实 UI 点 `form:toggle` 切换（UI 形态顶栏 ⇄，终端形态 `⌂UI`）。断言：
+  - 屏幕上的助手文本长度单调不减；
+  - 切换后输入框显示「草稿abc」，图片缩略图在；
+  - 发送键或停止键状态正确；
+  - 预先放入的扩展 `confirm` 对话框在切换后仍显示，点「确定」后 `ChatController` 回传了同一个 request id。
+- **B 档（真引擎，需 `pigoProvider`/`pigoKey` 参数，否则 Assume 跳过）**：
+  1. 记录 `graph.runtime` 的 pi 进程 PID（`SessionHost.debugEnginePid()`，读 `ProcessTree`）和 `get_state.sessionId`；
+  2. 发送「从 1 数到 300，每行一个数」；
+  3. 第一个 `message_update` 之后，每 1.5 秒切一次形态，共 6 次；
+  4. 断言：
+     - PID 不变，`sessionId` 不变；
+     - 引擎状态全程没有出现 `Starting`/`Stopped`/`Crashed`；
+     - 最终回复以 300 结束、`stopReason == "stop"`；
+     - 草稿保留；
+     - 切换后发一条「刚才最后一个数是几？」，回复包含 300（上下文保留）。
+- **跑法**：`./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=io.github.zr987459.pigo.FormSwitchStreamingTest [-Pandroid.testInstrumentationRunnerArguments.pigoProvider=deepseek -Pandroid.testInstrumentationRunnerArguments.pigoKey=…]`。
+- **人工**（写进 `docs/testing/r3-device-checklist.md`）：真机上用 `adb shell pidof -s node` 在切换前后各记一次，对比 PID；录屏确认流式文字不闪、不重排到顶部。
+
+### 7.5 各工作流的验收标准
+
+| 分支 | 验收 |
+|---|---|
+| r3/host | `PiFeatureCoverageTest`、`SessionHostFormSwitchTest` 通过；`PiActions` 覆盖 coverage-map 全部非 BASE/FORM/NA 项；`pigo-bridge.ts` 在真机上通过 `/pigo:reload`、`/pigo:tree-nav` 冒烟（仪器测试，Assume 运行环境就绪）；现有 protocol、engine 单测全绿；CI `assembleDebug` 绿 |
+| r3/term | `TermFormatter` 单测：给定 `ChatRow` 夹具，输出的行与 pi 1.5.0 在同列宽下的渲染逐行比对（夹具由真机 `pi` 在 80 列下的输出截取，存 `src/test/resources`），差异不超过 5%（仅允许宽字符边界差异）；`PiThemeLoader` 56 个 token 全部解析；`TermCoverageTest` 通过；外接键盘的 Esc / Enter / Alt+Enter / Ctrl+L / Shift+Tab 行为与 pi 一致（仪器测试） |
+| r3/calm | `UiCoverageTest` 通过（覆盖要求①的 UI 部分）；⌘ 搜索可按中文名和斜杠别名找到每个动作；深浅色截图评审；无任何 dsh、吉祥物资源引用（`grep` 检查写进测试） |
+| r3/models | 设置页只有「模型」一项（仪器测试断言设置页根节点只有一个分组）；42 个服务商可见、可配置；OAuth 登录冒烟；自定义服务商的发现和测试；生成中切模型提示下一轮生效；全仓不再出现 `cny`、`汇率`；`feature/models`、`core/catalog`、`core/store` 单测全绿 |
+| r3/app | `FormSwitchStreamingTest`（A 档必过，B 档在真机过）；`UiCoverageTest`、`TermCoverageTest` 在模拟器上过；`assembleDebug assembleDebugAndroidTest` 绿；`feature/usage` 已移除、文件浏览器已移除且没有残留引用；NOTICE 更新；真机清单完成 |
+
+---
+
+## 8. 复用、风险与取舍
+
+### 8.1 复用
+
+- **原样复用**：
+  - `core/protocol`（ChatReducer、RpcChannel、全部 33 命令和事件映射）、`core/engine`（PiEngine、EngineService）、`core/runtime`（PRoot 安装）；
+  - `core/catalog` 与 `core/store` 的服务商、OAuth、自定义、Key 加密；
+  - `feature/chat` 的 `ChatController`/`Outbox`/`ExtUi`/`SlashCompletion`/`ComposerLogic`；
+  - `feature/commands` 的 `DraftStore`/`PiSessionIndex`/`SessionScanner`/`SkillTemplateManager`；
+  - `feature/files` 的附件、分享、导出、`Ansi`/`OutputViewer`；
+  - `feature/usage` 的 `CompactionSummary`/`LineDiff`/`SessionTreeRows` 逻辑；
+  - W5 的 `PendingModel`（配好服务商后自动选模型）和 `MessageMenu` 的思路。
+- **重画**：所有 Composable 视觉。逻辑沿用，只换皮。
+
+### 8.2 风险与取舍
+
+| 风险 | 取舍或缓解 |
+|---|---|
+| 终端形态是「画出来的 TUI」，不是真 TUI，细节可能与 pi 有偏差 | 用 pi 在 80 列下的真实输出做像素无关的逐行文本比对（§7.5 r3/term）；配色直接用 pi 的 JSON，不手抄 |
+| 部分功能依赖桥接扩展（树内切换、标签、reload） | 扩展只调用 pi 的公开扩展 API；加载失败时动作退化为「需要重启引擎」，并在 `extension_error` 中提示；扩展源码随 App 版本固定在 pi 1.5.0 |
+| 动作表一开始就要列全，工作量前置 | r3/host 第一次推送只列 id 和入口（`run` 占位），三条界面工作流即可并行；覆盖测试从第一天就能跑，用来追踪进度 |
+| 设置页只剩模型，pi 设置收进 ⌘，用户可能找不到 | ⌘ 支持中文搜索；模型设置页底部有一行「pi 的其他设置在 ⌘ › pi 设置」 |
+| 进程环境变量类设置（离线、遥测）必须重启引擎 | 这是唯一允许重启的路径，界面明确确认；不属于「切换形态」 |
+| 删除大量代码引发冲突 | §7.2 属主删除、先断引用、gradle 由 host 单独小 PR |
+| Mermaid、自定义 pi 主题之类的长尾 | 终端形态先用字符画，UI 形态 Mermaid 放 P2；pi 主题 JSON 解析一次实现，两种形态都能读 |
+| 手机屏窄（约 40–48 列）时页脚放不下 | 照 pi 的截断规则：先省略统计段，再缩短路径；点页脚展开完整两行 |
+
+---
+
+## 9. 摘要
+
+- 一个 pi 进程、一个 `SessionHost`、一张 `PiActions` 动作表；终端和 UI 只是两种画法，切换时只换渲染层。
+- 设置页只剩模型配置。pi 的 `/settings` 作为功能放进 ⌘ 命令中心，保证 pi 的功能一项不少。
+- 删除：用量页、汇率、文件浏览器、Git 页、自动起名、回收站、dsh 视觉、吉祥物残留。保留：HTML 导出、`@` 文件搜索、附件、OAuth 和自定义服务商。
+- 覆盖率用 `PiFeatureCoverageTest` 机器核对，不靠人工对表；切换不中断用 JVM 和真机两级测试验证。
