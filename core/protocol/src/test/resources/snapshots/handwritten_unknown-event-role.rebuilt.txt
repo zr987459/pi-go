@@ -10,9 +10,9 @@ session=null model=null thinking=null status=null
 [tool-call_1] TOOL bash call_1 OK args={"command":"ls"} partial=null result="README.md" dur=null
 [tool-call_2] TOOL read call_2 ERROR args={"path":"x"} partial=null result="ENOENT" dur=null
 [tool-orphan] TOOL bash orphan OK args=null partial=null result="" dur=null
-[n-2] BASH id=null "git status" running=false exit=0 cancelled=false truncated=false exclude=false output="clean"
+[n-2] NOTICE INFO "执行了命令：git status（退出码 0）"
 [n-3] NOTICE INFO "分支摘要：之前的分支"
-[n-4] COMPACTION DONE reason=null before=1000 after=null summary="……" read=[] modified=[] error=null
+[n-4] NOTICE COMPACTION "已压缩上下文"
 [raw-5] RAW role=futureRole {"role":"futureRole","payload":{"a":1},"timestamp":7}
 [u-6] USER SENT "继续"
 [a-7] ASSISTANT streaming=false stop=aborted error=null

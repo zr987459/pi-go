@@ -166,8 +166,7 @@ class ChatReducerTest {
         s = r.reduce(s, ev("""{"type":"auto_retry_end","success":true,"attempt":2}"""), 0)
         assertNull(s.retry)
         s = r.reduce(s, ev("""{"type":"compaction_end","reason":"manual","result":{"summary":"s"},"aborted":false,"willRetry":false}"""), 0)
-        // feat/engine-rpc：压缩成功由「已压缩」提示行改为压缩卡（U3）
-        assertEquals(io.github.zr987459.pigo.contract.CompactionPhase.DONE, (s.items.last() as ChatItem.Compaction).phase)
+        assertEquals(NoticeKind.COMPACTION, (s.items.last() as ChatItem.Notice).kind)
         val before = s
         s = r.reduce(s, ev("""{"type":"compaction_end","aborted":false,"willRetry":false}"""), 0)
         assertEquals(before, s)

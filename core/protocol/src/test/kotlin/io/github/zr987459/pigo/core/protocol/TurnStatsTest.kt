@@ -2,6 +2,8 @@ package io.github.zr987459.pigo.core.protocol
 
 import io.github.zr987459.pigo.contract.ChatItem
 import io.github.zr987459.pigo.contract.ChatState
+import io.github.zr987459.pigo.contract.RunOutcome
+import io.github.zr987459.pigo.contract.RunOutcomeKind
 import io.github.zr987459.pigo.contract.ContentBlock
 import io.github.zr987459.pigo.contract.ExtUiRequest
 import io.github.zr987459.pigo.contract.ToolStatus
@@ -82,7 +84,7 @@ class TurnStatsTest {
         assertEquals("1h 2m 5s", formatTurnDuration(3_725_000))
     }
 
-    // ------------------------------------------------------------------ RunResult（N1）
+    // ------------------------------------------------------------------ RunOutcome（N1）
 
     @Test
     fun runResults() {
@@ -90,15 +92,19 @@ class TurnStatsTest {
             sessionFile = "/s.jsonl",
             items = listOf(
                 ChatItem.User("u", "q"),
-                ChatItem.Assistant("a", listOf(ContentBlock.Text(0, "完成了\n全部  工作")), streaming = false, stopReason = "stop"),
+                ChatItem.Assistant("a", listOf(ContentBlock.Text(0, "完成了\n全部  工作 sk-SECRET")), streaming = false, stopReason = "stop"),
             ),
         )
-        assertEquals(RunResult.Completed("/s.jsonl", null, "完成了 全部 工作"), RunResults.onSettled(ok, aborted = false))
-        assertNull("aborted 不通知", RunResults.onSettled(ok, aborted = true))
+        val redact: (String) -> String = { it.replace("sk-SECRET", "***") }
+        val done = RunResults.onSettled(ok, aborted = false, atMillis = 5, cwd = "/root/p", redact = redact)
+        assertEquals(RunOutcome(RunOutcomeKind.COMPLETED, "/s.jsonl", null, null, "完成了 全部 工作 ***", 5, "/root/p"), done)
+        assertEquals(RunOutcomeKind.ABORTED, RunResults.onSettled(ok, aborted = true, atMillis = 0, cwd = null).kind)
         val err = ok.copy(items = ok.items + ChatItem.Assistant("a2", emptyList(), false, "error", "401 Unauthorized"))
-        assertTrue(RunResults.onSettled(err, false) is RunResult.Failed)
+        assertEquals(RunOutcomeKind.ERROR, RunResults.onSettled(err, false, 0, null).kind)
         val ask = ExtUiRequest("ui-1", "confirm", title = "要删除吗？")
-        assertEquals(RunResult.NeedsInput("/s.jsonl", null, "ui-1", "要删除吗？"), RunResults.onUiRequest(ok, ask))
-        assertNull(RunResults.onUiRequest(ok, ExtUiRequest("ui-2", "notify", message = "hi")))
+        assertEquals(RunOutcome(RunOutcomeKind.NEEDS_INPUT, "/s.jsonl", null, "要删除吗？", null, 1, null), RunResults.onUiRequest(ok, ask, 1, null))
+        assertNull(RunResults.onUiRequest(ok, ExtUiRequest("ui-2", "notify", message = "hi"), 1, null))
+        val long = ok.copy(items = listOf(ChatItem.Assistant("a", listOf(ContentBlock.Text(0, "字".repeat(500))), false, "stop")))
+        assertEquals(RunResults.PREVIEW_MAX, RunResults.onSettled(long, false, 0, null).lastTextPreview!!.length)
     }
 }

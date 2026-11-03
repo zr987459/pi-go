@@ -2,12 +2,12 @@ package io.github.zr987459.pigo.core.protocol
 
 import io.github.zr987459.pigo.contract.ChatItem
 import io.github.zr987459.pigo.contract.ChatState
-import io.github.zr987459.pigo.contract.CompactionPhase
+import io.github.zr987459.pigo.contract.ImageInput
+import io.github.zr987459.pigo.contract.TimelineExtra
 import io.github.zr987459.pigo.contract.Delivery
 import io.github.zr987459.pigo.contract.NoticeKind
 import io.github.zr987459.pigo.contract.rpc.EngineEvent
 import io.github.zr987459.pigo.contract.rpc.EngineEvents
-import io.github.zr987459.pigo.contract.rpc.RpcImage
 import io.github.zr987459.pigo.contract.rpc.RpcResponse
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -43,12 +43,14 @@ class EngineRpcReducerTest {
 
     // ------------------------------------------------------------------ bash（C6）
 
+    private inline fun <reified T : TimelineExtra> ChatReducer.extras() = timelineExtras.filterIsInstance<T>()
+
     @Test
     fun bashUpdatesGoToTheirOwnCardById() {
         val r = ChatReducer()
-        var s = ChatState()
-        s = r.startBash(s, "c-1", "echo a", excludeFromContext = false, nowMillis = 1_000)
-        s = r.startBash(s, "c-2", "echo b", excludeFromContext = true, nowMillis = 1_100)
+        var s = ChatState(items = listOf(ChatItem.User("u-0", "hi")))
+        s = r.startBash(s, "c-1", "echo a", excludeFromContext = false)
+        s = r.startBash(s, "c-2", "echo b", excludeFromContext = true)
         for (line in listOf(
             """{"type":"bash_execution_update","id":"c-2","delta":"b1 "}""",
             """{"type":"bash_execution_update","id":"c-1","delta":"a1 "}""",
@@ -56,52 +58,59 @@ class EngineRpcReducerTest {
             """{"type":"bash_execution_update","id":"c-9","delta":"没有这张卡"}""",
             """{"type":"bash_execution_update","id":"c-1","delta":"a2"}""",
         )) s = r.reduce(s, ev(line), 1_200)
-        val (a, b) = s.all<ChatItem.Bash>()
+        val (a, b) = r.extras<TimelineExtra.Bash>()
         assertEquals("bash-c-1", a.key)
+        assertEquals("u-0", a.anchorKey)
         assertEquals("a1 a2", a.output)
         assertEquals("b1 b2", b.output)
-        assertTrue(b.excludeFromContext)
+        assertTrue(b.excludedFromContext)
         assertTrue(a.running && b.running)
+        assertEquals("时间线本身不变", listOf("u-0"), s.items.map { it.key })
 
         val res = ExtraResponses.bash(data("""{"id":"c-1","type":"response","command":"bash","success":true,"data":{"output":"a1 a2\n","exitCode":0,"cancelled":false,"truncated":false}}"""))
-        s = r.finishBash(s, "c-1", res, null, 1_500)
-        val done = s.all<ChatItem.Bash>().first()
+        s = r.finishBash(s, "c-1", res, null)
+        val done = r.extras<TimelineExtra.Bash>().first()
         assertFalse(done.running)
         assertEquals(0, done.exitCode)
         assertEquals("a1 a2\n", done.output)
-        assertEquals(500L, done.durationMs)
-        // 被中止：exitCode 为 null，cancelled
+        // 被中止：exitCode 为 null
         val ab = ExtraResponses.bash(data("""{"id":"c-2","type":"response","command":"bash","success":true,"data":{"output":"b1 b2","cancelled":true,"truncated":false}}"""))
-        s = r.finishBash(s, "c-2", ab, null, 1_600)
-        val c = s.all<ChatItem.Bash>()[1]
-        assertNull(c.exitCode)
-        assertTrue(c.cancelled)
+        assertTrue(ab.cancelled)
+        s = r.finishBash(s, "c-2", ab, null)
+        assertNull(r.extras<TimelineExtra.Bash>()[1].exitCode)
         // 后续的 delta 不再改已结束的卡
         s = r.reduce(s, ev("""{"type":"bash_execution_update","id":"c-1","delta":"late"}"""), 2_000)
-        assertEquals("a1 a2\n", s.all<ChatItem.Bash>().first().output)
+        assertEquals("a1 a2\n", r.extras<TimelineExtra.Bash>().first().output)
     }
 
     @Test
-    fun bashFromHistoryBecomesCard() {
+    fun bashFromHistoryBecomesCardAnchoredToNotice() {
         val msgs = RecordCodec.json.parseToJsonElement(
             """[{"role":"bashExecution","command":"echo hi","output":"hi\n","exitCode":0,"cancelled":false,"truncated":false,"timestamp":1}]""",
         ) as JsonArray
-        val b = ChatReducer().fromMessages(msgs).all<ChatItem.Bash>().single()
+        val r = ChatReducer()
+        val st = r.fromMessages(msgs)
+        val notice = st.all<ChatItem.Notice>().single()
+        val b = r.extras<TimelineExtra.Bash>().single()
+        assertEquals(notice.key, b.anchorKey)
         assertEquals("echo hi", b.command)
         assertEquals("hi\n", b.output)
         assertEquals(0, b.exitCode)
         assertFalse(b.running)
-        assertNull(b.bashId)
     }
 
     @Test
-    fun interruptEndsRunningBash() {
+    fun interruptEndsRunningBashAndCompaction() {
         val r = ChatReducer()
-        var s = r.startBash(ChatState(), "c-1", "sleep 9", false, 0)
+        var s = r.startBash(ChatState(), "c-1", "sleep 9", false)
+        s = r.reduce(s, ev("""{"type":"compaction_start","reason":"threshold"}"""), 0)
         s = r.interrupt(s, NoticeKind.INTERRUPTED, "引擎意外退出")
-        val b = s.all<ChatItem.Bash>().single()
+        val b = r.extras<TimelineExtra.Bash>().single()
         assertFalse(b.running)
-        assertTrue(b.errorMessage!!.isNotEmpty())
+        assertTrue(b.output.contains("未完成"))
+        val c = r.extras<TimelineExtra.Compaction>().single()
+        assertFalse(c.running)
+        assertTrue(c.aborted)
     }
 
     // ------------------------------------------------------------------ 压缩（U3）
@@ -111,62 +120,96 @@ class EngineRpcReducerTest {
     @Test
     fun compactResponseAndEventsReduceToOneCard() {
         val r = ChatReducer()
-        var s = ChatState(contextPercent = 87.5)
+        var s = ChatState(contextPercent = 87.5, items = listOf(ChatItem.User("u-0", "q")))
         s = r.reduce(s, ev("""{"type":"compaction_start","reason":"manual"}"""), 0)
-        val running = s.all<ChatItem.Compaction>().single()
-        assertEquals(CompactionPhase.RUNNING, running.phase)
-        assertEquals("manual", running.reason)
+        val running = r.extras<TimelineExtra.Compaction>().single()
+        assertTrue(running.running)
+        assertTrue(running.manual)
+        assertEquals("u-0", running.anchorKey)
         assertEquals(ChatReducer.COMPACTING, s.statusLine)
 
         val result = """{"summary":${RecordCodec.json.encodeToString(kotlinx.serialization.json.JsonPrimitive.serializer(), kotlinx.serialization.json.JsonPrimitive(summary))},"firstKeptEntryId":"e5","tokensBefore":150000,"estimatedTokensAfter":32000}"""
         s = r.reduce(s, ev("""{"type":"compaction_end","reason":"manual","result":$result,"aborted":false,"willRetry":false}"""), 0)
         // compact 的响应在事件之后到达：同一张卡，不重复
         val resp = ExtraResponses.compaction(data("""{"id":"c-3","type":"response","command":"compact","success":true,"data":$result}"""))!!
-        s = r.applyCompaction(s, resp, "manual")
-        val card = s.all<ChatItem.Compaction>().single()
-        assertEquals(CompactionPhase.DONE, card.phase)
+        s = r.applyCompaction(s, resp, manual = true)
+        val card = r.extras<TimelineExtra.Compaction>().single()
+        assertFalse(card.running)
         assertEquals(150_000L, card.tokensBefore)
-        assertEquals(32_000L, card.tokensAfter)
+        assertEquals(32_000L, card.estimatedTokensAfter)
         assertEquals("## 目标\n做测试", card.summary)
         assertEquals(listOf("README.md"), card.readFiles)
         assertEquals(listOf("src/a.kt", "src/b.kt"), card.modifiedFiles)
-        assertNull("压缩后上下文占用未知", s.contextPercent)
+        assertNull("压缩后上下文占用未知（U2）", s.contextPercent)
         assertNull(s.statusLine)
+        assertEquals(NoticeKind.COMPACTION, s.all<ChatItem.Notice>().single().kind)
     }
 
     @Test
     fun compactResponseWithoutEventsStillMakesCard() {
         val r = ChatReducer()
         val resp = ExtraResponses.compaction(RecordCodec.json.parseToJsonElement("""{"summary":"s","tokensBefore":10,"estimatedTokensAfter":2}"""))!!
-        val s = r.applyCompaction(ChatState(), resp)
-        val card = s.all<ChatItem.Compaction>().single()
+        val s = r.applyCompaction(ChatState(contextPercent = 50.0), resp)
+        val card = r.extras<TimelineExtra.Compaction>().single()
         assertEquals(10L, card.tokensBefore)
-        assertEquals(2L, card.tokensAfter)
+        assertEquals(2L, card.estimatedTokensAfter)
+        assertNull(s.contextPercent)
     }
 
     @Test
-    fun compactionFailureAndAbortLeaveNoticeNotCard() {
+    fun compactionFailureAndAbortMarkTheCard() {
         val r = ChatReducer()
         var s = r.reduce(ChatState(), ev("""{"type":"compaction_start","reason":"manual"}"""), 0)
         s = r.reduce(s, ev("""{"type":"compaction_end","reason":"manual","aborted":false,"willRetry":false,"errorMessage":"Compaction failed: Nothing to compact"}"""), 0)
-        assertTrue(s.all<ChatItem.Compaction>().isEmpty())
+        assertEquals("Compaction failed: Nothing to compact", r.extras<TimelineExtra.Compaction>().single().error)
         assertTrue(s.all<ChatItem.Notice>().single().text.startsWith("压缩上下文失败"))
         s = r.reduce(s, ev("""{"type":"compaction_start","reason":"threshold"}"""), 0)
         s = r.reduce(s, ev("""{"type":"compaction_end","reason":"threshold","aborted":true,"willRetry":false}"""), 0)
-        assertTrue(s.all<ChatItem.Compaction>().isEmpty())
+        val c = r.extras<TimelineExtra.Compaction>()
+        assertEquals(2, c.size)
+        assertTrue(c[1].aborted)
+        assertFalse(c[1].running)
+        assertFalse(c[1].manual)
         assertEquals("已取消压缩上下文", s.all<ChatItem.Notice>().last().text)
     }
 
     @Test
     fun compactionSummaryFromHistory() {
         val msgs = RecordCodec.json.parseToJsonElement(
-            """[{"role":"compactionSummary","summary":"正文\n\n<read-files>\na.md\n</read-files>","tokensBefore":9000,"timestamp":"2026-11-03T00:00:00Z"}]""",
+            """[{"role":"compactionSummary","summary":"正文\n\n<read-files>\na.md\n</read-files>","tokensBefore":9000,"timestamp":1}]""",
         ) as JsonArray
-        val c = ChatReducer().fromMessages(msgs).all<ChatItem.Compaction>().single()
-        assertEquals(CompactionPhase.DONE, c.phase)
+        val r = ChatReducer()
+        r.fromMessages(msgs)
+        val c = r.extras<TimelineExtra.Compaction>().single()
+        assertFalse(c.running)
         assertEquals(9000L, c.tokensBefore)
         assertEquals("正文", c.summary)
         assertEquals(listOf("a.md"), c.readFiles)
+    }
+
+    // ------------------------------------------------------------------ 轮末汇总（C10）
+
+    @Test
+    fun turnSummaryAfterSettledButNotAfterAbort() {
+        val r = ChatReducer()
+        var s = ChatState()
+        for ((t, line) in listOf(
+            0L to """{"type":"agent_start"}""",
+            0L to """{"type":"message_start","message":{"role":"user","content":"写文件"}}""",
+            100L to """{"type":"message_start","message":{"role":"assistant","content":[]}}""",
+            1_100L to """{"type":"message_end","message":{"role":"assistant","content":[{"type":"toolCall","id":"w1","name":"write","arguments":{"path":"/root/a.txt","content":"x"}}],"stopReason":"toolUse","usage":{"output":50}}}""",
+            1_200L to """{"type":"tool_execution_start","toolCallId":"w1","toolName":"write","args":{"path":"/root/a.txt","content":"x"}}""",
+            1_300L to """{"type":"tool_execution_end","toolCallId":"w1","toolName":"write","result":{"content":[{"type":"text","text":"ok"}]},"isError":false}""",
+            2_000L to """{"type":"agent_settled","aborted":false}""",
+        )) s = r.reduce(s, ev(line), t)
+        val sum = r.extras<TimelineExtra.TurnSummary>().single()
+        assertEquals(listOf("/root/a.txt"), sum.writtenFiles)
+        assertEquals(2_000L, sum.durationMs)
+        assertEquals(50L, sum.outputTokens)
+        assertEquals(s.items.last().key, sum.anchorKey)
+        s = r.reduce(s, ev("""{"type":"agent_start"}"""), 3_000)
+        s = r.reduce(s, ev("""{"type":"agent_settled","aborted":true}"""), 3_500)
+        assertEquals(1, r.extras<TimelineExtra.TurnSummary>().size)
     }
 
     // ------------------------------------------------------------------ 图片（C1）
@@ -174,7 +217,7 @@ class EngineRpcReducerTest {
     @Test
     fun imageBubbleIsConfirmedByTextAndImageSignature() {
         val r = ChatReducer()
-        val img = RpcImage("iVBORw0KGgo=", "image/png")
+        val img = ImageInput("image/png", "iVBORw0KGgo=")
         var s = r.addPendingUser(ChatState(), "local-0", "这是什么", listOf(img))
         s = r.reduce(
             s,
@@ -184,7 +227,9 @@ class EngineRpcReducerTest {
         val u = s.all<ChatItem.User>().single()
         assertEquals("local-0", u.key)
         assertEquals(Delivery.SENT, u.delivery)
-        assertEquals(listOf(img), r.userImages["local-0"])
+        val x = r.extras<TimelineExtra.UserImages>().single()
+        assertEquals("local-0", x.anchorKey)
+        assertEquals("iVBORw0KGgo=", x.images.single().base64Data)
         // 历史重建也带回图片
         val msgs = RecordCodec.json.parseToJsonElement(
             """[{"role":"user","content":[{"type":"text","text":"看"},{"type":"image","data":"AAAA","mimeType":"image/jpeg"}]}]""",
@@ -192,14 +237,14 @@ class EngineRpcReducerTest {
         val r2 = ChatReducer()
         val st = r2.fromMessages(msgs)
         val key = st.all<ChatItem.User>().single().key
-        assertEquals(listOf(RpcImage("AAAA", "image/jpeg")), r2.userImages[key])
+        assertEquals(listOf(ImageInput("image/jpeg", "AAAA")), r2.userImages[key])
     }
 
     @Test
     fun differentImageDoesNotConfirmWrongBubble() {
         val r = ChatReducer()
-        var s = r.addPendingUser(ChatState(), "local-0", "图", listOf(RpcImage("AAAA", "image/png")))
-        s = r.addPendingUser(s, "local-1", "图", listOf(RpcImage("BBBB", "image/png")))
+        var s = r.addPendingUser(ChatState(), "local-0", "图", listOf(ImageInput("image/png", "AAAA")))
+        s = r.addPendingUser(s, "local-1", "图", listOf(ImageInput("image/png", "BBBB")))
         s = r.reduce(
             s,
             ev("""{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"图"},{"type":"image","data":"BBBB","mimeType":"image/png"}]}}"""),
