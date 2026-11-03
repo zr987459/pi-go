@@ -1,6 +1,6 @@
 # feat/wiring（W5）状态
 
-**状态：接线主体已推送，等待 CI**（2026-11-03 16:5x CST，从 main@b54a507 切出）
+**状态：W2/W3/W4/UI 接线完成，CI 绿（31675bb）；等 W1（PR #13）合入后切 extras 真实实现；会话列表接 SessionIndex 待做**（2026-11-03 16:5x CST，从 main@b54a507 切出）
 
 ## 计划（按 docs/feature-gap.md §3.2 W5）
 1. 读 §3.2 W5 条目、各模块入口，确定接线点。
