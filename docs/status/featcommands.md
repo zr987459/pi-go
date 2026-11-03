@@ -1,5 +1,7 @@
 # feat/commands（W4）状态
 
+> **审查第 1 轮修复：修复1 进行中**（2026-11-03 15:5x CST 接手，基于 d2ac502）：先 merge origin/main（f1f0e02），再逐条修 Important 1–4、Nit 1–4，每条单独提交。
+
 **状态：实现与单测完成，已推送，等待 CI**（2026-11-03 15:40 CST）
 
 分支历史：14:55 从 main@f0a4a58 切出放状态文件 → 15:04 merge origin/feat/modules@749d7b2（W0 契约，CI 绿）→ 本次提交实现。W0 合入 main 后 `merge origin/main`（不 rebase、不 force）。
