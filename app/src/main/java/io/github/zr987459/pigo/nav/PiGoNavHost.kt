@@ -1,23 +1,28 @@
 package io.github.zr987459.pigo.nav
 
-import androidx.compose.foundation.layout.Column
+import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.key
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.rememberDrawerState
+import io.github.zr987459.pigo.core.ui.AppShape
+import io.github.zr987459.pigo.core.ui.DshTheme
+import io.github.zr987459.pigo.core.ui.GlassSurface
+import io.github.zr987459.pigo.core.ui.GlassTier
+import io.github.zr987459.pigo.core.ui.StatusDot
+import io.github.zr987459.pigo.core.ui.StatusTone
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Email
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.List
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -30,7 +35,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
@@ -58,11 +62,11 @@ import io.github.zr987459.pigo.feature.settings.SettingsScreen
 import kotlinx.coroutines.launch
 
 /** 四个顶层目的地。MVP 期间 feature 只提供页面，导航只在 :app。 */
-enum class Destination(val route: String, val label: String, val icon: ImageVector) {
-    Onboarding("onboarding", "安装", Icons.Filled.Home),
-    Chat("chat", "聊天", Icons.Filled.Email),
-    Sessions("sessions", "会话", Icons.Filled.List),
-    Settings("settings", "设置", Icons.Filled.Settings),
+enum class Destination(val route: String, val label: String) {
+    Onboarding("onboarding", "安装与运行环境"),
+    Chat("chat", "聊天"),
+    Sessions("sessions", "全部会话"),
+    Settings("settings", "设置"),
 }
 
 /** 设置页带可选定位参数：`settings?focus=models`（见 [SettingsFocus]）。 */
@@ -98,75 +102,169 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
         }
     }
 
-    Scaffold(
-        snackbarHost = { SnackbarHost(snackbar) },
-        bottomBar = {
-            NavigationBar {
-                Destination.entries.forEach { d ->
-                    NavigationBarItem(
-                        selected = current == d.route,
-                        onClick = { navController.navigateTopLevel(d) },
-                        icon = { Icon(d.icon, contentDescription = null) },
-                        label = { Text(d.label) },
-                        modifier = Modifier.testTag("nav:${d.route}"),
-                    )
-                }
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    fun go(d: Destination) {
+        scope.launch { drawerState.close() }
+        navController.navigateTopLevel(d)
+    }
+    val newChat: () -> Unit = {
+        scope.launch {
+            drawerState.close()
+            when (val r = graph.engine.newSession()) {
+                is Outcome.Ok -> navController.navigateTopLevel(Destination.Chat)
+                is Outcome.Err -> toast(sessionErrorText("新建会话", r))
+            }
+            runCatching { graph.sessions.refresh() }
+        }
+    }
+
+    // 抽屉打开时按返回键先关抽屉（审查 R1）。每次打开都重新注册一次回调，
+    // 保证它排在聊天页 / 设置页等页面自己的返回回调之后（后注册者优先）。
+    val drawerOpen = drawerState.targetValue == DrawerValue.Open || drawerState.isOpen
+    key(drawerOpen) {
+        BackHandler(enabled = drawerOpen) { scope.launch { drawerState.close() } }
+    }
+
+    // 抽屉里的会话列表：抽屉打开、当前会话变化、运行环境就绪时都重新读取（抽屉内容关着时也组合，
+    // SessionsScreen 自己的首次 refresh 只在启动时跑一次）。
+    val currentSession = graph.engine.chat.collectAsState().value.sessionFile
+    LaunchedEffect(drawerState) {
+        snapshotFlow { drawerState.targetValue }.collect { v ->
+            if (v == DrawerValue.Open) runCatching { graph.sessions.refresh() }
+        }
+    }
+    LaunchedEffect(currentSession, runtimeStatus.phase) {
+        if (runtimeStatus.phase == Phase.READY) runCatching { graph.sessions.refresh() }
+    }
+
+    // dsh-Go 的外壳：没有底部导航栏，页面切换都在左侧抽屉里（手势从左边缘拉出，scrim 渐暗）。
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        scrimColor = DshTheme.colors.scrim,
+        drawerContent = {
+            // dsh-Go：抽屉本身就是会话面板（搜索、分组、新建、长按删除、身份栏里的设置）。
+            PiGoDrawer(
+                current = current,
+                onDestination = ::go,
+                engineStatus = graph.engine.status.collectAsState().value,
+            ) { footer ->
+                SessionsPage(
+                    graph,
+                    onOpened = { go(Destination.Chat) },
+                    onError = ::toast,
+                    onOpenSettings = { go(Destination.Settings) },
+                    footer = footer,
+                )
             }
         },
-    ) { padding ->
-        NavHost(navController, startDestination = start.route, modifier = Modifier.padding(padding)) {
-            composable(Destination.Onboarding.route) {
-                OnboardingScreen(graph.runtime, onDone = { navController.navigateTopLevel(Destination.Chat) })
+    ) {
+        Box(Modifier.fillMaxSize()) {
+            NavHost(navController, startDestination = start.route, modifier = Modifier.fillMaxSize()) {
+                composable(Destination.Onboarding.route) {
+                    OnboardingScreen(
+                        graph.runtime,
+                        onDone = { navController.navigateTopLevel(Destination.Chat) },
+                        // 已装好（从抽屉进来）时左上角是返回；首次安装时引导页是起点，给「≡」打开抽屉。
+                        onBack = if (runtimeStatus.phase == Phase.READY) {
+                            { navController.navigateTopLevel(Destination.Chat) }
+                        } else {
+                            null
+                        },
+                        onOpenMenu = { scope.launch { drawerState.open() } },
+                    )
+                }
+                composable(Destination.Chat.route) {
+                    ChatPage(
+                        graph,
+                        onOpenModelSettings = { navController.openSettings(SettingsFocus.MODELS) },
+                        onOpenDrawer = { scope.launch { drawerState.open() } },
+                        onNewChat = newChat,
+                    )
+                }
+                // 完整页面版会话列表（抽屉之外的入口，保留路由以兼容深链接/测试）。
+                composable(Destination.Sessions.route) {
+                    SessionsPage(
+                        graph,
+                        onOpened = { navController.navigateTopLevel(Destination.Chat) },
+                        onError = ::toast,
+                        onOpenSettings = { navController.navigateTopLevel(Destination.Settings) },
+                    )
+                }
+                composable(
+                    SETTINGS_PATTERN,
+                    arguments = listOf(navArgument("focus") { type = NavType.StringType; nullable = true; defaultValue = null }),
+                ) { entry ->
+                    SettingsPage(graph, focus = entry.arguments?.getString("focus"), onBack = { navController.navigateTopLevel(Destination.Chat) })
+                }
             }
-            composable(Destination.Chat.route) {
-                ChatPage(graph, onOpenModelSettings = { navController.openSettings(SettingsFocus.MODELS) })
-            }
-            composable(Destination.Sessions.route) {
-                SessionsPage(graph, onOpened = { navController.navigateTopLevel(Destination.Chat) }, onError = ::toast)
-            }
-            composable(
-                SETTINGS_PATTERN,
-                arguments = listOf(navArgument("focus") { type = NavType.StringType; nullable = true; defaultValue = null }),
-            ) { entry ->
-                SettingsPage(graph, focus = entry.arguments?.getString("focus"))
-            }
+            SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 96.dp))
         }
     }
 }
 
 @Composable
-private fun ChatPage(graph: AppGraph, onOpenModelSettings: () -> Unit) {
+private fun ChatPage(graph: AppGraph, onOpenModelSettings: () -> Unit, onOpenDrawer: () -> Unit, onNewChat: () -> Unit) {
     val chat by graph.engine.chat.collectAsState()
     var noModel by remember { mutableStateOf(false) }
     // 从设置层取「是否配置过模型」；模型变化（保存设置后引擎重启）时重新读取。
     LaunchedEffect(chat.model) {
         noModel = chat.model == null && runCatching { graph.providerConfig.configured() }.getOrDefault(emptyList()).isEmpty()
     }
-    Column(Modifier.fillMaxSize()) {
-        if (noModel) {
-            Surface(color = MaterialTheme.colorScheme.tertiaryContainer, modifier = Modifier.fillMaxWidth().testTag("chat:noModel")) {
-                Row(Modifier.padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("还没有配置模型，pi 暂时无法回答。", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                    TextButton(onClick = onOpenModelSettings, modifier = Modifier.testTag("chat:goSettings")) { Text("去设置模型") }
-                }
-            }
+    ChatScreen(
+        graph.chatDeps.controller,
+        Modifier.fillMaxSize(),
+        onOpenModelSettings = onOpenModelSettings,
+        onOpenDrawer = onOpenDrawer,
+        onNewChat = onNewChat,
+        // 「选择模型▾」「+」的完整功能由功能工作流接入：这里先用 ChatScreen 的默认行为（内置下拉 / 暂不支持提示）。
+        onModelClick = null,
+        onAttachClick = null,
+        topBanner = if (noModel) {
+            { NoModelBanner(onOpenModelSettings) }
+        } else {
+            null
+        },
+    )
+}
+
+/** 没配模型：输入条上方的 Chrome 胶囊横幅（dsh-Go 的横幅都是胶囊）。 */
+@Composable
+private fun NoModelBanner(onOpenModelSettings: () -> Unit) {
+    GlassSurface(Modifier.fillMaxWidth().padding(bottom = 8.dp).testTag("chat:noModel"), GlassTier.Chrome, AppShape.Lg) {
+        Row(Modifier.padding(start = 16.dp, end = 6.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            StatusDot(StatusTone.Warn)
+            Spacer(Modifier.width(10.dp))
+            Text("还没有配置模型，pi 暂时无法回答。", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            TextButton(onClick = onOpenModelSettings, modifier = Modifier.testTag("chat:goSettings")) { Text("去设置模型") }
         }
-        ChatScreen(graph.chatDeps.controller, Modifier.weight(1f), onOpenModelSettings = onOpenModelSettings)
     }
 }
 
 @Composable
-private fun SessionsPage(graph: AppGraph, onOpened: () -> Unit, onError: (String) -> Unit) {
+private fun SessionsPage(
+    graph: AppGraph,
+    onOpened: () -> Unit,
+    onError: (String) -> Unit,
+    onOpenSettings: (() -> Unit)? = null,
+    footer: (@Composable () -> Unit)? = null,
+) {
     val chat by graph.engine.chat.collectAsState()
     SessionsScreen(
         repository = graph.sessions,
+        onOpenSettings = onOpenSettings,
+        footer = footer,
         currentGuestPath = chat.sessionFile,
         onOpen = { s ->
-            when (val r = graph.engine.openSession(s.guestPath, s.cwd)) {
-                is Outcome.Ok -> onOpened()
-                is Outcome.Err -> {
-                    graph.log.w("nav", "打开会话失败：${r.code} ${r.message}")
-                    onError(sessionErrorText("打开会话", r))
+            // 点的是当前会话：只关抽屉 / 回聊天，不再调一次 openSession（审查 R1）。
+            if (s.guestPath == chat.sessionFile) {
+                onOpened()
+            } else {
+                when (val r = graph.engine.openSession(s.guestPath, s.cwd)) {
+                    is Outcome.Ok -> onOpened()
+                    is Outcome.Err -> {
+                        graph.log.w("nav", "打开会话失败：${r.code} ${r.message}")
+                        onError(sessionErrorText("打开会话", r))
+                    }
                 }
             }
         },
@@ -190,7 +288,7 @@ private fun SessionsPage(graph: AppGraph, onOpened: () -> Unit, onError: (String
 }
 
 @Composable
-private fun SettingsPage(graph: AppGraph, focus: String?) {
+private fun SettingsPage(graph: AppGraph, focus: String?, onBack: () -> Unit) {
     val runtimeStatus by graph.runtime.status.collectAsState()
     val scope = rememberCoroutineScope()
     val app = LocalContext.current.applicationContext
@@ -205,6 +303,7 @@ private fun SettingsPage(graph: AppGraph, focus: String?) {
         focus = focus,
         discoverModels = StoreBindings.discoverModels(BindingMode.store, graph.secrets),
         testConnection = StoreBindings.testConnection(BindingMode.store, ctx, graph.secrets, graph.runtime),
+        onBack = onBack,
     )
 }
 
