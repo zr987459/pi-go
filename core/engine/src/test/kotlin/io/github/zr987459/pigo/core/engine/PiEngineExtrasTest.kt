@@ -478,4 +478,54 @@ class PiEngineExtrasTest {
         assertNull("fork 后应全量重拉，不拿旧 lastId 增量", gets.last().str("since"))
         e.close()
     }
+
+    /**
+     * 审查第 3 轮 Nit 2：全量 get_entries 因会话太大失败后，同一会话内的 message_end 不再触发全量重拉；
+     * 手动 entries(null) 成功或换会话后才再拉。
+     */
+    @Test
+    fun tooLargeFullEntriesBacksOffUntilSessionChanges() = runBlocking {
+        var tooLarge = true
+        val rt = ScriptedRuntime {
+            { cmd ->
+                when (cmd.str("type")) {
+                    "get_entries" -> if (tooLarge && cmd.str("since") == null) fail(cmd, io.github.zr987459.pigo.core.protocol.RpcChannel.TOO_LARGE) else ok(cmd, entries)
+                    "prompt" -> {
+                        ok(cmd, """{"disposition":"started"}""")
+                        emit("""{"type":"agent_start"}""")
+                        emit("""{"type":"message_start","message":{"role":"user","content":"再一句"}}""")
+                        emit("""{"type":"message_end","message":{"role":"user","content":"再一句"}}""")
+                        emit("""{"type":"message_start","message":{"role":"assistant","content":[]}}""")
+                        emit("""{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"好"}],"stopReason":"stop"}}""")
+                        emit("""{"type":"agent_end","messages":[]}""")
+                        emit("""{"type":"agent_settled","aborted":false}""")
+                    }
+                    else -> basics(cmd)
+                }
+            }
+        }
+        val e = engine(rt)
+        assertTrue(e.openSession("/root/.pi/agent/sessions/x.jsonl", "/root/pi-cwd") is Outcome.Ok)
+        fun fulls() = rt.last.received.count { it.str("type") == "get_entries" && it.str("since") == null }
+        waitFor { fulls() >= 1 }
+        delay(300)
+        val after = fulls()
+        repeat(2) {
+            e.send("再一句")
+            waitFor { !e.chat.value.running }
+            delay(200)
+        }
+        assertEquals("同一会话内不再自动全量重拉", after, fulls())
+        assertTrue(e.messageMeta.value.isEmpty())
+        // 手动全量重试成功：解除退避，messageMeta 恢复
+        tooLarge = false
+        assertTrue(e.entries(null) is Outcome.Ok)
+        waitFor { e.messageMeta.value.size == 2 }
+        // 换会话（epoch 变化）后同样会再拉
+        tooLarge = true
+        val before = fulls()
+        assertTrue(e.openSession("/root/.pi/agent/sessions/y.jsonl", "/root/pi-cwd") is Outcome.Ok)
+        waitFor { fulls() > before }
+        e.close()
+    }
 }
