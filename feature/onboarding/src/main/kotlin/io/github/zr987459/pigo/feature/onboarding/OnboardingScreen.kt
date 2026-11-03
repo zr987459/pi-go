@@ -26,7 +26,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TextButtonDefaults
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -311,7 +311,7 @@ private fun ColumnScope.ProgressView(
     if (ui.log.isNotEmpty() && view != SetupView.FAILED) {
         TextButton(
             onClick = onToggleLog,
-            colors = TextButtonDefaults.textButtonColors(contentColor = scheme.onSurfaceVariant),
+            colors = ButtonDefaults.textButtonColors(contentColor = scheme.onSurfaceVariant),
             modifier = Modifier.align(Alignment.CenterHorizontally),
         ) { Text("查看日志") }
     }
