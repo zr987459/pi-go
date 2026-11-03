@@ -1,23 +1,16 @@
 # feat/engine-rpc（W1）状态
 
-- 2026-11-03 14:52 CST：**已开始**。
-- 依据：`feat/gap` 分支 `docs/feature-gap.md` §3.2 W1、§3.3。
-- 分支来源：为满足“2 分钟内推状态文件”，先从 `main@f0a4a58` 建分支只放本文件；`origin/feat/modules` 出现契约（`contract/EngineExtras.kt` 等）且 CI 绿后，`git merge origin/feat/modules`（不 rebase、不强推）再开工；W0 合入 main 后 `git merge origin/main`。
+- 2026-11-03 15:47 CST：**续做已开始**（接手上一位 W1 工作者；其本地未推送的 15 个文件已丢失，按交接说明重做）。
+- 已 merge `origin/feat/modules@f183692`（W0 契约第 1 轮修复：messageMeta、CycleModelResult、RunOutcome.cwd、Compaction.error/aborted），merge 提交 `17640cf`。不 rebase、不强推。PR #8 仍未合入 main。
+- 依据：`docs/feature-gap.md` §3.2 W1、§3.3。
 
-## 计划
-1. 通读：feature-gap.md、DESIGN.md、REVIEW.md、现有 `core/protocol`/`core/engine`/`rpc/*`、pi 1.5.0 `dist/modes/rpc/rpc-types.d.ts`、Pi-Web 对应实现、dsh-Go 对应实现。
-2. 协议层：在 `rpc/RpcCommand.kt`、`rpc/RpcRecords.kt` 只追加 images、get_commands、bash/abort_bash/bash_execution_update、get_last_assistant_text、get_fork_messages/fork/clone/get_tree、get_entries、get_session_stats（完整）、compact 与 compaction 事件、set_auto_compaction/set_auto_retry/set_steering_mode/set_follow_up_mode、export_html。
-3. 引擎层：`EngineExtras` 真实实现（`core/engine`），ChatItem 新子类（压缩卡、bash 卡，只追加），contextUsage.percent==null → contextPercent==null，C10 派生数据（本轮改动文件、耗时、速率）。
-4. N1：任务通知通道 + `RunOutcome`（完成/出错/需要回答，aborted 不发）。
-5. `EngineBindings.kt` 接入；契约缺方法时在 `core/engine` 内加适配层，不改 W0 契约。
-6. 测试：JVM 快照单测；桌面真 pi 1.5.0 集成测试（realpi/）；通知 Robolectric。
-7. `docs/notices/feat-engine-rpc.md`、`docs/protocol/**`；开 PR 到 main。
+## 已完成（远端）
+- `905ec41` 协议层：RpcCommand/RpcRecords 只追加 21 个命令与新事件；core/protocol 新事件解码、超时表、get_tree 深层 JSON 栈溢出修复、ExtraResponses/CompactionSummary/TurnStats/RunResults 初版；rpc-types.d.ts 字段核对与序列化快照测试。
+- `1a8de06`、`17640cf`：合入 feat/modules。
 
-## 阶段
-- [x] 阅读与计划（15:00）
-- [ ] 等待 W0 契约（15:10 已见 feat/modules@749d7b2 契约提交，push CI 绿；PR #8 审查中）
-- [x] 协议层（15:12）：`rpc/RpcCommand.kt`、`rpc/RpcRecords.kt` 只追加；`core/protocol` 新增解析、压缩卡/bash 卡归约、C10 计时、RunResult；JVM 单测通过
-- [ ] 引擎层
-- [ ] 通知
-- [ ] 测试与 CI
-- [ ] PR
+## 剩余（按顺序）
+1. 重做丢失的协议层改动：Chat.kt 保持 main 原样；ExtraResponses 直接产出契约类型；ChatReducer 维护 timelineExtras（压缩卡含 error/aborted、bash 卡、带图确认、TurnSummary）；RunResults 产出契约 RunOutcome（含 ABORTED、cwd）。
+2. 引擎层：PiEngine 实现 EngineExtras（含 messageMeta：get_entries 全量 + entry_appended 增量；cycleModelResult 直接解析响应）；stats() 的 contextPercent 不回退旧值；发布 timelineExtras/runOutcomes；EngineConfig.timeoutFor 用新超时表；EngineBindings.kt 接入。
+3. N1 任务通知（pigo-tasks 通道，后台才发，ABORTED 不发）。
+4. 真 pi 1.5.0 集成测试。
+5. notices、docs/protocol、assembleDebug、开 PR。
