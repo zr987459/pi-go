@@ -1,12 +1,12 @@
 # feat/wiring（W5）状态
 
-> **审查第 1 轮修复进行中**（2026-11-03 17:42 CST，接手续做）：
+> **审查第 1 轮修复完成**（2026-11-03 17:42 CST，接手续做）：
 > - 17:58 修复1 ✅：`AppGraph.liveExtras`（仅 REAL 时非 null）传给 ChatController；时间线附加项、长按分叉、上下文小环、抽屉「会话树 / 技能与模板 / 用量」只在 REAL 时出现，直达路由显示「需要新版引擎」。
 > - 17:58 修复2 ✅：长按菜单用 rememberUpdatedState 读最新 text / entryId；新增 feature/chat `LongPressMenuTest`（仪器）。
 > - 17:58 修复3 ✅：feature/models `ModelPicker` 新增 `onConfigureModel(ModelRef)`（旧回调保留），`PickerLogic.Click.Configure` 带 ref；`PendingModel` 存 ModelRef，回聊天 setModel 到被点的模型；配置页返回清空、只在真正配置后回聊天（Nit）；WiringSmokeTest ① 断言 provider + id。
 > - 18:08 修复4 ✅：会话长按菜单新增「导出」→ W3 `ExportSheet(graph.workspace.exporter, guestPath)`；feature/settings 新增 `SessionDefaultsScreen`（M8 四个开关，经 extras.setAutoCompaction / setAutoRetry / setSteeringMode / setFollowUpMode，pi 写入 settings.json），设置首页「会话默认」入口仅 REAL 时显示；副标题改成与实际一致。
 > - 18:08 Nit：抽屉高亮去掉查询参数；缩略图在 IO 线程按 96dp 采样解码；「去配置」返回时清空 PendingModel、只在真正已配置时回聊天；真机清单标题注明「待真机填写」。
-> - 进行中：本地编译与单测、CI。
+> - 18:10 本地：app 10/10、feature:chat 92/92、models 8/8、settings 15/15、sessions 16/16 单测通过；assembleDebug 与三个 assembleDebugAndroidTest 通过。PR 描述已追加修复表与测试结果。W1（PR #13）仍未合入，extras 保持 FAKE（生产路径不使用）。
 
 > **等待 W1**（2026-11-03 17:3x CST）：PR #13 feat/engine-rpc 仍未合入 main（main@f9097eb）。合入后：merge origin/main → `ExtrasBindings.real()` 返回 W1 的 `EngineBindings.extras(engine)`（PiEngine 本身实现 EngineExtras）→ `BindingMode.extras = REAL` → `WorkspaceBindings` 当前会话 HTML 导出改走 `extras.exportHtml` → 「从这里分叉」随 messageMeta 可用 → 全量单测。
 
