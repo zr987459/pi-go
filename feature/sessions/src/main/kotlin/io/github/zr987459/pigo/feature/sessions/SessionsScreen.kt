@@ -111,6 +111,7 @@ fun SessionsPlaceholder(repository: SessionRepository, modifier: Modifier = Modi
  * @param onBeforeDeleteCurrent 删除当前会话前调用；返回失败原因（null 表示成功），失败则不删除。为 null 时当前会话不能删除。
  * @param onOpenSettings 身份栏的「设置」圆钮；为 null 时不显示。
  * @param footer 列表与身份栏之间的可选附加行（抽屉里放「安装与运行环境」入口）；为 null 时不占位。
+ * @param onExport 长按菜单「导出」（W3 ExportSheet：Markdown / JSONL / HTML）；为 null 时不显示（审查第 1 轮 Important 4）。
  * @param index W4 会话索引（feature-gap §3.2 W5）：非 null 时搜索走全文搜索（名字 + 用户消息，显示命中片段），
  *   列表改为「置顶」+ 按工作目录分组，长按菜单多出「置顶 / 取消置顶」。为 null 时保持按日期分组、本地筛选。
  */
@@ -126,6 +127,7 @@ fun SessionsScreen(
     onOpenSettings: (() -> Unit)? = null,
     footer: (@Composable () -> Unit)? = null,
     index: SessionIndex? = null,
+    onExport: ((SessionSummary) -> Unit)? = null,
 ) {
     val sessions by repository.observe().collectAsState(initial = null)
     val pinned by remember(index) {
@@ -314,6 +316,26 @@ fun SessionsScreen(
                                             .onSuccess { toast(if (isPinned) "已取消置顶" else "已置顶") }
                                             .onFailure { toast("没能${if (isPinned) "取消置顶" else "置顶"}：${it.message ?: it.javaClass.simpleName}") }
                                     }
+                                },
+                        )
+                    }
+                }
+                if (onExport != null) {
+                    Surface(
+                        shape = RoundedCornerShape(20.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp).fillMaxWidth(),
+                    ) {
+                        ListItem(
+                            headlineContent = { Text("导出") },
+                            supportingContent = { Text("Markdown、JSONL 或 HTML，保存或分享") },
+                            leadingContent = { AppIcon(AppIcons.share, null, size = 22.dp) },
+                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                            modifier = Modifier
+                                .testTag("sessions:actionExport")
+                                .clickable {
+                                    actionsFor = null
+                                    onExport(s)
                                 },
                         )
                     }

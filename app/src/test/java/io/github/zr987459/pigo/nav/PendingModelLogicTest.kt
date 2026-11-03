@@ -36,3 +36,12 @@ class PendingModelLogicTest {
         assertFalse("没有待选模型（从设置首页进来）", PendingModelLogic.shouldReturn(null, "anthropic", configured = true))
     }
 }
+
+class ThumbnailsTest {
+    @Test
+    fun sampleSizeKeepsAtLeastTarget() {
+        assertEquals(1, Thumbnails.sampleSize(100, 100, 96))
+        assertEquals(16, Thumbnails.sampleSize(4000, 3000, 96))
+        assertEquals(1, Thumbnails.sampleSize(0, 0, 96))
+    }
+}

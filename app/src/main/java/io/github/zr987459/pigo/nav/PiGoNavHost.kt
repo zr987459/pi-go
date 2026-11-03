@@ -57,6 +57,7 @@ import io.github.zr987459.pigo.di.StoreBindings
 import io.github.zr987459.pigo.feature.chat.ui.ChatScreen
 import io.github.zr987459.pigo.feature.onboarding.OnboardingScreen
 import io.github.zr987459.pigo.feature.sessions.SessionsScreen
+import io.github.zr987459.pigo.feature.files.export.ExportSheet
 import io.github.zr987459.pigo.feature.settings.SettingsFocus
 import io.github.zr987459.pigo.feature.settings.SettingsScreen
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -207,7 +208,7 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
                     )
                 }
                 composable(Routes.SETTINGS_HUB) {
-                    SettingsHub(onOpen = { r -> navController.navigate(r) { launchSingleTop = true } }, onBack = { navController.popBackStack() })
+                    SettingsHub(onOpen = { r -> navController.navigate(r) { launchSingleTop = true } }, onBack = { navController.popBackStack() }, extrasReady = graph.extrasReady)
                 }
                 composable(Routes.PROVIDERS) {
                     ProvidersPage(
@@ -230,6 +231,7 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
                 }
                 composable(Routes.CUSTOM_PROVIDER) { CustomProviderPage(graph, onBack = { navController.popBackStack() }) }
                 composable(Routes.NETWORK) { NetworkPage(graph, onBack = { navController.popBackStack() }) }
+                composable(Routes.SESSION_DEFAULTS) { SessionDefaultsPage(graph, onBack = { navController.popBackStack() }) }
                 composable(Routes.TREE) {
                     if (!graph.extrasReady) {
                         NeedsNewEnginePage("会话树", "tree") { navController.navigateTopLevel(Destination.Chat) }
@@ -440,9 +442,13 @@ private fun SessionsPage(
 ) {
     val sessionFile by remember(graph) { graph.engine.chat.map { it.sessionFile }.distinctUntilChanged() }
         .collectAsState(initial = graph.engine.chat.value.sessionFile)
+    // 会话长按「导出」→ W3 ExportSheet（Markdown / JSONL / HTML；审查第 1 轮 Important 4）。
+    var exporting by remember { mutableStateOf<String?>(null) }
+    exporting?.let { path -> ExportSheet(graph.workspace.exporter, path) { exporting = null } }
     SessionsScreen(
         repository = graph.sessions,
         index = graph.commands.sessionIndex,
+        onExport = { s -> exporting = s.guestPath },
         onOpenSettings = onOpenSettings,
         footer = footer,
         currentGuestPath = sessionFile,

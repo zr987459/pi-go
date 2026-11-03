@@ -37,6 +37,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -59,6 +60,8 @@ import io.github.zr987459.pigo.core.ui.GlassTier
 import io.github.zr987459.pigo.feature.commands.skills.SkillsController
 import io.github.zr987459.pigo.feature.commands.ui.SkillsContent
 import io.github.zr987459.pigo.feature.models.CustomProviderScreen
+import io.github.zr987459.pigo.feature.settings.session.SessionDefaultsController
+import io.github.zr987459.pigo.feature.settings.session.SessionDefaultsScreen
 import io.github.zr987459.pigo.feature.models.NetworkAndCostScreen
 import io.github.zr987459.pigo.feature.models.ProviderConfigScreen
 import io.github.zr987459.pigo.feature.models.ProviderListScreen
@@ -146,13 +149,17 @@ internal fun NeedsNewEnginePage(title: String, tag: String, onBack: () -> Unit) 
 
 /** 设置首页（W5）：服务商与登录（W2）、代理与费用显示、运行环境与高级（旧设置页）、导出（W3）。 */
 @Composable
-internal fun SettingsHub(onOpen: (String) -> Unit, onBack: () -> Unit) {
+internal fun SettingsHub(onOpen: (String) -> Unit, onBack: () -> Unit, extrasReady: Boolean = false) {
     SubPage("设置", "settingsHub", onBack) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             HubRow("服务商与登录", "42 个服务商的 Key / OAuth、自定义端点", "hub:providers") { onOpen(Routes.PROVIDERS) }
-            HubRow("代理、费用显示与会话默认", "HTTP 代理、人民币换算", "hub:network") { onOpen(Routes.NETWORK) }
+            HubRow("代理与费用显示", "HTTP 代理、人民币换算", "hub:network") { onOpen(Routes.NETWORK) }
+            // M8 依赖 W1 的 set_auto_* / set_*_mode：真实 extras 才显示（审查第 1 轮 Important 4）。
+            if (extrasReady) {
+                HubRow("会话默认", "自动压缩、自动重试、插话与排队方式", "hub:sessionDefaults") { onOpen(Routes.SESSION_DEFAULTS) }
+            }
             HubRow("运行环境与高级", "修复运行环境、旧版模型设置", "hub:advanced") { onOpen(Routes.ADVANCED) }
-            HubRow("文件与导出", "浏览工作区、Git 改动；导出会话在会话列表长按或文件页", "hub:export") { onOpen(Routes.FILES) }
+            HubRow("文件与导出", "浏览工作区、Git 改动；导出会话：在会话列表里长按会话", "hub:export") { onOpen(Routes.FILES) }
         }
     }
 }
@@ -220,6 +227,20 @@ internal fun CustomProviderPage(graph: AppGraph, onBack: () -> Unit) {
 @Composable
 internal fun NetworkPage(graph: AppGraph, onBack: () -> Unit) {
     SubPage("代理与费用显示", "network", onBack) { NetworkAndCostScreen(graph.models.settings) }
+}
+
+/** M8 会话默认（只在真实 extras 时有入口）。 */
+@Composable
+internal fun SessionDefaultsPage(graph: AppGraph, onBack: () -> Unit) {
+    val extras = graph.liveExtras
+    SubPage("会话默认", "sessionDefaults", onBack) {
+        if (extras == null) {
+            Text("需要新版引擎：会话默认设置依赖 pi 引擎的扩展能力，当前版本尚未接入。", Modifier.padding(16.dp).testTag("page:needsEngine"))
+        } else {
+            val controller = remember(graph) { SessionDefaultsController(extras, graph.appScope) }
+            SessionDefaultsScreen(controller)
+        }
+    }
 }
 
 @Composable
@@ -384,20 +405,38 @@ private fun BashCard(extra: TimelineExtra.Bash, modifier: Modifier) {
 private fun UserImagesRow(extra: TimelineExtra.UserImages, modifier: Modifier) {
     Row(modifier.fillMaxWidth().testTag("extra:images"), horizontalArrangement = Arrangement.End) {
         for (img in extra.images.take(4)) {
-            val bmp = remember(img.base64Data) {
-                runCatching {
-                    val bytes = Base64.decode(img.base64Data, Base64.DEFAULT)
-                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
-                }.getOrNull()
+            // 在 IO 线程按 96dp 采样解码（审查 Nit：不在组合阶段、主线程解整张位图）。
+            val px = with(androidx.compose.ui.platform.LocalDensity.current) { 96.dp.roundToPx() }
+            val bmp by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, img.base64Data, px) {
+                value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { Thumbnails.decode(img.base64Data, px)?.asImageBitmap() }
             }
-            if (bmp != null) {
-                Image(bmp, img.displayName ?: "图片", Modifier.padding(start = 6.dp).size(96.dp), contentScale = ContentScale.Crop)
+            val b = bmp
+            if (b != null) {
+                Image(b, img.displayName ?: "图片", Modifier.padding(start = 6.dp).size(96.dp), contentScale = ContentScale.Crop)
             } else {
                 Text("[图片]", Modifier.padding(start = 6.dp))
             }
         }
         Spacer(Modifier.size(0.dp))
     }
+}
+
+/** 缩略图解码：先读尺寸，再按目标边长取 2 的幂 inSampleSize。 */
+internal object Thumbnails {
+    fun sampleSize(width: Int, height: Int, target: Int): Int {
+        if (width <= 0 || height <= 0 || target <= 0) return 1
+        var n = 1
+        while (width / (n * 2) >= target && height / (n * 2) >= target) n *= 2
+        return n
+    }
+
+    fun decode(base64: String, target: Int): android.graphics.Bitmap? = runCatching {
+        val bytes = Base64.decode(base64, Base64.DEFAULT)
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        val opts = BitmapFactory.Options().apply { inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight, target) }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+    }.getOrNull()
 }
 
 /** 新路由（W5）。 */
@@ -407,6 +446,7 @@ object Routes {
     const val PROVIDER = "provider/{id}"
     const val CUSTOM_PROVIDER = "customProvider"
     const val NETWORK = "network"
+    const val SESSION_DEFAULTS = "sessionDefaults"
     const val ADVANCED = "settings"
     const val TREE = "tree"
     const val SKILLS = "skills"
