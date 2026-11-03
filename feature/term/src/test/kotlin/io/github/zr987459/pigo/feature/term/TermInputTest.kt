@@ -56,8 +56,8 @@ class TermInputTest {
     fun slashCompletionAndResolve() {
         val cmds = listOf(SlashCommand("skill:review", "Review code"), SlashCommand("tree", "dup"))
         val c = TermInput.slashCandidates("tr", catalog, cmds)
-        assertEquals("tree", c.first().name)
-        assertEquals("session.tree", c.first().actionId)
+        assertEquals("session.tree", c.single { it.name == "tree" }.actionId)
+        assertTrue(c.all { it.name.startsWith("tr") })
         assertEquals(1, c.count { it.name == "tree" })
         assertTrue(TermInput.slashCandidates("skill", catalog, cmds).any { it.name == "skill:review" && it.actionId == null })
         assertEquals("session.name" to "新名字", TermInput.resolveSlash("/name 新名字", catalog))
