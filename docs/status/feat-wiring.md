@@ -1,5 +1,7 @@
 # feat/wiring（W5）状态
 
+> **续做进行中（2026-11-03 17:2x CST）**：会话面板接 SessionIndex（搜索/分组/置顶）；CI 追加 `:app:assembleDebugAndroidTest`；等 W1 合入后切 extras REAL；ModelPicker 自动选回模型。
+
 **状态：W2/W3/W4/UI 接线完成，CI 绿（31675bb）；等 W1（PR #13）合入后切 extras 真实实现；会话列表接 SessionIndex 待做**（2026-11-03 16:5x CST，从 main@b54a507 切出）
 
 ## 计划（按 docs/feature-gap.md §3.2 W5）
