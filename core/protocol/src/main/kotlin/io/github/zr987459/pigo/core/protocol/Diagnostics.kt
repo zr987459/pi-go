@@ -31,7 +31,7 @@ object StderrClassifier {
             ErrCode.ENGINE_START, "pi 安装不完整", FixAction.REPAIR_RUNTIME,
             r(
                 "Cannot find module", "ERR_MODULE_NOT_FOUND", "pi: not found", "pi: command not found", "node: not found",
-                "No such file or directory.*(\\bpi\\b|node)", "exec format error",
+                "No such file or directory.*(\\bpi\\b|node)", "(\\bpi|node)'?: No such file or directory", "exec format error",
             ),
         ),
         Rule(

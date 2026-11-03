@@ -1,0 +1,31 @@
+// 手写夹具：乱序与校正——delta 后被 *_end / message_end 的权威内容覆盖、缺 message_start、工具事件缺 start、压缩失败/取消、重试最终失败。
+{"type":"agent_start"}
+{"type":"message_start","message":{"role":"user","content":"做点事","timestamp":1}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"错字"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_end","contentIndex":0,"content":"权威文本"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":1,"delta":"嗯"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_end","contentIndex":1}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_start","contentIndex":2,"id":"t1","toolName":"bash"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":2,"delta":"{\"command\":"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":2,"delta":"\"ls\"}"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_end","contentIndex":2,"toolCall":{"type":"toolCall","id":"t1","name":"bash","arguments":{"command":"ls"}}}}
+{"type":"message_update","assistantMessageEvent":{"type":"done","reason":"toolUse"}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"权威文本"},{"type":"thinking","thinking":"嗯，想好了"},{"type":"toolCall","id":"t1","name":"bash","arguments":{"command":"ls"}}],"stopReason":"toolUse","timestamp":2}}
+{"type":"tool_execution_start","toolCallId":"t1","toolName":"bash","args":{"command":"ls"}}
+{"type":"tool_execution_update","toolCallId":"t1","toolName":"bash","args":{"command":"ls"},"partialResult":{"content":[{"type":"text","text":"REA"}]}}
+{"type":"tool_execution_update","toolCallId":"t1","toolName":"bash","args":{"command":"ls"},"partialResult":{"content":[{"type":"text","text":"README.md"}]}}
+{"type":"tool_execution_end","toolCallId":"t1","toolName":"bash","result":{"content":[{"type":"text","text":"README.md\n"}]},"isError":false,"durationMs":42}
+{"type":"message_end","message":{"role":"toolResult","toolCallId":"t1","toolName":"bash","content":[{"type":"text","text":"不应覆盖"}],"isError":true,"timestamp":3}}
+{"type":"tool_execution_end","toolCallId":"t2","toolName":"read","args":{"path":"a"},"result":{"content":[{"type":"text","text":"ENOENT"}]},"isError":true}
+{"type":"tool_execution_update","toolCallId":"ghost","partialResult":{"content":[]}}
+{"type":"queue_update","steering":["先停一下"],"followUp":[]}
+{"type":"queue_update","steering":[],"followUp":[]}
+{"type":"compaction_start","reason":"threshold"}
+{"type":"compaction_end","reason":"threshold","aborted":true,"willRetry":false}
+{"type":"compaction_start","reason":"overflow"}
+{"type":"compaction_end","reason":"overflow","aborted":false,"willRetry":false,"errorMessage":"summary failed"}
+{"type":"auto_retry_start","attempt":1,"maxAttempts":3,"delayMs":2000,"errorMessage":"429 rate limit"}
+{"type":"auto_retry_end","success":false,"attempt":3,"finalError":"429 rate limit"}
+{"type":"tool_execution_start","toolCallId":"t3","toolName":"bash","args":{"command":"sleep 100"}}
+{"type":"agent_end","messages":[],"willRetry":false}
+{"type":"agent_settled","aborted":false}
