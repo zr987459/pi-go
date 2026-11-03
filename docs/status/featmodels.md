@@ -3,7 +3,7 @@
 - 负责：W2（全服务商目录、全模型选择页、OAuth、会话内切模型与思考强度、models.json 完整编辑、代理）
 - 依据：`docs/feature-gap.md` §2.1 M1–M5、M7、M9，§3.2 W2，§3.3
 - 基线：已 merge `origin/feat/modules`（749d7b2，CI 绿）进本分支（49b3a2a，普通合并，无强推）
-- 当前阶段：**2 实现中（WIP）**，更新于 2026-11-03 15:46 CST
+- 当前阶段：**3 已开 PR #12，待审**，更新于 2026-11-03 16:10 CST；已 merge main（W0 合入后，普通合并）
 
 ## 已完成并已推送
 - `core/store`（本地单测 59 项全过）：
@@ -19,6 +19,9 @@
 - `app/di/ModelsBindings.kt`：app 尚未依赖新模块，暂只给 Fake，真实装配留给 W5。
 - 本地单测：core/store 59 项、core/catalog 18 项（4 项真 pi 集成默认跳过）、feature/models 7 项，全部通过；Compose 仪器测试已写（无模拟器，只编译）。
 
-## 剩余
-- 真 pi 集成测试（`PIGO_PI_ROOT`）：目录导出 42 个服务商、Copilot 设备码 mock、Anthropic PKCE 回调、DeepSeek 可用组 —— 本机运行中；
-- CI 绿后开 PR；W0 合入 main 后再 `git merge origin/main`。
+## 验收
+- 真 pi 1.5.0 集成 4 项（目录导出、Copilot 设备码、Anthropic PKCE、DeepSeek 可用组）本机全过。
+- Compose 仪器测试可编译，未在设备运行。
+
+## 遗留（详见 PR #12）
+- app 真实装配留给 W5；契约差异；真机 OAuth 回调与 `$PIGO_PK_*` 端到端未验证。
