@@ -1,5 +1,15 @@
 # ui/dsh-style 状态（工作者 A：主题 + 聊天主页）
 
+> **修复1 进行中**（2026-11-03 16:0x CST，PR #11 审查第 1 轮，基于 5c3edeb）。计划：
+> 1. merge origin/main（f1f0e02，W0 契约 PR#8）；
+> 2. 抽屉返回键关闭（BackHandler）；
+> 3. 恢复入口：抽屉加「聊天」、设置页/引导页左上角 44dp 返回圆钮、点当前会话只关抽屉；
+> 4. 抽屉打开时刷新会话列表、newChat 后刷新；
+> 5. 空会话胶囊不被 LazyColumn 遮挡；
+> 6. 引导页 safeDrawing insets；
+> 7. AppSmokeTest 恢复会话/聊天断言、去掉提前 return；
+> 8. Nit：错误卡 FlowRow、工具 ✓ 读屏、中止后查看日志与 canStart、建议胶囊不覆盖草稿。
+
 ## 进度
 - [x] 14:40 已开始
 - [x] 阶段 1：主题（`theme:` 提交）——**B 现在可以用了**，API 见下
