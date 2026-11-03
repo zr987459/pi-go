@@ -106,6 +106,7 @@ fun SessionsPlaceholder(repository: SessionRepository, modifier: Modifier = Modi
  * @param onNewSession 新建会话；为 null 时不显示「新对话」按钮。
  * @param onBeforeDeleteCurrent 删除当前会话前调用；返回失败原因（null 表示成功），失败则不删除。为 null 时当前会话不能删除。
  * @param onOpenSettings 身份栏的「设置」圆钮；为 null 时不显示。
+ * @param footer 列表与身份栏之间的可选附加行（抽屉里放「安装与运行环境」入口）；为 null 时不占位。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -117,6 +118,7 @@ fun SessionsScreen(
     onNewSession: (suspend () -> Unit)? = null,
     onBeforeDeleteCurrent: (suspend () -> String?)? = null,
     onOpenSettings: (() -> Unit)? = null,
+    footer: (@Composable () -> Unit)? = null,
 ) {
     val sessions by repository.observe().collectAsState(initial = null)
     val trash by repository.observeTrash().collectAsState(initial = emptyList())
@@ -223,6 +225,7 @@ fun SessionsScreen(
                     }
                 }
             }
+            if (footer != null) footer()
             IdentityBar(
                 onRefresh = { scope.launch { repository.refresh() } },
                 onSettings = onOpenSettings,

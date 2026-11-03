@@ -31,11 +31,18 @@ class AppSmokeTest {
         rule.waitUntil(timeoutMs) { rule.onAllNodes(hasTestTag(tag)).fetchSemanticsNodes().isNotEmpty() }
     }
 
-    /** dsh-Go 外壳没有底部导航栏：页面入口都在左侧抽屉里，先从左边缘拉出抽屉。 */
-    private fun nav(route: String) {
+    /** dsh-Go 外壳没有底部导航栏：抽屉就是会话面板，先从左边缘拉出抽屉。 */
+    private fun openDrawer() {
         rule.onRoot().performTouchInput { swipeRight(startX = 2f, endX = centerX) }
         waitTag("drawer")
-        rule.onNodeWithTag("nav:$route").performClick()
+        waitTag("page:sessions")
+    }
+
+    /** 抽屉里的入口：设置在身份栏圆钮，安装与运行环境在列表下方的系统行。 */
+    private fun nav(route: String) {
+        openDrawer()
+        val tag = if (route == "settings") "sessions:settings" else "nav:$route"
+        rule.onNodeWithTag(tag).performClick()
         rule.waitForIdle()
     }
 
@@ -59,17 +66,14 @@ class AppSmokeTest {
         nav("settings")
         waitTag("page:settings")
         rule.onNodeWithTag("settings:sec-models").assertIsDisplayed()
-        nav("sessions")
-        waitTag("page:sessions")
-        nav("chat")
-        waitTag("page:chat")
         nav("onboarding")
         waitTag("page:onboarding")
     }
 
     @Test
     fun noModelBannerJumpsToModelSettings() {
-        nav("chat")
+        val graph = (rule.activity.application as PiGoApp).graph
+        if (graph.runtime.status.value.phase != Phase.READY) return // 运行环境未就绪时起点是安装向导
         waitTag("page:chat")
         // 全新安装没有任何 Key：聊天页顶部提示「还没有配置模型」，点「去设置模型」定位到设置页「模型与 Key」。
         val hasBanner = runCatching { waitTag("chat:goSettings", 5_000) }.isSuccess

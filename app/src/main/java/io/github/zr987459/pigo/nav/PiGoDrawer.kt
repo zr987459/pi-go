@@ -1,15 +1,13 @@
 // 抽屉照 dsh-Go（https://github.com/ccch1mneyyy/dsh-Go，AGPL-3.0）app/lib/ui/shell/sessions_drawer.dart、
 // home_shell.dart 逐项翻译：宽 min(320, 屏宽-56)，Sheet 层玻璃，右侧 28dp 圆角；
-// 顶部品牌字（20/14/10/10 内边距）+ 主色「新对话」胶囊；行高 44、左右 10、图标 20 + 间距 10、15sp 正文。
+// 面板内容（品牌行 +「新对话」胶囊、搜索、筛选、分组会话、身份栏）由 feature/sessions 的 SessionsScreen 提供。
 // 见 THIRD_PARTY_NOTICES.md §8。
 package io.github.zr987459.pigo.nav
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -26,6 +24,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -34,19 +33,18 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.min
 import androidx.compose.ui.unit.sp
 import io.github.zr987459.pigo.contract.EngineStatus
+import io.github.zr987459.pigo.contract.fake.FakeSessionRepository
 import io.github.zr987459.pigo.core.ui.AppIcon
 import io.github.zr987459.pigo.core.ui.AppIcons
 import io.github.zr987459.pigo.core.ui.AppShape
-import io.github.zr987459.pigo.core.ui.AppType
 import io.github.zr987459.pigo.core.ui.DshTheme
 import io.github.zr987459.pigo.core.ui.GlassSurface
 import io.github.zr987459.pigo.core.ui.GlassTier
 import io.github.zr987459.pigo.core.ui.Glyph
 import io.github.zr987459.pigo.core.ui.PiGoTheme
-import io.github.zr987459.pigo.core.ui.PrimaryPillButton
-import io.github.zr987459.pigo.core.ui.SectionHeader
 import io.github.zr987459.pigo.core.ui.StatusDot
 import io.github.zr987459.pigo.core.ui.StatusTone
+import io.github.zr987459.pigo.feature.sessions.SessionsScreen
 
 private val DrawerShape = RoundedCornerShape(topEnd = 28.dp, bottomEnd = 28.dp)
 
@@ -58,37 +56,29 @@ private fun Destination.glyph(): Glyph = when (this) {
 }
 
 /**
- * 侧边抽屉内容。dsh-Go 的抽屉里直接列会话；pi-go 的会话列表在 `feature/sessions`（工作者 B 的范围），
- * 这里先给「全部会话」入口，会话列表嵌入抽屉列为差距（见 docs/status/ui-dsh.md）。
+ * 侧边抽屉容器：玻璃面板 + 右侧 28dp 圆角，里面直接放会话面板（与 dsh-Go 一样，抽屉即会话列表）。
+ *
+ * @param panel 抽屉内容，通常是 [SessionsScreen]；参数是要放进面板 `footer` 的「安装与运行环境」入口行。
  */
 @Composable
 fun PiGoDrawer(
     current: String?,
     onDestination: (Destination) -> Unit,
-    onNewChat: () -> Unit,
     engineStatus: EngineStatus,
     modifier: Modifier = Modifier,
+    panel: @Composable (footer: @Composable () -> Unit) -> Unit,
 ) {
     BoxWithConstraints(modifier.fillMaxHeight()) {
         val width = min(320.dp, maxWidth - 56.dp)
         GlassSurface(Modifier.width(width).fillMaxHeight().testTag("drawer"), GlassTier.Sheet, DrawerShape) {
-            Column(Modifier.fillMaxSize().systemBarsPadding()) {
-                Row(Modifier.fillMaxWidth().padding(start = 20.dp, top = 14.dp, end = 10.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("pi-go", style = AppType.Wordmark, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
-                    PrimaryPillButton("新对话", onNewChat, Modifier.height(40.dp).testTag("drawer:newChat"), leading = AppIcons.newChat)
-                }
-                Column(Modifier.padding(horizontal = 10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    listOf(Destination.Chat, Destination.Sessions).forEach { d ->
-                        DrawerRow(d, selected = current == d.route) { onDestination(d) }
-                    }
-                }
-                Spacer(Modifier.weight(1f))
-                Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    SectionHeader("系统", Modifier.padding(start = 10.dp))
-                    DrawerRow(Destination.Onboarding, selected = current == Destination.Onboarding.route, trailing = { EngineDot(engineStatus) }) {
-                        onDestination(Destination.Onboarding)
-                    }
-                    DrawerRow(Destination.Settings, selected = current == Destination.Settings.route) { onDestination(Destination.Settings) }
+            Box(Modifier.fillMaxSize().systemBarsPadding()) {
+                panel {
+                    DrawerRow(
+                        Destination.Onboarding,
+                        selected = current == Destination.Onboarding.route,
+                        modifier = Modifier.padding(horizontal = 10.dp),
+                        trailing = { EngineDot(engineStatus) },
+                    ) { onDestination(Destination.Onboarding) }
                 }
             }
         }
@@ -107,15 +97,21 @@ private fun EngineDot(status: EngineStatus) {
 }
 
 @Composable
-private fun DrawerRow(d: Destination, selected: Boolean, trailing: (@Composable () -> Unit)? = null, onClick: () -> Unit) {
+private fun DrawerRow(
+    d: Destination,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    trailing: (@Composable () -> Unit)? = null,
+    onClick: () -> Unit,
+) {
     val scheme = MaterialTheme.colorScheme
     val bg = if (selected) {
-        if (DshTheme.isDark) androidx.compose.ui.graphics.Color.White.copy(alpha = 0.08f) else scheme.onSurface.copy(alpha = 0.06f)
+        if (DshTheme.isDark) Color.White.copy(alpha = 0.08f) else scheme.onSurface.copy(alpha = 0.06f)
     } else {
-        androidx.compose.ui.graphics.Color.Transparent
+        Color.Transparent
     }
     Row(
-        Modifier
+        modifier
             .fillMaxWidth()
             .height(44.dp)
             .clip(AppShape.Sm)
@@ -137,18 +133,20 @@ private fun DrawerRow(d: Destination, selected: Boolean, trailing: (@Composable 
     }
 }
 
-@Preview(name = "抽屉 · 浅色", widthDp = 380, heightDp = 700)
 @Composable
-private fun DrawerLightPreview() = PiGoTheme(darkTheme = false) {
+private fun DrawerPreviewContent() {
+    val repo = FakeSessionRepository()
     Box(Modifier.fillMaxSize().background(DshTheme.colors.backdropMid)) {
-        PiGoDrawer(Destination.Chat.route, {}, {}, EngineStatus.Stopped)
+        PiGoDrawer(Destination.Chat.route, {}, EngineStatus.Stopped) { footer ->
+            SessionsScreen(repository = repo, onNewSession = {}, onOpenSettings = {}, footer = footer)
+        }
     }
 }
 
+@Preview(name = "抽屉 · 浅色", widthDp = 380, heightDp = 700)
+@Composable
+private fun DrawerLightPreview() = PiGoTheme(darkTheme = false) { DrawerPreviewContent() }
+
 @Preview(name = "抽屉 · 深色", widthDp = 380, heightDp = 700)
 @Composable
-private fun DrawerDarkPreview() = PiGoTheme(darkTheme = true) {
-    Box(Modifier.fillMaxSize().background(DshTheme.colors.backdropMid)) {
-        PiGoDrawer(Destination.Chat.route, {}, {}, EngineStatus.Stopped)
-    }
-}
+private fun DrawerDarkPreview() = PiGoTheme(darkTheme = true) { DrawerPreviewContent() }

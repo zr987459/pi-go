@@ -119,12 +119,20 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
         drawerState = drawerState,
         scrimColor = DshTheme.colors.scrim,
         drawerContent = {
+            // dsh-Go：抽屉本身就是会话面板（搜索、分组、新建、长按删除、身份栏里的设置）。
             PiGoDrawer(
                 current = current,
                 onDestination = ::go,
-                onNewChat = newChat,
                 engineStatus = graph.engine.status.collectAsState().value,
-            )
+            ) { footer ->
+                SessionsPage(
+                    graph,
+                    onOpened = { go(Destination.Chat) },
+                    onError = ::toast,
+                    onOpenSettings = { go(Destination.Settings) },
+                    footer = footer,
+                )
+            }
         },
     ) {
         Box(Modifier.fillMaxSize()) {
@@ -140,8 +148,14 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
                         onNewChat = newChat,
                     )
                 }
+                // 完整页面版会话列表（抽屉之外的入口，保留路由以兼容深链接/测试）。
                 composable(Destination.Sessions.route) {
-                    SessionsPage(graph, onOpened = { navController.navigateTopLevel(Destination.Chat) }, onError = ::toast)
+                    SessionsPage(
+                        graph,
+                        onOpened = { navController.navigateTopLevel(Destination.Chat) },
+                        onError = ::toast,
+                        onOpenSettings = { navController.navigateTopLevel(Destination.Settings) },
+                    )
                 }
                 composable(
                     SETTINGS_PATTERN,
@@ -194,10 +208,18 @@ private fun NoModelBanner(onOpenModelSettings: () -> Unit) {
 }
 
 @Composable
-private fun SessionsPage(graph: AppGraph, onOpened: () -> Unit, onError: (String) -> Unit) {
+private fun SessionsPage(
+    graph: AppGraph,
+    onOpened: () -> Unit,
+    onError: (String) -> Unit,
+    onOpenSettings: (() -> Unit)? = null,
+    footer: (@Composable () -> Unit)? = null,
+) {
     val chat by graph.engine.chat.collectAsState()
     SessionsScreen(
         repository = graph.sessions,
+        onOpenSettings = onOpenSettings,
+        footer = footer,
         currentGuestPath = chat.sessionFile,
         onOpen = { s ->
             when (val r = graph.engine.openSession(s.guestPath, s.cwd)) {
