@@ -54,7 +54,7 @@ class ProcessTree(private val proc: File = File("/proc")) {
      * 可执行文件不是 proot 自身（[prootExe] 判断）的**最早启动**的那个。pi 运行工具时派生的 bash 等子进程启动更晚，
      * 不会被选中。找不到后代（例如桌面上 [root] 本身就是 pi）时返回 [root]。不按进程名匹配。
      */
-    fun enginePid(root: Int, uid: Int, prootExe: (Int) -> Boolean = ::isProotExe): Int? {
+    fun enginePid(root: Int, uid: Int, prootExe: (Int) -> Boolean = { isProotExe(it) }): Int? {
         val all = tree(root, uid)
         if (all.none { it.pid == root }) return null
         val candidates = all.filter { it.pid != root && !prootExe(it.pid) }
