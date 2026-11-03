@@ -8,6 +8,7 @@ package io.github.zr987459.pigo.core.ui
 value class Glyph(val code: Char)
 
 /** dsh-Go 图标字体里的全部字形，按 Phosphor 名称命名（`…Fill` 为实心）。界面代码用 [AppIcons] 的角色名。 */
+@Deprecated("r3: r3/calm 删除（DESIGN-r3 X8，改用 core/ui/calm 的 CalmTheme / CalmIcons）")
 object DshGlyphs {
     val alarm = Glyph('\ue0a8')
     val archive = Glyph('\ue043')
@@ -239,6 +240,7 @@ object DshGlyphs {
 }
 
 /** 图标词汇（dsh-Go `AppIcons`）：按角色命名。 */
+@Deprecated("r3: r3/calm 删除（DESIGN-r3 X8，改用 core/ui/calm 的 CalmTheme / CalmIcons）")
 object AppIcons {
     /** 勾（选中、已发送、已复制）。pi-go 补充的角色。 */
     val check get() = DshGlyphs.check

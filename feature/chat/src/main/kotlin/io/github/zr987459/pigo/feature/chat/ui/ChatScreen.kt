@@ -99,6 +99,7 @@ import kotlinx.coroutines.launch
  * @param onModelClick 顶栏「选择模型▾」；为 null 时用内置的模型/思考级别下拉。
  * @param onAttachClick 输入框「+」；为 null 时提示「暂不支持添加附件」。
  */
+@Deprecated("r3: r3/calm 删除（DESIGN-r3 X13，改用 ui/calm/CalmSurface；待 r3/app 去掉引用后删文件）")
 @Composable
 fun ChatScreen(
     controller: ChatController,
