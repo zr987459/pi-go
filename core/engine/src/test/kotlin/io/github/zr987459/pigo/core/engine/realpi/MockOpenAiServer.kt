@@ -40,6 +40,8 @@ import kotlinx.serialization.json.putJsonObject
  * | `#fail401` | 401 Key 错误 |
  * | 其他 | 回 `OK: <原文前 20 字>` |
  *
+ * 请求里的图片（`image_url`）记在 [imageUrls]。
+ *
  * 没有工具定义且提到 summary 的请求视为压缩摘要请求，回一段摘要。
  */
 class MockOpenAiServer : AutoCloseable {
@@ -50,6 +52,9 @@ class MockOpenAiServer : AutoCloseable {
 
     /** 收到的模型请求数（测试断言用）。 */
     val requests = AtomicInteger(0)
+
+    /** 请求里出现过的 `image_url.url`（C1 集成测试断言用，feat/engine-rpc 追加）。 */
+    val imageUrls: MutableList<String> = java.util.concurrent.CopyOnWriteArrayList()
 
     val port: Int get() = server.localPort
     val baseUrl: String get() = "http://127.0.0.1:$port/v1"
@@ -184,6 +189,13 @@ class MockOpenAiServer : AutoCloseable {
         requests.incrementAndGet()
         val req = json.parseToJsonElement(ex.body) as JsonObject
         val messages = req["messages"] as? JsonArray ?: JsonArray(emptyList())
+        for (m in messages) {
+            val parts = (m as? JsonObject)?.get("content") as? JsonArray ?: continue
+            for (p in parts) {
+                val o = p as? JsonObject ?: continue
+                if (o["type"]?.str() == "image_url") ((o["image_url"] as? JsonObject)?.get("url")?.str())?.let { imageUrls += it }
+            }
+        }
         val lastUser = messages.lastOrNull { (it as? JsonObject)?.get("role")?.str() == "user" }?.let { contentText(it as JsonObject) } ?: ""
         val lastRole = (messages.lastOrNull() as? JsonObject)?.get("role")?.str()
         val afterTool = lastRole == "tool"

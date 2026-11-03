@@ -14,6 +14,7 @@
 
 - 16:40 N1：`TaskNotifier`（JVM 逻辑：后台才发、ABORTED 不发、同会话复用 id）+ `AndroidTaskNotifications`（`pigo-tasks` 通道，点通知带 sessionFile/cwd 打开 App）+ `ActivityVisibility`；`EngineBindings` 接入通知并提供 `extras(engine)`。新增 `PiEngineExtrasTest`（7）、`TaskNotifierTest`（1）；`:core:engine:testDebugUnitTest` 56 过 + 9 个真 pi 用例跳过（未配置）。
 
+- 16:55 真 pi 1.5.0 集成：本地（linux aarch64、Node v22.23.3、`npm i @earendil-works/pi-coding-agent@1.5.0`）`RealPiExtrasIntegrationTest` 7/7 通过（get_commands 列出 prompts/x.md、fork 后 sessionFile 改变且 text 正确、get_tree ≥2 层、compact 成功、bash echo hi、export_html 文件存在、1×1 PNG 以 image_url 到达 mock），原有 `RealPiIntegrationTest` 8/8 通过。`MockOpenAiServer` 记录 image_url。轮末再全量 get_entries 一次（messageMeta 防漏）。`docs/notices/feat-engine-rpc.md`、`docs/protocol/engine-rpc.md` 已写。
+
 ## 剩余（按顺序）
-4. 真 pi 1.5.0 集成测试。
 5. notices、docs/protocol、assembleDebug、开 PR。

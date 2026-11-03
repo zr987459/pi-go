@@ -329,6 +329,8 @@ class PiEngine(
         scope.launch(io) {
             refreshState()
             stats()
+            // messageMeta：entry_appended 是增量；轮末再全量对一次，防止漏事件或分支切换后错位。
+            refreshEntries()
         }
     }
 
