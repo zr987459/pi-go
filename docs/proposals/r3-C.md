@@ -288,3 +288,132 @@ UI 形态里，下面每一条都是 ⌘ 命令中心的一项（按组：会话
 | 模型目录更新 | `model.refreshCatalog` | `!pi update --models` | 模型面板右上「刷新」 |
 | llama.cpp | `ext.llama` | `/llama` | ⌘ |
 | 虚拟模型 / 分类器 / 图像模型 | —（随扩展） | 随扩展出现 | 随扩展出现在模型列表与 ⌘ |
+
+### 2.8 清单 §7 技能、扩展、模板、上下文文件、主题、MCP、包
+
+| 条目 | 动作 id | 终端形态 | UI 形态 |
+|---|---|---|---|
+| 技能 | `skills` | `/skill:名`；页眉列出 | ⌘「技能」：列表、启用开关、查看 SKILL.md、从文件导入（SAF） |
+| 提示模板 | `templates` | 补全加参数提示 | `/` 面板；选中后弹参数框（按 `$1`、`$@` 生成字段） |
+| 扩展 | `packages`（扩展页签） | 扩展弹层、状态、组件按 TUI 样式画 | 同一协议画成原生面板 |
+| 内置扩展（llama、codemode、tool-search、mcp） | `packages` | `/settings › 扩展` | ⌘「扩展与包」里的开关 |
+| 上下文文件 | `settings.contextFiles` | 页眉列出；`/settings` | ⌘「上下文文件」：列出已加载文件，可编辑全局 AGENTS.md；还有 SYSTEM.md、APPEND_SYSTEM.md（与 `context.system` 同页） |
+| 主题 | `appearance` | pi 的 dark / light 加已装主题 JSON | 极简主题：浅、深、跟随系统 |
+| MCP | `mcp` | `/mcp` | ⌘「MCP 服务器」：列表、添加（stdio / HTTP）、登录、重连、开关 |
+| 包 | `packages` | `/packages`、`!pi install` | ⌘「扩展与包」 |
+| 项目信任 | `trust` | `/trust` | 弹窗加 ⌘ |
+| 键位文件 `keybindings.json` | `hotkeys` | 外接键盘按文件生效 | ⌘「手势与快捷键」（只读表，加「编辑 keybindings.json」入口） |
+
+### 2.9 清单 §8 `settings.json` 全部键、§8.1 环境变量
+
+**不同意清单的一处安排。** 清单建议把非模型键放进「设置页 › 高级」。用户说「设置里只保留配置模型」，所以本方案的设置页**只有模型**。这些键全部归到 pi 自己的 `/settings` 功能里：
+- UI 形态：⌘「pi 设置」，列表结构和分组与 pi 的 SettingsList 相同。
+- 终端形态：`/settings`。
+
+pi 的设置本来就是一个斜杠命令而不是 App 设置，所以这样放既不少功能，也符合用户原话。实现上两种形态共用 `PiSettings`（读写 `~/.pi/agent/settings.json` 与项目 `.pi/settings.json`，写完调 `reload`）。
+
+| 分组 | 终端 | UI（⌘「pi 设置」中的分组） | 备注 |
+|---|---|---|---|
+| 模型键 | `/settings › 模型` | **设置页 › 模型**（唯一的设置页） | 两边写同一个文件 |
+| 显示（hideThinkingBlock、showCacheMissNotices、quietStartup、theme） | ✔ | 显示 | `theme` 只影响终端形态；UI 形态的外观单独在 `appearance` |
+| 缓存（cacheWarming） | ✔ | 缓存 | |
+| 队列（steeringMode、followUpMode） | ✔ | 队列 | 同时调 rpc `set_*_mode` |
+| 编辑器（externalEditor、doubleEscapeAction、autocompleteMaxVisible、editorPaddingX、showHardwareCursor） | ✔ | 编辑器 | `externalEditor`、`showHardwareCursor` 标「手机不适用」，只读显示 |
+| 树（treeFilterMode、branchSummary.*） | ✔ | 会话树 | |
+| 信任（defaultProjectTrust） | ✔ | 安全 | 只写全局 |
+| 工具（defaultTools、codemode.*） | ✔ | 工具 | |
+| 会话（sessionDir、sessionShareDestination） | ✔ | 会话 | |
+| 压缩（compaction.*） | ✔ | 压缩 | 同时调 `set_auto_compaction` |
+| 全屏 TUI（tuiMode、fullscreen*、outputPad） | 终端形态内部用（滚动条、选中即复制、outputPad） | 显示为「仅终端形态」，可在此修改 | 改了下次进终端形态就生效 |
+| 终端（terminal.*） | `imageWidthCells`、`showImages` 用于内联图片 | 同上「仅终端形态」 | |
+| 图片（images.*） | ✔ | 图片 | |
+| Markdown（codeBlockIndent、mermaid） | 缩进；Mermaid 用字符画 | Markdown | UI 形态 Mermaid 先显示代码块加「预览」（WebView 离线渲染，P2）；不同意清单的「必须渲染成图」，理由：要打包 mermaid.js（约 2 MB）和 WebView，P2 再做 |
+| 网络（transport、httpProxy、超时） | ✔ | 网络 | 代理保留（国内需要） |
+| 重试（retry.*） | ✔ | 重试 | |
+| Shell（shellPath、shellCommandPrefix） | ✔ | Shell | |
+| 包与资源（npmCommand…、enableSkillCommands） | ✔ | 扩展与资源 | |
+| 其他（collapseChangelog、遥测、analytics、warnings.*） | ✔ | 隐私与其他 | 遥测默认关 |
+| 环境变量：服务商 key | 不显示 | 不显示 | 走 auth.json |
+| 环境变量：进程（PI_OFFLINE、PI_TELEMETRY 等） | 由 `EngineConfig` 注入；在 `/settings › 网络/隐私` 呈现 | 同左 | 改了需重启引擎，界面明确提示「将重启引擎」，这是唯一会重启引擎的路径 |
+| 环境变量：渲染、bash 会话变量 | 不适用 / pi 自管 | 同左 | ⌘「帮助」里说明 |
+
+### 2.10 清单 §9 快捷键（触屏映射见 §3.4）
+
+| 动作 | 终端形态 | UI 形态 |
+|---|---|---|
+| 中断 | Esc 键 | 停止键 |
+| 清空 / 退出 | ^C：第一次清空，第二次提示停止引擎 | 输入框里的 × |
+| 挂起 | 不适用（说明） | 不适用（说明，`help.suspend`） |
+| 外部编辑器 | ⤢：全屏编辑器 | 输入框「展开」 |
+| 粘贴图片 | 长按编辑器 › 粘贴图片；键条 📎 | ＋ › 图片 / 相机 / 剪贴板 |
+| 换行 | 软键盘回车 = 换行；键条 ⏎ = 发送（可在 pi 设置 › 编辑器里互换） | 回车换行；发送键发送 |
+| 补全 | 键条 Tab | 点选 |
+| 排队 | 键条 ⇣ | 发送键长按 |
+| 撤回队列 | 键条 ↑队 | 队列条撤回 |
+| 复制 | 长按消息 | 长按消息 |
+| 选模型 / 循环模型 | 点、滑页脚模型段 | 点、滑模型胶囊 |
+| 循环思考 / 折叠思考 | 点边框 / 点思考块 | 点胶囊 / 点思考行 |
+| 展开工具 | 点工具块；键条 ⌃O 全部展开 | 点过程行；⌘「展开全部工具」 |
+| 保存默认 | 选择器「设为默认」 | 同左 |
+| 编辑器光标与删除 | 外接键盘照 pi；触屏交给输入法 | 输入法 |
+| 历史 | 键条 ↑↓ 翻历史提示 | 输入框为空时上滑，弹出历史提示列表 |
+| 消息区滚动、跳转、搜索 | 手势；键条 ⌕ 打开转录搜索；右侧滚动条；键条「⇞⇟」跳到上一个或下一个提示 | 顶栏 ⋯ › 搜索本会话；回到底部键；长按回到底部键可跳到上一条提示 |
+| 会话选择器动作 | 工具条 | 列表菜单和长按 |
+| 树动作 | 工具条 | 筛选胶囊和长按 |
+| 作用域模型动作 | 工具条加拖动 | 同左 |
+| 未绑定的会话动作 | 外接键盘可在 keybindings.json 绑定 | ⌘ 里都有 |
+
+### 2.11 清单 §10 输入语法
+
+| 语法 | 终端形态 | UI 形态 |
+|---|---|---|
+| Enter（生成中引导）、Alt+Enter（排队）、Esc（中止，排队文字回编辑器） | 照 pi | 发送键「引导」；长按排队；停止后排队文字回到共享草稿 |
+| `/命令` | 补全浮层（最多 `autocompleteMaxVisible` 条） | `/` 面板（与 ⌘ 同源） |
+| `@文件` | `@` 弹出模糊文件搜索，Tab 补全 | 输入 `@` 或「＋ › 引用文件」，弹出搜索面板（`RootfsWorkspace.search`，按 cwd 用 `find`/`rg`）。只做搜索，不做浏览器。发送时按 pi 语义展开为路径引用 |
+| 图片 | 内联缩略图 | 输入框里的缩略图条 |
+| `!cmd` / `!!cmd` | 编辑器边框变 `bashMode` 色 | 输入框变等宽，提示「将运行命令」或「不发给模型」 |
+| 双击 Esc | 照 `doubleEscapeAction` | 不做手势，入口在会话菜单（分支树、分叉） |
+| 模板参数 | argument-hint | 参数框 |
+
+### 2.12 清单 §11 TUI 元素
+
+终端形态逐个还原（§3）。UI 形态对应关系：
+
+| 元素 | UI 形态 |
+|---|---|
+| 页眉 | 空会话首屏：目录 · 模型，一行；「已加载 N 个上下文文件、M 个技能」可点开（`session.info`） |
+| 消息区 | 用户消息：右对齐浅色圆角块；助手消息：无框正文 |
+| 思考块 | 折叠行 |
+| 工具调用块 | 过程行 |
+| bash 块 | 等宽输出块 |
+| 压缩 / 分支摘要块 | 摘要卡 |
+| 技能调用消息 | 一行「使用技能 名称」 |
+| 编辑器 | 圆角输入框，配 ＋、思考胶囊和发送键 |
+| 自动补全 | `/` 面板、`@` 面板 |
+| 队列显示 | 队列条 |
+| 状态行 | 顶栏副标题（loader 计时、重试、扩展 setStatus） |
+| 页脚 | 顶栏只放模型胶囊和上下文环；完整统计（↑↓、缓存读写、命中率、费用、上下文%/窗口）在会话信息页 |
+| 选择器弹层 | 底部面板（统一组件 `CalmSheetList`） |
+| 登录对话框 | 浏览器加回调自动完成；备选为粘贴代码 |
+| 首次设置 | 安装引导页（`feature/onboarding` 重画） |
+| 转录搜索 | ⋯ › 搜索本会话（高亮命中，上下跳转） |
+| Mermaid | 代码块加预览（P2，见 §2.9） |
+| 彩蛋 | 不做（与清单一致） |
+| 配色 | UI 形态用自己的极简色板；终端形态原样打包 pi 的 dark.json、light.json（MIT，NOTICE 记一行） |
+
+### 2.13 清单 §12 候选删除项
+
+结论见 §1。与清单不同的两处：
+- **回收站**：删除，改成 5 秒撤销。
+- **任务完成通知**：保留但默认关闭。
+
+清单里其他各条全部采纳。
+
+### 2.14 清单 §13 无缝切换
+
+采纳清单的思路（单进程，只换渲染层），细化在 §5。在清单基础上补三点：
+1. **共享草稿。** 草稿从 Composable 里的 `TextFieldValue` 上移到 `SessionHost.draft: MutableStateFlow<DraftState>`，包含文字、光标、选区、图片、`@` 引用和 `!` 模式。
+2. **共享弹层。** 用 `SessionHost.overlay` 栈，避免切换时扩展对话框丢失。
+3. **可测的不中断判据**，见 §7.4。
+
+---
