@@ -78,6 +78,7 @@ fun ExtUiDialog(
 
     when (r.method) {
         "select" -> AlertDialog(
+            containerColor = io.github.zr987459.pigo.core.ui.DshTheme.colors.sheet.fill,
             onDismissRequest = cancel,
             title = { Text(title) },
             text = {
@@ -106,6 +107,7 @@ fun ExtUiDialog(
         )
 
         "confirm" -> AlertDialog(
+            containerColor = io.github.zr987459.pigo.core.ui.DshTheme.colors.sheet.fill,
             onDismissRequest = cancel,
             title = { Text(title) },
             text = {
@@ -127,6 +129,7 @@ fun ExtUiDialog(
             val editor = r.method == "editor"
             var text by rememberSaveable(id) { mutableStateOf(r.prefill ?: "") }
             AlertDialog(
+                containerColor = io.github.zr987459.pigo.core.ui.DshTheme.colors.sheet.fill,
                 onDismissRequest = cancel,
                 title = { Text(title) },
                 text = {
@@ -156,6 +159,7 @@ fun ExtUiDialog(
 
         // 理论上到不了这里：未知 method 在控制器里已立即回 cancelled。保底仍给一个可关闭的对话框。
         else -> AlertDialog(
+            containerColor = io.github.zr987459.pigo.core.ui.DshTheme.colors.sheet.fill,
             onDismissRequest = cancel,
             title = { Text(title) },
             text = { Text("这个扩展请求暂不支持（${r.method}）。") },
@@ -168,6 +172,7 @@ fun ExtUiDialog(
 @Composable
 fun ReplaceDraftDialog(text: String, onReplace: () -> Unit, onKeep: () -> Unit) {
     AlertDialog(
+        containerColor = io.github.zr987459.pigo.core.ui.DshTheme.colors.sheet.fill,
         onDismissRequest = onKeep,
         title = { Text("替换输入框内容？") },
         text = {
