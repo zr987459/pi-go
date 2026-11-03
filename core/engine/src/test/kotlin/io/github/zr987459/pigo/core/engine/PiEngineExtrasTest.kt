@@ -326,4 +326,156 @@ class PiEngineExtrasTest {
         assertEquals("按 cwd 缓存", 1, rt.last.received.count { it.str("type") == "get_commands" })
         e.close()
     }
+
+    /**
+     * 审查第 2 轮 Important 1：按 pi 1.5.0 真实序列（agent-session.js _prepareRetry / _finishCancelledRetry，真 pi 抓包核对）
+     * 在自动重试退避期间停止 / 放弃重试。失败消息有部分内容（时间线保留它），被 context_edit 从投影排除，其后没有助手消息。
+     * 失败气泡不得配到任何条目，上一条助手（答1）仍配 e2，下一轮新助手配 e7。
+     */
+    private fun stopOrAbortDuringRetry(useStop: Boolean) = runBlocking {
+        val persisted = java.util.Collections.synchronizedList(mutableListOf(
+            """{"type":"message","id":"e1","parentId":null,"message":{"role":"user","content":"第一句"}}""",
+            """{"type":"message","id":"e2","parentId":"e1","message":{"role":"assistant","provider":"fake","model":"m","content":[{"type":"text","text":"答1"}],"stopReason":"stop","usage":{"input":1,"output":5,"totalTokens":6,"cost":{"total":0.5}}}}""",
+        ))
+        val order = listOf("e1", "e2", "e3", "e4", "x1", "e6", "e7")
+        fun entriesJson(since: String?, cmd: JsonObject, pi: ScriptedPi) = synchronized(persisted) {
+            val all = persisted.toList()
+            val ids = all.map { Regex("\"id\":\"([^\"]+)\"").find(it)!!.groupValues[1] }
+            if (since != null && since !in ids) { pi.fail(cmd, "Entry not found: $since"); return@synchronized }
+            val from = if (since == null) 0 else ids.indexOf(since) + 1
+            pi.ok(cmd, """{"entries":[${all.drop(from).joinToString(",")}],"leafId":"${ids.last()}"}""")
+        }
+        val failed = """{"role":"assistant","provider":"fake","model":"m","content":[{"type":"text","text":"半截2"}],"stopReason":"error","errorMessage":"terminated","usage":{"input":0,"output":0,"totalTokens":0,"cost":{"total":0}}}"""
+        val good = """{"role":"assistant","provider":"fake","model":"m","content":[{"type":"text","text":"答3"}],"stopReason":"stop","usage":{"input":2,"output":9,"totalTokens":11,"cost":{"total":0.25}}}"""
+        var round = 0
+        val rt = ScriptedRuntime {
+            { cmd ->
+                when (cmd.str("type")) {
+                    "get_entries" -> entriesJson(cmd.str("since"), cmd, this)
+                    "prompt" -> {
+                        round++
+                        ok(cmd, """{"disposition":"started"}""")
+                        if (round == 1) {
+                            emit("""{"type":"agent_start"}""")
+                            emit("""{"type":"turn_start"}""")
+                            emit("""{"type":"message_start","message":{"role":"user","content":"第二句"}}""")
+                            emit("""{"type":"message_end","message":{"role":"user","content":"第二句"}}""")
+                            persisted += """{"type":"message","id":"e3","parentId":"e2","message":{"role":"user","content":"第二句"}}"""
+                            emit("""{"type":"message_start","message":{"role":"assistant","content":[]}}""")
+                            emit("""{"type":"message_update","message":{"role":"assistant","content":[{"type":"text","text":"半截2"}]},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"半截2"}}""")
+                            emit("""{"type":"message_end","message":$failed}""")
+                            persisted += """{"type":"message","id":"e4","parentId":"e3","message":$failed}"""
+                            emit("""{"type":"turn_end","message":$failed,"toolResults":[]}""")
+                            emit("""{"type":"agent_end","messages":[],"willRetry":true}""")
+                            emit("""{"type":"auto_retry_start","attempt":1,"maxAttempts":3,"delayMs":10000,"errorMessage":"terminated"}""")
+                            val edit = """{"type":"context_edit","id":"x1","parentId":"e4","targetId":"e4","replacement":null}"""
+                            persisted += edit
+                            emit("""{"type":"entry_appended","entry":$edit}""")
+                        } else {
+                            emit("""{"type":"agent_start"}""")
+                            emit("""{"type":"message_start","message":{"role":"user","content":"第三句"}}""")
+                            emit("""{"type":"message_end","message":{"role":"user","content":"第三句"}}""")
+                            persisted += """{"type":"message","id":"e6","parentId":"x1","message":{"role":"user","content":"第三句"}}"""
+                            emit("""{"type":"message_start","message":{"role":"assistant","content":[]}}""")
+                            emit("""{"type":"message_end","message":$good}""")
+                            persisted += """{"type":"message","id":"e7","parentId":"e6","message":$good}"""
+                            emit("""{"type":"turn_end","message":$good,"toolResults":[]}""")
+                            emit("""{"type":"agent_end","messages":[],"willRetry":false}""")
+                            emit("""{"type":"agent_settled","aborted":false}""")
+                        }
+                    }
+                    // 退避中被打断：_finishCancelledRetry → auto_retry_end{success:false} → agent_settled；abort 在 settled 之后才回包
+                    "abort" -> {
+                        emit("""{"type":"auto_retry_end","success":false,"attempt":1,"finalError":"Retry cancelled"}""")
+                        emit("""{"type":"agent_settled","aborted":true}""")
+                        ok(cmd)
+                    }
+                    "abort_retry" -> {
+                        ok(cmd)
+                        emit("""{"type":"auto_retry_end","success":false,"attempt":1,"finalError":"Retry cancelled"}""")
+                        emit("""{"type":"agent_settled","aborted":false}""")
+                    }
+                    else -> basics(cmd)
+                }
+            }
+        }
+        val e = engine(rt)
+        assertTrue(e.openSession("/root/.pi/agent/sessions/x.jsonl", "/root/pi-cwd") is Outcome.Ok)
+        waitFor { e.messageMeta.value.size == 2 }
+        val a1 = e.chat.value.items.last { it is ChatItem.Assistant }
+        assertEquals("e2", e.messageMeta.value.getValue(a1.key).entryId)
+        val bad = CopyOnWriteArrayList<String>()
+        val watch = launch(Dispatchers.Default) {
+            e.messageMeta.collect { m -> m.forEach { (k, v) -> if (v.entryId == "e2" && k != a1.key) bad += "$k→e2"; if (v.entryId == "e4") bad += "$k→e4" } }
+        }
+        e.send("第二句")
+        waitFor { e.chat.value.retry != null }
+        if (useStop) assertTrue(e.stop() is Outcome.Ok) else assertTrue(e.abortRetry() is Outcome.Ok)
+        waitFor { !e.chat.value.running && e.chat.value.retry == null && rt.last.received.count { it.str("type") == "get_entries" } >= 3 }
+        delay(300)
+        val failedBubble = e.chat.value.items.last { it is ChatItem.Assistant } as ChatItem.Assistant
+        assertEquals("error", failedBubble.stopReason)
+        assertNull("失败气泡不应有 meta", e.messageMeta.value[failedBubble.key])
+        assertEquals("e2", e.messageMeta.value.getValue(a1.key).entryId)
+        assertEquals("e3", e.messageMeta.value.getValue(e.chat.value.items.last { it is ChatItem.User }.key).entryId)
+
+        e.send("第三句")
+        waitFor { !e.chat.value.running && e.messageMeta.value.values.any { it.entryId == "e7" } }
+        watch.cancel()
+        assertTrue("错配：$bad", bad.isEmpty())
+        val meta = e.messageMeta.value
+        val a3 = e.chat.value.items.last { it is ChatItem.Assistant }
+        assertEquals("e7", meta.getValue(a3.key).entryId)
+        assertEquals(9L, meta.getValue(a3.key).usage!!.output)
+        assertEquals("e2", meta.getValue(a1.key).entryId)
+        assertNull(meta[failedBubble.key])
+        e.close()
+    }
+
+    @Test
+    fun stopDuringRetryBackoffDoesNotShiftMeta() = stopOrAbortDuringRetry(useStop = true)
+
+    @Test
+    fun abortRetryDuringBackoffDoesNotShiftMeta() = stopOrAbortDuringRetry(useStop = false)
+
+    /**
+     * 审查第 2 轮 Important 2：fork 成功但 get_messages 失败（长会话超 32 MB 或超时）。pi 已是新会话：
+     * 旧时间线清空、messageMeta 为空（不再允许按旧 entryId 分叉），旧 lastId 增量拿到 Entry not found 也不会把新 entry 配到旧气泡。
+     */
+    @Test
+    fun forkThenGetMessagesFailureInvalidatesMeta() = runBlocking {
+        val history2 = """{"messages":[{"role":"user","content":"第一句"},{"role":"assistant","provider":"deepseek","model":"deepseek-chat","content":[{"type":"text","text":"答一"}],"stopReason":"stop"},{"role":"user","content":"第二句"},{"role":"assistant","provider":"deepseek","model":"deepseek-chat","content":[{"type":"text","text":"答二"}],"stopReason":"stop"}]}"""
+        val old = """{"entries":[{"type":"message","id":"e1","parentId":null,"message":{"role":"user","content":"第一句"}},{"type":"message","id":"e2","parentId":"e1","message":{"role":"assistant","provider":"deepseek","model":"deepseek-chat","content":[],"stopReason":"stop"}},{"type":"message","id":"e3","parentId":"e2","message":{"role":"user","content":"第二句"}},{"type":"message","id":"e4","parentId":"e3","message":{"role":"assistant","provider":"deepseek","model":"deepseek-chat","content":[],"stopReason":"stop"}}],"leafId":"e4"}"""
+        // fork(e3)：新会话只有 e3 之前的路径（真 pi 保留原 id）
+        val forkedEntries = """{"entries":[{"type":"message","id":"e1","parentId":null,"message":{"role":"user","content":"第一句"}},{"type":"message","id":"e2","parentId":"e1","message":{"role":"assistant","provider":"deepseek","model":"deepseek-chat","content":[],"stopReason":"stop"}}],"leafId":"e2"}"""
+        var forked = false
+        val rt = ScriptedRuntime {
+            { cmd ->
+                when (cmd.str("type")) {
+                    "fork" -> { forked = true; ok(cmd, """{"text":"第二句","cancelled":false}""") }
+                    "get_messages" -> if (forked) fail(cmd, "Response too large") else ok(cmd, history2)
+                    "get_entries" -> when {
+                        !forked -> ok(cmd, old)
+                        cmd.str("since") != null && cmd.str("since") !in setOf("e1", "e2") -> fail(cmd, "Entry not found: ${cmd.str("since")}")
+                        else -> ok(cmd, forkedEntries)
+                    }
+                    else -> basics(cmd)
+                }
+            }
+        }
+        val e = engine(rt)
+        assertTrue(e.openSession("/root/.pi/agent/sessions/x.jsonl", "/root/pi-cwd") is Outcome.Ok)
+        waitFor { e.messageMeta.value.size == 4 }
+        val oldKeys = e.chat.value.items.filter { it is ChatItem.User || it is ChatItem.Assistant }.map { it.key }.toSet()
+        val u2 = e.chat.value.items.last { it is ChatItem.User }
+        val f = e.fork(e.messageMeta.value.getValue(u2.key).entryId)
+        assertEquals("第二句", (f as Outcome.Ok).value.text)
+        waitFor { e.chat.value.items.any { it is ChatItem.Notice } }
+        delay(300)
+        assertTrue("旧会话气泡应清掉：${e.chat.value.items}", e.chat.value.items.none { it.key in oldKeys })
+        assertTrue("messageMeta 应为空：${e.messageMeta.value}", e.messageMeta.value.isEmpty())
+        val gets = rt.last.received.filter { it.str("type") == "get_entries" }
+        assertNull("fork 后应全量重拉，不拿旧 lastId 增量", gets.last().str("since"))
+        e.close()
+    }
 }

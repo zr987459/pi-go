@@ -139,6 +139,8 @@ class RpcChannel(
                     is JsonlFramer.Frame.Oversized -> {
                         log(Level.WARN, "丢弃超长记录：${frame.bytes} 字节")
                         onProtocolError(ProtocolError.Oversized(frame.bytes))
+                        // 超长的 response（>32 MB 的 get_entries / get_tree / get_messages）按行首的 id 立即以失败结束，不等满超时。
+                        failMalformedResponse(frame.head)
                     }
                 }
             }
