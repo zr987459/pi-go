@@ -189,3 +189,102 @@
 | `bash_execution_update` | `!` 输出实时滚动（ANSI） | 等宽输出块 |
 | `extension_error` | 红色提示行 | 吐司加 ⌘「诊断」 |
 | `extension_ui_request`（select/confirm/input/editor/notify/setStatus/setWidget/setTitle/set_editor_text） | pi 风格弹层；setStatus 显示在页脚；setWidget 显示在编辑器上方 | 底部面板；状态显示在顶栏副标题；widget 显示在输入框上方 |
+
+### 2.4 清单 §3 斜杠命令
+
+UI 形态里，下面每一条都是 ⌘ 命令中心的一项（按组：会话 / 模型 / pi 设置 / 扩展与资源 / 帮助）。在输入框敲 `/` 时，同一份列表以补全面板的形式出现。终端形态是 pi 原样的斜杠命令。
+
+| 命令 | 动作 id | 终端形态 | UI 形态（除 ⌘ 外的快捷入口） |
+|---|---|---|---|
+| `/settings` | `settings` | pi 风格 SettingsList 弹层（按清单 §8 的分组） | ⌘「pi 设置」，按同样分组列出的原生列表。**不放进设置页**，见 §6 |
+| `/model` | `model.select` | 可搜索列表弹层 | 模型胶囊 |
+| `/thinking` | `thinking.select` | 选择器 | 思考胶囊 |
+| `/scoped-models` | `model.scoped` | 多选列表；触屏拖动排序；Ctrl+S 映射为「保存」 | 模型面板「常用」页签 |
+| `/login` | `auth.login` | 服务商选择器 → 登录对话框（显示 URL 和设备码，可粘贴回调） | 设置 › 模型 › 服务商 › 登录 |
+| `/logout` | `auth.logout` | 选择器 | 服务商页「退出登录」 |
+| `/llama` | `ext.llama` | 由扩展 UI 协议画 | ⌘「llama.cpp」（同一协议画成底部面板） |
+| `/new` | `session.new` | 命令 | ＋ |
+| `/resume` | `session.resume` | 会话选择器（搜索；键条映射 Ctrl+P 显示路径、Ctrl+S 排序、Ctrl+N 只看已命名、Ctrl+R 重命名、Ctrl+D 删除） | ☰ 会话列表（同样五个选项在列表菜单和长按里） |
+| `/name` | `session.name` | 命令 | 点标题 |
+| `/session` | `session.info` | 文本块输出（路径、ID、消息数、token、费用） | 上下文环 → 会话信息页 |
+| `/tree` | `session.tree` | 树选择器（筛选、标签、折叠，快捷键映射成工具条按钮） | 会话菜单 › 分支树 |
+| `/fork` | `session.fork` | 用户消息选择器 | 消息长按 |
+| `/clone` | `session.clone` | 命令 | 会话菜单 |
+| `/compact` | `session.compact` | 命令 | 上下文环 |
+| `/import` | `session.import` | 命令加系统文件选择器（SAF） | 会话列表菜单 › 导入 |
+| `/copy` | `copy.last` | 命令 | 长按复制 |
+| `/export` | `session.export` | 命令 | 会话菜单 › 导出 |
+| `/share` | `session.share` | 命令（需要 gh 或 Radius 登录，未登录时提示） | 会话菜单 › 分享链接 |
+| `/bug` | `bug` | 命令 | ⌘「报告问题」 |
+| `/trust` | `trust` | 命令 | ⌘「项目信任」；首次打开项目时弹窗 |
+| `/mcp` | `mcp` | 扩展 UI 弹层 | ⌘「MCP 服务器」 |
+| `/reload` | `reload` | 命令 | ⌘「重新加载资源」；改完 pi 设置后自动执行 |
+| `/hotkeys` | `hotkeys` | 显示快捷键与触屏映射表（§3.4） | ⌘「手势与快捷键」 |
+| `/changelog` | `changelog` | 显示包内 CHANGELOG.md | ⌘「更新日志」 |
+| `/debug` | `debug` | 写 pi-debug.log | ⌘「诊断」：导出日志 |
+| `/quit` | `engine.stop` | 停止引擎 | ⌘「停止引擎」 |
+| `/模板名` | `templates` | 补全并显示 argument-hint | `/` 面板 → 参数输入框 |
+| `/skill:名` | `skills` | 补全 | `/` 面板技能组 |
+| 扩展命令 | `ext.command:<名>`（动态） | 补全 | `/` 面板与 ⌘「扩展命令」组 |
+| 本方案新增本地命令 `/ui`、`/term` | `form.toggle` | 切到 UI 形态 | 切到终端形态（另有常驻按钮，§5） |
+
+彩蛋（`/arminsayshi` 等）不做，与清单一致。
+
+### 2.5 清单 §4 内置工具
+
+两种形态都由 `ToolRenderers` 按工具名分派。数据层只有一份（`ChatRow.Tool`），各形态各有一个渲染器表。
+
+| 工具 | 终端形态 | UI 形态 |
+|---|---|---|
+| `read` | `read path:范围` 标题加折叠输出；图片结果内联显示 | 过程行「读取 文件名」，展开看内容和图片 |
+| `write` | 标题加代码预览（语法色） | 「写入 文件名」，展开看代码 |
+| `edit` | 红绿 diff（`toolDiff*` token，复用 `LineDiff`） | 「编辑 文件名 +3 −1」，展开看 diff |
+| `bash` | `$ cmd` 加流式 ANSI 输出；截断时附「完整输出」链接，打开 `OutputViewer` 读 `full_output_path` | 「运行 命令」加等宽输出块，有同样的完整输出链接 |
+| `grep` / `find` / `ls` | 标题加列表 | 「搜索 / 查找 / 列出」过程行 |
+| `powershell` | 不适用（Windows） | 不适用。⌘「工具开关」里显示为灰色并说明原因 |
+| `codemode` | 脚本块加输出 | 「脚本」过程行，展开看代码 |
+| `tool_search` | 普通工具行 | 普通过程行 |
+| MCP 工具 | 普通工具行，前面加 `mcp__服务器` | 过程行，前面加服务器名 |
+
+开关这些工具的入口统一在动作 `settings.tools`（§2.1）。
+
+### 2.6 清单 §5 会话
+
+| 条目 | 动作 id | 终端形态 | UI 形态 |
+|---|---|---|---|
+| 存储位置 | `session.info` | `/session` 显示路径 | 会话信息页 |
+| 格式（v3 JSONL 条目树） | —（底座） | — | — |
+| 继续最近 / 恢复 | `session.resume` | 冷启动回到上次会话（ResumePolicy）；`/resume` | 同左；☰ |
+| 新建 | `session.new` | `/new` | ＋ |
+| 分叉 / 复制 | `session.fork` / `session.clone` | `/fork`、`/clone` | 长按、会话菜单 |
+| 树导航（原地切换分支、选中的用户消息原文回到编辑器、分支摘要提示） | `session.tree` | `/tree`；双击 Esc（遵循 `doubleEscapeAction`） | 分支树页：点节点切换，弹「是否摘要离开的分支」。原文放回**共享草稿**，所以两种形态都能看到 |
+| 树筛选 | `tree.filter` | 工具条 5 个筛选键 | 树页顶部筛选胶囊 |
+| 标签 | `tree.label` | 树中 Shift+L 对应「标签」键；Shift+T 对应「时间」键 | 节点长按 › 打标签 / 显示时间 |
+| 会话名 | `session.name` | 页脚 | 标题 |
+| 删除会话 | `session.delete` | 选择器 Ctrl+D 键 | 会话列表左滑删除，5 秒内可撤销 |
+| 选择器选项 | `session.resume` | 工具条 | 列表菜单 |
+| 压缩 | `session.compact` | 摘要块 | 压缩卡加上下文环 |
+| 导出 | `session.export` | `/export` | 会话菜单 |
+| 分享 | `session.share` | `/share` | 会话菜单 |
+| 导入 | `session.import` | `/import` | 列表菜单 |
+| 临时会话 | `session.newEphemeral` | `/new --ephemeral` | ＋ 长按 |
+| 工作目录 | `session.cwd` | 页脚 `~/路径 (分支)`；目录不存在时用 pi 的询问 | 顶栏副标题显示目录；点开可「在其他目录新建会话」（目录选择器只列目录，不是文件浏览器） |
+
+### 2.7 清单 §6 模型与服务商
+
+全部见 §6「模型配置」。逐项对应如下：
+
+| 条目 | 动作 id | 终端形态 | UI 形态 |
+|---|---|---|---|
+| 内置服务商（42 个加 radius、llama） | `auth.login` | `/login` 列表 | 设置 › 模型 › 服务商 |
+| OAuth / 订阅登录 | `auth.login` | 登录对话框 | 服务商页 › 用账号登录 |
+| API key 来源与优先级（含 `!命令` key、`env`） | `auth.login` | `/login › API key` | 服务商页「Key」，高级里可写 `!命令` 和额外 env |
+| 自定义服务商 `models.json` | `provider.custom` | `/settings › 自定义服务商` 表单 | 设置 › 模型 › 添加自定义服务商（发现模型、测试连接） |
+| 模型切换 | `model.select` | `/model` | 胶囊 |
+| 循环切换 | `model.cycle` | 页脚滑动 | 胶囊滑动 |
+| 作用域模型（可带每模型思考档） | `model.scoped` | `/scoped-models` | 「常用」页签，每行可选固定思考档 |
+| 思考强度（7 档、budgets、modelThinkingLevels） | `thinking.select` | 边框色 | 胶囊；预算在设置 › 模型 › 高级 |
+| 默认模型 | `model.setDefault` | 选择器「设为默认」 | 模型面板行长按 › 设为默认 |
+| 模型目录更新 | `model.refreshCatalog` | `!pi update --models` | 模型面板右上「刷新」 |
+| llama.cpp | `ext.llama` | `/llama` | ⌘ |
+| 虚拟模型 / 分类器 / 图像模型 | —（随扩展） | 随扩展出现 | 随扩展出现在模型列表与 ⌘ |
