@@ -16,7 +16,7 @@ import java.nio.file.LinkOption
  * 4. 排序：分数降序 → 路径层数升序 → 路径长度升序 → 字典序；取前 [limit] 条（pi 取 20）。
  *
  * 与 fd 的差异（容器里没有 fd，Android 上也不跑进程，改为宿主侧直接遍历 rootfs）：
- * - `.gitignore` 只支持常用写法：`name`、`*.ext`、`dir/`、`/anchored`、`a/**`、`#` 注释；**不支持 `!` 取反**；
+ * - `.gitignore` 只支持常用写法：`name`、`*.ext`、`dir/`、`/anchored`、`**` 通配、`#` 注释；**不支持 `!` 取反**；
  *   只读搜索根及其子目录里的 `.gitignore`（fd 还会读上层仓库根与全局 excludes）。
  * - 遍历上限 [MAX_VISITED] 个条目，防止在 `/root` 这类大目录里卡住。
  */
