@@ -69,6 +69,8 @@ data class ChatConfig(
     val stopWaitSendMs: Long = 5_000,
     /** 打字停下这么久后才把草稿写盘（S7）。 */
     val draftSaveDelayMs: Long = 500,
+    /** 分叉成功后最多等这么久让引擎报告新会话文件；超时就放弃把原文放回，免得塞进不相干的会话。 */
+    val forkWaitMs: Long = 15_000,
 )
 
 /** 正在显示（或排队等待显示）的扩展对话框。 */
@@ -160,9 +162,15 @@ class ChatController(
     @Volatile
     private var observedFile: String? = engine.chat.value.sessionFile
 
-    /** 分叉成功后要写进新会话输入框的文本；等会话切换到新文件后再放。 */
+    /**
+     * 分叉成功后要写进新会话输入框的文本，以及分叉前的会话文件 [PendingFork.before]。
+     * 等第一次出现「非 null 且不同于 before」的会话文件时放回；引擎换会话可能先经过 null（A → null → B），
+     * 也可能从还没落盘的新会话（null）分叉。超过 [ChatConfig.forkWaitMs] 仍没等到就清掉（审查第 1 轮 Important 4）。
+     */
+    private class PendingFork(val text: String, val before: String?)
+
     @Volatile
-    private var pendingForkText: String? = null
+    private var pendingFork: PendingFork? = null
 
     private var draftJob: Job? = null
     /**
@@ -218,11 +226,14 @@ class ChatController(
                     resetSessionLocal(sameProcess = true)
                     swapInDraft(chat.sessionFile, firstLearn = false)
                 } else if (lastFile == null && chat.sessionFile != null) {
-                    observedFile = chat.sessionFile
-                    swapInDraft(chat.sessionFile, firstLearn = true)
+                    val file: String = chat.sessionFile ?: return@collect
+                    observedFile = file
+                    migrateNewSessionDraft(file)
+                    swapInDraft(file, firstLearn = true)
                 }
                 lastFile = chat.sessionFile
                 observedFile = chat.sessionFile
+                maybeApplyFork(chat.sessionFile)
                 // 引擎重启中：旧进程的队列快照要留给 resetSessionLocal 退回；也不拿重启中的空状态去对账，
                 // 否则「已排队」的本地气泡会被误判为已送达而被清掉。
                 if (isRestarting(engine.status.value)) return@collect
@@ -553,8 +564,21 @@ class ChatController(
             } else {
                 val t = r.value.text.orEmpty()
                 if (t.isNotBlank()) {
-                    // 会话切换已经处理过（新文件已见到）就直接放进输入框，否则等切换时放。
-                    if (observedFile != before) applyForkText(t) else pendingForkText = t
+                    val now = observedFile
+                    // 会话切换已经处理过（已见到不同于分叉前的新文件）就直接放进输入框，否则等新文件出现时放。
+                    if (now != null && now != before) {
+                        applyForkText(t)
+                    } else {
+                        val p = PendingFork(t, before)
+                        pendingFork = p
+                        scope.launch {
+                            delay(config.forkWaitMs)
+                            if (pendingFork === p) {
+                                pendingFork = null
+                                emitMessage("分叉后没有切到新会话，原文没有放回输入框")
+                            }
+                        }
+                    }
                 }
             }
             is Outcome.Err -> emitMessage("分叉失败：" + r.message.ifBlank { "未知错误" })
@@ -562,8 +586,15 @@ class ChatController(
         return r
     }
 
+    /** 合成协程每处理一次会话文件就调用：等到「非 null 且不同于分叉前」的文件才放回分叉原文。 */
+    private fun maybeApplyFork(file: String?) {
+        val p = pendingFork ?: return
+        if (file == null || file == p.before) return
+        applyForkText(p.text)
+    }
+
     private fun applyForkText(t: String) {
-        pendingForkText = null
+        pendingFork = null
         local.update { it.copy(composer = ComposerLogic.onWithdrawn(it.composer, listOf(t))) }
         persistDraftSoon()
     }
@@ -579,6 +610,26 @@ class ChatController(
         draftJob = scope.launch {
             delay(config.draftSaveDelayMs)
             store.put(key, local.value.composer.draft)
+        }
+    }
+
+    /**
+     * 新会话落盘（null → 文件）：会话文件还是 null 时输入的草稿存在 `newSessionKey("")` 下，
+     * 现在改存到新文件的 key 下并删掉旧 key，不在 drafts.json 里留孤儿（审查第 1 轮 Nit）。
+     */
+    private fun migrateNewSessionDraft(file: String) {
+        val store = drafts ?: return
+        draftJob?.cancel()
+        draftJob = null
+        val draft = local.value.composer.draft
+        scope.launch {
+            try {
+                store.remove(keyOf(null))
+                if (draft.isNotBlank()) store.put(keyOf(file), draft)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+            }
         }
     }
 
@@ -598,8 +649,6 @@ class ChatController(
      * [firstLearn]：只是首次得知会话文件（冷启动或新会话落盘），草稿还是同一份，只在输入框为空时恢复。
      */
     private fun swapInDraft(file: String?, firstLearn: Boolean) {
-        val fork = pendingForkText
-        if (fork != null && !firstLearn) applyForkText(fork)
         val store = drafts ?: return
         if (file == null) return
         val key = keyOf(file)
