@@ -309,11 +309,6 @@ fun ChatScreen(
 /** 建议胶囊只往输入框里填文字（和用户自己打字一样），不新增发送逻辑；已有草稿时追加到末尾，不覆盖。 */
 private fun ChatController.setDraftFromSuggestion(prompt: String) = setDraft(SuggestionText.merge(state.value.composer.draft, prompt))
 
-/** 建议胶囊与草稿合并：草稿为空直接填入，否则换行追加。纯函数，便于单测。 */
-internal object SuggestionText {
-    fun merge(draft: String, prompt: String): String = if (draft.isBlank()) prompt else draft.trimEnd() + "\n" + prompt
-}
-
 /** dsh-Go `greetingFor`：5–11 早上好、11–13 中午好、13–18 下午好、18–23 晚上好、其余 夜深了。 */
 fun greetingFor(time: LocalTime): String = when (time.hour) {
     in 5..10 -> "早上好"
