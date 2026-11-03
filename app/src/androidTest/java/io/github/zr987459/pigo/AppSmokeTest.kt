@@ -4,7 +4,10 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeRight
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.github.zr987459.pigo.contract.Phase
 import io.github.zr987459.pigo.di.BindingMode
@@ -28,6 +31,14 @@ class AppSmokeTest {
         rule.waitUntil(timeoutMs) { rule.onAllNodes(hasTestTag(tag)).fetchSemanticsNodes().isNotEmpty() }
     }
 
+    /** dsh-Go 外壳没有底部导航栏：页面入口都在左侧抽屉里，先从左边缘拉出抽屉。 */
+    private fun nav(route: String) {
+        rule.onRoot().performTouchInput { swipeRight(startX = 2f, endX = centerX) }
+        waitTag("drawer")
+        rule.onNodeWithTag("nav:$route").performClick()
+        rule.waitForIdle()
+    }
+
     @Test
     fun allBindingsAreReal() {
         assertEquals(Mode.REAL, BindingMode.runtime)
@@ -45,20 +56,20 @@ class AppSmokeTest {
 
     @Test
     fun topLevelNavigationReachesEveryPage() {
-        rule.onNodeWithTag("nav:settings").performClick()
+        nav("settings")
         waitTag("page:settings")
         rule.onNodeWithTag("settings:sec-models").assertIsDisplayed()
-        rule.onNodeWithTag("nav:sessions").performClick()
+        nav("sessions")
         waitTag("page:sessions")
-        rule.onNodeWithTag("nav:chat").performClick()
+        nav("chat")
         waitTag("page:chat")
-        rule.onNodeWithTag("nav:onboarding").performClick()
+        nav("onboarding")
         waitTag("page:onboarding")
     }
 
     @Test
     fun noModelBannerJumpsToModelSettings() {
-        rule.onNodeWithTag("nav:chat").performClick()
+        nav("chat")
         waitTag("page:chat")
         // 全新安装没有任何 Key：聊天页顶部提示「还没有配置模型」，点「去设置模型」定位到设置页「模型与 Key」。
         val hasBanner = runCatching { waitTag("chat:goSettings", 5_000) }.isSuccess
