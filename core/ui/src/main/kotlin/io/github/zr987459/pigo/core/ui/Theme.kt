@@ -2,36 +2,26 @@ package io.github.zr987459.pigo.core.ui
 
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.graphics.Color
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalContext
 
-private val Teal = Color(0xFF00897B)
-private val TealDark = Color(0xFF4DB6AC)
-
-private val LightColors: ColorScheme = lightColorScheme(
-    primary = Teal,
-    secondary = Color(0xFF5C6BC0),
-    tertiary = Color(0xFFEF6C00),
-)
-
-private val DarkColors: ColorScheme = darkColorScheme(
-    primary = TealDark,
-    secondary = Color(0xFF9FA8DA),
-    tertiary = Color(0xFFFFB74D),
-)
-
-/** pi-go 主题（MVP 期间冻结，DESIGN.md §2.1）。Android 12+ 默认跟随系统动态取色。 */
+/**
+ * pi-go 主题：dsh-Go 的雾蓝玻璃中性色 + 黛青强调色（浅色/深色），dsh-Go 字号阶梯与圆角词汇。
+ *
+ * - M3 颜色：`MaterialTheme.colorScheme`（手工配色，见 [DshPalette]）。
+ * - 扩展颜色（渐变背景、玻璃面、用户气泡、代码井、状态色）：[DshTheme.colors]。
+ * - 圆角：`MaterialTheme.shapes`（= [AppShape.Material]）或直接用 [AppShape]。
+ *
+ * @param dynamicColor 默认 **false**（与 dsh-Go 一致，不跟随壁纸取色）。为 true 时只替换 M3 颜色，扩展颜色不变。
+ */
 @Composable
 fun PiGoTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = true,
+    dynamicColor: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     val colors = when {
@@ -39,8 +29,15 @@ fun PiGoTheme(
             val ctx = LocalContext.current
             if (darkTheme) dynamicDarkColorScheme(ctx) else dynamicLightColorScheme(ctx)
         }
-        darkTheme -> DarkColors
-        else -> LightColors
+        darkTheme -> DshPalette.DarkScheme
+        else -> DshPalette.LightScheme
     }
-    MaterialTheme(colorScheme = colors, typography = PiGoTypography, content = content)
+    CompositionLocalProvider(LocalDshColors provides if (darkTheme) DshColors.Dark else DshColors.Light) {
+        MaterialTheme(
+            colorScheme = colors,
+            typography = PiGoTypography,
+            shapes = AppShape.Material,
+            content = content,
+        )
+    }
 }

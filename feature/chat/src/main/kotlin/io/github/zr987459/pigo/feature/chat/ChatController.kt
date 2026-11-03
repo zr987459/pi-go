@@ -6,6 +6,12 @@ import io.github.zr987459.pigo.contract.ChatState
 import io.github.zr987459.pigo.contract.ContentBlock
 import io.github.zr987459.pigo.contract.Delivery
 import io.github.zr987459.pigo.contract.Disposition
+import io.github.zr987459.pigo.contract.DraftStore
+import io.github.zr987459.pigo.contract.EngineExtras
+import io.github.zr987459.pigo.contract.ForkResult
+import io.github.zr987459.pigo.contract.ImageInput
+import io.github.zr987459.pigo.contract.BashEvent
+import io.github.zr987459.pigo.contract.SlashCommand
 import io.github.zr987459.pigo.contract.EngineClient
 import io.github.zr987459.pigo.contract.EngineStatus
 import io.github.zr987459.pigo.contract.ErrCode
@@ -28,6 +34,13 @@ import io.github.zr987459.pigo.feature.chat.logic.ErrorText
 import io.github.zr987459.pigo.feature.chat.logic.PhaseLabel
 import io.github.zr987459.pigo.feature.chat.logic.RetryAnchor
 import io.github.zr987459.pigo.feature.chat.logic.PrimaryAction
+import io.github.zr987459.pigo.feature.chat.logic.InputRoute
+import io.github.zr987459.pigo.feature.chat.logic.InputRouting
+import io.github.zr987459.pigo.feature.chat.logic.SlashCandidates
+import io.github.zr987459.pigo.feature.chat.logic.SlashCompletion
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -54,6 +67,10 @@ data class ChatConfig(
     val stopSlowHintMs: Long = 20_000,
     /** 停止前最多等这么久，让正在发出的消息先拿到 pi 的响应（防止它在 clear_queue 之后才入队、停止后照样发出）。 */
     val stopWaitSendMs: Long = 5_000,
+    /** 打字停下这么久后才把草稿写盘（S7）。 */
+    val draftSaveDelayMs: Long = 500,
+    /** 分叉成功后最多等这么久让引擎报告新会话文件；超时就放弃把原文放回，免得塞进不相干的会话。 */
+    val forkWaitMs: Long = 15_000,
 )
 
 /** 正在显示（或排队等待显示）的扩展对话框。 */
@@ -81,6 +98,12 @@ data class ChatScreenState(
     val retry: RetryBanner? = null,
     /** 发送到出第一个字之间、长时间跑工具时的阶段提示（见 [PhaseLabel]）；已并入 [statusLines] 的第一行。 */
     val phase: String? = null,
+    /** 草稿以 `/` 开头、正在输入命令名时的候选（C3）；其他时候为 null。 */
+    val slash: SlashCandidates? = null,
+    /** 待发送的图片（C1），发送后清空。 */
+    val attachments: List<ImageInput> = emptyList(),
+    /** 用户的 `!` 命令正在执行（C6）。 */
+    val bashRunning: Boolean = false,
 )
 
 /**
@@ -94,6 +117,10 @@ class ChatController(
     private val scope: CoroutineScope,
     private val config: ChatConfig = ChatConfig(),
     private val clock: () -> Long = System::currentTimeMillis,
+    /** pi 1.5.0 的其余 RPC（图片、斜杠命令、`!` 命令、分叉）；为 null 时这些功能不可用，行为同旧版。 */
+    private val extras: EngineExtras? = null,
+    /** 按会话保存草稿（S7）；为 null 时草稿只在内存里。 */
+    private val drafts: DraftStore? = null,
 ) {
     private data class Local(
         val composer: ComposerState = ComposerState(),
@@ -119,9 +146,33 @@ class ChatController(
          * 提示「该消息已发出」，并在草稿或芯片仍等于原文时撤掉退回的那份，避免用户再发一遍。
          */
         val returnedSending: Map<String, String> = emptyMap(),
+        /** 待发送的图片。 */
+        val attachments: List<ImageInput> = emptyList(),
+        /** 斜杠命令缓存；null 表示还没读过（或会话已换、需要重读）。 */
+        val commands: List<SlashCommand>? = null,
+        /** [commands] 属于哪个会话（按会话文件缓存，切会话或新建后失效）。 */
+        val commandsKey: String? = null,
+        val commandsLoading: Boolean = false,
+        val bashRunning: Boolean = false,
     )
 
     private val local = MutableStateFlow(Local())
+
+    /** 合成协程最后处理过的会话文件（草稿和分叉文本按它归属）。 */
+    @Volatile
+    private var observedFile: String? = engine.chat.value.sessionFile
+
+    /**
+     * 分叉成功后要写进新会话输入框的文本，以及分叉前的会话文件 [PendingFork.before]。
+     * 等第一次出现「非 null 且不同于 before」的会话文件时放回；引擎换会话可能先经过 null（A → null → B），
+     * 也可能从还没落盘的新会话（null）分叉。超过 [ChatConfig.forkWaitMs] 仍没等到就清掉（审查第 1 轮 Important 4）。
+     */
+    private class PendingFork(val text: String, val before: String?)
+
+    @Volatile
+    private var pendingFork: PendingFork? = null
+
+    private var draftJob: Job? = null
     /**
      * 带缓冲的一次性提示：聊天页不在前台（没人收集）时产生的提示先存着，回到聊天页再显示，每条只显示一次。
      * 只留最近 [MESSAGE_BUFFER] 条（满时丢最旧的），离开很久再回来不会连弹一长串。
@@ -166,10 +217,23 @@ class ChatController(
         scope.launch {
             var wasRunning = engine.chat.value.running
             var lastFile = engine.chat.value.sessionFile
+            swapInDraft(lastFile, firstLearn = true)
             engine.chat.collect { chat ->
                 // 切到了另一个会话（null → 文件只是首次得知会话文件，不算切换）。
-                if (lastFile != null && chat.sessionFile != lastFile) resetSessionLocal(sameProcess = true)
+                if (lastFile != null && chat.sessionFile != lastFile) {
+                    swapOutDraft(lastFile)
+                    observedFile = chat.sessionFile
+                    resetSessionLocal(sameProcess = true)
+                    swapInDraft(chat.sessionFile, firstLearn = false)
+                } else if (lastFile == null && chat.sessionFile != null) {
+                    val file: String = chat.sessionFile ?: return@collect
+                    observedFile = file
+                    migrateNewSessionDraft(file)
+                    swapInDraft(file, firstLearn = true)
+                }
                 lastFile = chat.sessionFile
+                observedFile = chat.sessionFile
+                maybeApplyFork(chat.sessionFile)
                 // 引擎重启中：旧进程的队列快照要留给 resetSessionLocal 退回；也不拿重启中的空状态去对账，
                 // 否则「已排队」的本地气泡会被误判为已送达而被清掉。
                 if (isRestarting(engine.status.value)) return@collect
@@ -283,11 +347,13 @@ class ChatController(
             if (phase == null) chat.statusLine?.takeIf { it.isNotBlank() }?.let(::add)
             l.status.values.filter { it.isNotBlank() }.forEach(::add)
         }
+        // 只带图片、没写字时也能发送。
+        val primaryComposer = if (l.attachments.isNotEmpty() && l.composer.draft.isBlank()) l.composer.copy(draft = IMAGE_ONLY_PLACEHOLDER) else l.composer
         return ChatScreenState(
             chat = chat,
             rows = rows,
             composer = l.composer,
-            primary = ComposerLogic.primaryAction(chat.running, l.composer),
+            primary = ComposerLogic.primaryAction(chat.running, primaryComposer),
             engineStatus = status,
             dialog = l.dialogs.firstOrNull(),
             pendingDialogs = (l.dialogs.size - 1).coerceAtLeast(0),
@@ -297,6 +363,9 @@ class ChatController(
             contextPercent = chat.contextPercent ?: l.statsPercent,
             retry = visibleRetry,
             phase = phase,
+            slash = if (extras == null) null else SlashCompletion.candidates(l.composer.draft, l.commands, l.commandsLoading),
+            attachments = l.attachments,
+            bashRunning = l.bashRunning,
         )
     }
 
@@ -327,30 +396,304 @@ class ChatController(
 
     // ---------------- 输入框 ----------------
 
-    fun setDraft(text: String) = local.update { it.copy(composer = it.composer.copy(draft = text)) }
+    fun setDraft(text: String) {
+        local.update { it.copy(composer = it.composer.copy(draft = text)) }
+        if (SlashCompletion.queryOf(text) != null) ensureCommands()
+        persistDraftSoon()
+    }
 
-    /** 发送键：空闲时发送；生成中默认排队（[mode] 为 null 时 FOLLOW_UP）；长按菜单可传 STEER。 */
+    /**
+     * 发送键：空闲时发送；生成中默认排队（[mode] 为 null 时 FOLLOW_UP）；长按可选 STEER。
+     * 以 `!` 开头走 `bash`（输出进上下文），`!!` 走 `bash` 且不进上下文（C6）；带图片时走 [EngineExtras.send]（C1）。
+     */
     fun submit(mode: SendMode? = null) {
         val l = local.value
         if (l.composer.stopping) return
         val text = l.composer.draft.trim()
-        if (text.isEmpty()) return
+        val images = l.attachments
+        if (text.isEmpty() && images.isEmpty()) return
+        val ex = extras
+        val route = if (ex != null && images.isEmpty()) InputRouting.route(text) else InputRoute.Message(text)
+        if (route is InputRoute.Bash && ex != null) {
+            if (l.bashRunning) {
+                emitMessage("上一条命令还在执行")
+                return
+            }
+            local.update { it.copy(composer = it.composer.withDraft("")) }
+            persistDraftSoon()
+            runBash(ex, route, original = text)
+            return
+        }
+        if (images.isNotEmpty()) {
+            if (ex == null) {
+                emitMessage("当前版本还不支持发送图片")
+                return
+            }
+            if (!modelAcceptsImages(engine.chat.value.model)) {
+                emitMessage("当前模型不支持看图，请换一个支持图片的模型")
+                return
+            }
+        }
+        local.update { it.copy(composer = it.composer.withDraft(""), attachments = emptyList()) }
+        persistDraftSoon()
+        sendText(text, mode ?: SendMode.FOLLOW_UP, reuseId = null, images = images)
+    }
+
+    // ---------------- 图片附件（C1） ----------------
+
+    /** 附件选择器（W3）产出的图片；最多 [MAX_IMAGES] 张。 */
+    fun addImages(images: List<ImageInput>) {
+        if (images.isEmpty()) return
+        var dropped = false
+        local.update { s ->
+            val all = s.attachments + images
+            dropped = all.size > MAX_IMAGES
+            s.copy(attachments = all.take(MAX_IMAGES))
+        }
+        if (dropped) emitMessage("一次最多附 $MAX_IMAGES 张图片")
+    }
+
+    fun removeImage(index: Int) = local.update { s ->
+        if (index !in s.attachments.indices) s else s.copy(attachments = s.attachments.filterIndexed { i, _ -> i != index })
+    }
+
+    fun clearImages() = local.update { it.copy(attachments = emptyList()) }
+
+    // ---------------- 斜杠命令（C3） ----------------
+
+    /** 选中候选：草稿变成 `/name `，等用户补参数。 */
+    fun pickCommand(command: SlashCommand) {
+        local.update { it.copy(composer = it.composer.withDraft(SlashCompletion.complete(command))) }
+        persistDraftSoon()
+    }
+
+    /** 命令面板的「刷新」：技能或模板改过之后重新读取。 */
+    fun refreshCommands() {
+        local.update { it.copy(commands = null, commandsKey = null) }
+        ensureCommands(forceRefresh = true)
+    }
+
+    private fun ensureCommands(forceRefresh: Boolean = false) {
+        val ex = extras ?: return
+        val key = engine.chat.value.sessionFile.orEmpty()
+        var start = false
+        var refresh = forceRefresh
+        local.update { s ->
+            if (s.commandsLoading || (s.commands != null && s.commandsKey == key)) {
+                start = false
+                s
+            } else {
+                start = true
+                // 换过会话（cwd 可能变了）就让引擎重新请求，不用它按旧 cwd 缓存的结果。
+                refresh = forceRefresh || (s.commandsKey != null && s.commandsKey != key)
+                s.copy(commandsLoading = true)
+            }
+        }
+        if (!start) return
+        scope.launch {
+            val r = try {
+                ex.commands(refresh = refresh)
+            } catch (e: CancellationException) {
+                local.update { it.copy(commandsLoading = false) }
+                throw e
+            } catch (t: Throwable) {
+                Outcome.Err(ErrCode.UNKNOWN, t.message ?: "", t)
+            }
+            local.update { s ->
+                when (r) {
+                    is Outcome.Ok -> s.copy(commands = r.value, commandsKey = key, commandsLoading = false)
+                    is Outcome.Err -> s.copy(commands = emptyList(), commandsKey = key, commandsLoading = false)
+                }
+            }
+            if (r is Outcome.Err) emitMessage("读取命令列表失败：" + r.message.ifBlank { "未知错误" })
+        }
+    }
+
+    // ---------------- `!` 命令（C6） ----------------
+
+    private fun runBash(ex: EngineExtras, route: InputRoute.Bash, original: String) {
+        local.update { it.copy(bashRunning = true) }
+        scope.launch {
+            var failed: Outcome.Err? = null
+            try {
+                ex.bash(route.command, route.excludeFromContext).collect { ev ->
+                    if (ev is BashEvent.Failed) failed = ev.error
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                failed = Outcome.Err(ErrCode.UNKNOWN, t.message ?: "", t)
+            } finally {
+                local.update { it.copy(bashRunning = false) }
+            }
+            failed?.let { e ->
+                local.update { it.copy(composer = ComposerLogic.onSendRejected(it.composer, original)) }
+                emitMessage("命令没有执行：" + e.message.ifBlank { "未知错误" })
+            }
+        }
+    }
+
+    /** 终端卡上的「停止」。 */
+    fun abortBash() {
+        val ex = extras ?: return
+        scope.launch {
+            val r = ex.abortBash()
+            if (r is Outcome.Err) emitMessage("停止命令失败：${r.message}")
+        }
+    }
+
+    // ---------------- 分叉（S1） ----------------
+
+    /**
+     * 「从这里分叉」：`fork{entryId}` 成功后 pi 切到新会话，被分叉的那条用户消息原文写回输入框，
+     * 方便用户改一改再发（输入框不空时以芯片显示，不覆盖草稿）。
+     */
+    suspend fun forkFrom(entryId: String): Outcome<ForkResult> {
+        val ex = extras ?: return Outcome.Err(ErrCode.UNKNOWN, "当前版本不支持分叉")
+        val before = observedFile
+        val r = try {
+            ex.fork(entryId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            Outcome.Err(ErrCode.UNKNOWN, t.message ?: "", t)
+        }
+        when (r) {
+            is Outcome.Ok -> if (r.value.cancelled) {
+                emitMessage("分叉被扩展取消了")
+            } else {
+                val t = r.value.text.orEmpty()
+                if (t.isNotBlank()) {
+                    val now = observedFile
+                    // 会话切换已经处理过（已见到不同于分叉前的新文件）就直接放进输入框，否则等新文件出现时放。
+                    if (now != null && now != before) {
+                        applyForkText(t)
+                    } else {
+                        val p = PendingFork(t, before)
+                        pendingFork = p
+                        scope.launch {
+                            delay(config.forkWaitMs)
+                            if (pendingFork === p) {
+                                pendingFork = null
+                                emitMessage("分叉后没有切到新会话，原文没有放回输入框")
+                            }
+                        }
+                    }
+                }
+            }
+            is Outcome.Err -> emitMessage("分叉失败：" + r.message.ifBlank { "未知错误" })
+        }
+        return r
+    }
+
+    /** 合成协程每处理一次会话文件就调用：等到「非 null 且不同于分叉前」的文件才放回分叉原文。 */
+    private fun maybeApplyFork(file: String?) {
+        val p = pendingFork ?: return
+        if (file == null || file == p.before) return
+        applyForkText(p.text)
+    }
+
+    private fun applyForkText(t: String) {
+        pendingFork = null
+        local.update { it.copy(composer = ComposerLogic.onWithdrawn(it.composer, listOf(t))) }
+        persistDraftSoon()
+    }
+
+    // ---------------- 草稿（S7） ----------------
+
+    private fun keyOf(file: String?): String = file ?: DraftStore.newSessionKey("")
+
+    private fun persistDraftSoon() {
+        val store = drafts ?: return
+        val key = keyOf(observedFile)
+        draftJob?.cancel()
+        draftJob = scope.launch {
+            delay(config.draftSaveDelayMs)
+            store.put(key, local.value.composer.draft)
+        }
+    }
+
+    /**
+     * 新会话落盘（null → 文件）：会话文件还是 null 时输入的草稿存在 `newSessionKey("")` 下，
+     * 现在改存到新文件的 key 下并删掉旧 key，不在 drafts.json 里留孤儿（审查第 1 轮 Nit）。
+     */
+    private fun migrateNewSessionDraft(file: String) {
+        val store = drafts ?: return
+        draftJob?.cancel()
+        draftJob = null
+        val draft = local.value.composer.draft
+        scope.launch {
+            try {
+                store.remove(keyOf(null))
+                if (draft.isNotBlank()) store.put(keyOf(file), draft)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
+    /** 离开会话：立即保存它的草稿，并清空输入框（撤回的文本随后由 resetSessionLocal 放回）。 */
+    private fun swapOutDraft(file: String?) {
+        draftJob?.cancel()
+        draftJob = null
+        val draft = local.value.composer.draft
+        if (drafts == null) return
         local.update { it.copy(composer = it.composer.withDraft("")) }
-        sendText(text, mode ?: SendMode.FOLLOW_UP, reuseId = null)
+        val key = keyOf(file)
+        scope.launch { drafts.put(key, draft) }
+    }
+
+    /**
+     * 进入会话：取回它的草稿。输入框为空时直接放回；不空（刚撤回的文本已经放进去）时以芯片显示，不覆盖。
+     * [firstLearn]：只是首次得知会话文件（冷启动或新会话落盘），草稿还是同一份，只在输入框为空时恢复。
+     */
+    private fun swapInDraft(file: String?, firstLearn: Boolean) {
+        val store = drafts ?: return
+        if (file == null) return
+        val key = keyOf(file)
+        scope.launch {
+            val saved = try {
+                store.get(key)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                null
+            }
+            if (saved.isNullOrBlank()) return@launch
+            // 读回来时已经又换了会话：不要放进别的会话。
+            if (observedFile != file) return@launch
+            local.update { s ->
+                when {
+                    s.composer.draft.isBlank() -> s.copy(composer = s.composer.withDraft(saved))
+                    firstLearn || s.composer.draft.trim() == saved.trim() -> s
+                    else -> s.copy(composer = s.composer.copy(withdrawn = s.composer.withdrawn + saved))
+                }
+            }
+        }
+    }
+
+    private fun modelAcceptsImages(m: ModelInfo?): Boolean {
+        val input = m?.raw?.get("input") as? JsonArray ?: return true
+        return input.any { (it as? JsonPrimitive)?.contentOrNull == "image" }
     }
 
     /** 失败气泡上的「重试」：只在用户点击时重发，绝不自动重发。 */
     fun retry(localId: String) {
         if (local.value.composer.stopping) return
         val l = local.value.sends.firstOrNull { it.id == localId && it.status == Delivery.FAILED } ?: return
-        sendText(l.text, SendMode.FOLLOW_UP, reuseId = l.id)
+        sendText(l.text, SendMode.FOLLOW_UP, reuseId = l.id, images = l.images)
     }
 
     /** 失败气泡上的「改一改」：文本退回输入框（输入框不空时以撤回芯片显示，不覆盖草稿）。 */
     fun editFailed(localId: String) {
         local.update { s ->
             val l = s.sends.firstOrNull { it.id == localId } ?: return@update s
-            s.copy(sends = s.sends - l, composer = ComposerLogic.onSendRejected(s.composer, l.text))
+            s.copy(
+                sends = s.sends - l,
+                composer = if (l.text.isBlank()) s.composer else ComposerLogic.onSendRejected(s.composer, l.text),
+                attachments = if (s.attachments.isEmpty()) l.images else s.attachments,
+            )
         }
     }
 
@@ -362,14 +705,15 @@ class ChatController(
         sendText(text, SendMode.FOLLOW_UP, reuseId = null)
     }
 
-    private fun sendText(text: String, mode: SendMode, reuseId: String?) {
+    private fun sendText(text: String, mode: SendMode, reuseId: String?, images: List<ImageInput> = emptyList()) {
         val chat = engine.chat.value
         val id = reuseId ?: "s${seq++}"
-        val pending = LocalSend(id = id, text = text, status = Delivery.SENDING, baselineUserCount = Outbox.userCount(chat, text))
+        val pending = LocalSend(id = id, text = text, status = Delivery.SENDING, baselineUserCount = Outbox.userCount(chat, text), images = images)
+        val ex = extras
         local.update { s -> s.copy(sends = s.sends.filterNot { it.id == id } + pending) }
         val job = scope.launch(start = CoroutineStart.LAZY) {
             val r = try {
-                engine.send(text, mode)
+                if (images.isNotEmpty() && ex != null) ex.send(text, images, mode) else engine.send(text, mode)
             } catch (e: CancellationException) {
                 throw e
             } catch (t: Throwable) {
@@ -657,6 +1001,12 @@ class ChatController(
     internal companion object {
         /** 页面不在前台时最多攒几条一次性提示。 */
         const val MESSAGE_BUFFER = 3
+
+        /** 一条消息最多附几张图。 */
+        const val MAX_IMAGES = 8
+
+        /** 只带图片时，按「有字」计算发送键状态用的占位（不会发出去）。 */
+        private const val IMAGE_ONLY_PLACEHOLDER = "[image]"
 
         /**
          * 会话切换 / 引擎重启时要退回输入框的文本，按 pi 送达顺序：已入队的（先插话、后排队）→
