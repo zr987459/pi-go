@@ -3,7 +3,7 @@
 - 负责：W2（全服务商目录、全模型选择页、OAuth、会话内切模型与思考强度、models.json 完整编辑、代理）
 - 依据：`docs/feature-gap.md` §2.1 M1–M5、M7、M9，§3.2 W2，§3.3
 - 基线：已 merge `origin/feat/modules`（749d7b2，CI 绿）进本分支（49b3a2a，普通合并，无强推）
-- 当前阶段：**3 已开 PR #12，待审**，更新于 2026-11-03 16:10 CST；已 merge main（W0 合入后，普通合并）
+- 当前阶段：**修复1 进行中**（2026-11-03 16:35 CST 开始：merge main@cfa3725，修审查第 1 轮 3 个 Important + Nit）；之前：3 已开 PR #12，待审，更新于 2026-11-03 16:10 CST；已 merge main（W0 合入后，普通合并）
 
 ## 已完成并已推送
 - `core/store`（本地单测 59 项全过）：
