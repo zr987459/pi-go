@@ -22,6 +22,11 @@
 - 单测：core/workspace 36、feature/files 16，本地全过；CI 只编译
 - 未完成：androidTest 本机（aarch64，aapt2 不可用）无法编译和运行，CI 也不跑，**尚未在任何模拟器或真机上跑过**；Share 加真实处理器加真实工作区的端到端需 W5 接线后在 app 测
 
-## 审查第 2 轮修复（2026-11-03 16:25 CST，进行中）
-- **修复2 进行中**：正在 `merge origin/main`（已含 UI 改版 PR#11）并处理第 2 轮意见（回归 1、仪器编译、UTF-8 字节截断、roots→refreshGit 时序等）。
-- 每修好一条即提交推送，最长 15 分钟推送一次。
+## 审查第 2 轮修复（2026-11-03 17:00 CST，已完成）
+- 已 merge origin/main（e7c14aa，含 UI 改版 PR#11），无冲突；feature/files、core/workspace 不用 core/ui，无需适配
+- 回归（Important）：cwd 为仓库子目录时未跟踪文件 diff 全空 → `ls-files` 加 `--full-name`；新增子目录 cwd 真实 git 用例
+- diff 截断按 UTF-8 字节判断（原按 UTF-16 码元，中文大 diff 漏判）；单文件截断保留内容、提示改准；新增中文大 diff 用例
+- FilesController：先 roots(sessionCwd) 登记，再 open / refreshGit；新增顺序单测（旧代码下失败）
+- CI：新增一步只编译 `:core:workspace` 与 `:feature:files` 的 androidTest；修好 FilesDeviceTest 编译错误（`onAllNodes` 导入）；PR 检查通过（8ffdcda）
+- SAF 导入用例改用 MediaStore（别的应用 provider）的 content://
+- 未完成：androidTest 仍**只编译，未在模拟器或真机上跑过**；feature/files 仪器测试的工作区仍是 FakeWorkspaceFs（模块不依赖 core/workspace，构建文件不归 W3），真实实现由 core/workspace 的 WorkspaceDeviceTest 覆盖；diff 截断的部分结果仍只经错误提示给出（契约 FileDiff 无截断字段）
