@@ -1,5 +1,8 @@
 # feat/engine-rpc（W1）状态
 
+> **修复1 进行中**（2026-11-03 16:48 CST）：PR #13 审查第 1 轮，Important 4 条 + Nit 4 条；先 merge origin/main（cfa3725）。
+
+
 - 2026-11-03 15:47 CST：**续做已开始**（接手上一位 W1 工作者；其本地未推送的 15 个文件已丢失，按交接说明重做）。
 - 已 merge `origin/feat/modules@f183692`（W0 契约第 1 轮修复：messageMeta、CycleModelResult、RunOutcome.cwd、Compaction.error/aborted），merge 提交 `17640cf`。不 rebase、不强推。PR #8 仍未合入 main。
 - 依据：`docs/feature-gap.md` §3.2 W1、§3.3。
