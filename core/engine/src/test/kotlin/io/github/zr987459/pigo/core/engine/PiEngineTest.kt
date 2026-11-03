@@ -26,6 +26,7 @@ import kotlinx.serialization.json.JsonObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -767,6 +768,30 @@ class PiEngineTest {
     }
 
     @Test
+    fun foregroundGateRapidRestartRaceReturnsNoneOnSecondStop() {
+        // STOP → START → request(false)，中间不调 onServiceDestroyed
+        val g = ForegroundGate()
+        assertEquals(ForegroundGate.Action.START, g.request(true))
+        assertFalse(g.onForegroundStarted()) // 服务进入前台
+        assertEquals(ForegroundGate.Action.STOP, g.request(false)) // STOP：同时将 inForeground 置 false
+        assertEquals(ForegroundGate.Action.START, g.request(true)) // START：拉起新实例
+        // 中间不调 onServiceDestroyed，第三步返回 NONE（不是 STOP）
+        assertEquals(ForegroundGate.Action.NONE, g.request(false))
+        // 新实例随后 onForegroundStarted() 返回 true（自己 stopSelf）
+        assertTrue(g.onForegroundStarted())
+    }
+
+    @Test
+    fun foregroundGateAfterSelfStopCanStartAndHandleFalseBeforeStarted() {
+        val g = ForegroundGate()
+        assertEquals(ForegroundGate.Action.START, g.request(true))
+        assertEquals(ForegroundGate.Action.NONE, g.request(false))
+        assertTrue(g.onForegroundStarted()) // 返回 true（自己 stopSelf），inForeground 置 false
+        assertEquals(ForegroundGate.Action.START, g.request(true))
+        assertEquals(ForegroundGate.Action.NONE, g.request(false))
+    }
+
+    @Test
     fun handshakeRejectionStopsTheProcess() = runBlocking {
         // 审查 Nit #9：get_state 返回 success:false 时也要结束进程，避免之后出现两个 pi。
         val rt = ScriptedRuntime { n -> { cmd -> if (n == 1 && cmd.str("type") == "get_state") fail(cmd, "not ready") else basics(cmd) } }
@@ -790,8 +815,10 @@ class PiEngineTest {
         e.start()
         assertTrue(e.restart("测试") is Outcome.Ok) // 有会话文件 → 重建
         assertTrue(e.chat.value.items.last().isNotice(NoticeKind.ERROR, "历史记录加载失败"))
+        System.err.println("DBG0 " + e.chat.value.items)
         failHistory.set(false)
         assertTrue(e.reloadHistory() is Outcome.Ok)
+        System.err.println("DBG1 " + e.chat.value.items)
         assertEquals("旧消息", (e.chat.value.items.first() as ChatItem.User).text)
         assertTrue(e.chat.value.items.none { it.isNotice(NoticeKind.ERROR) })
         e.close()
@@ -861,6 +888,165 @@ class PiEngineTest {
         assertTrue(e.openSession("/root/.pi/agent/sessions/--root-pi-cwd--/s2.jsonl", "/root/pi-cwd") is Outcome.Ok)
         assertTrue(e.chat.value.queue.isEmpty)
         assertNull(e.chat.value.contextPercent)
+        e.close()
+    }
+
+    @Test
+    fun crashBackoffUserSendPreservesFailedCarryAndNotice() = runBlocking {
+        // 崩溃后在退避期间调用 send（触发 ensureStarted 启动），重建完成后时间线上仍有那条 Delivery.FAILED 的用户气泡和「未发出」提示
+        val rt = ScriptedRuntime { n ->
+            { cmd ->
+                when {
+                    n == 1 && cmd.str("type") == "prompt" -> {
+                        ok(cmd, """{"disposition":"started"}""")
+                        emit("""{"type":"agent_start"}""")
+                        crash(1, "Segmentation fault")
+                    }
+                    else -> basics(cmd)
+                }
+            }
+        }
+        val e = engine(rt, fast.copy(restartBackoffMs = listOf(1_500, 3_000)))
+        e.send("老消息")
+        // 等待进入退避等待状态
+        waitFor {
+            val s = e.status.value
+            s is EngineStatus.Crashed && s.retryInMs != null
+        }
+        // 退避期间用户发送新消息，触发 ensureStarted 启动新连接并重建时间线
+        val sendRes = e.send("新消息")
+        assertTrue(sendRes is Outcome.Ok)
+        waitFor { e.status.value is EngineStatus.Idle }
+        val items = e.chat.value.items
+        val users = items.filterIsInstance<ChatItem.User>()
+        val old = users.firstOrNull { it.text == "老消息" }
+        assertNotNull(old)
+        assertEquals(Delivery.FAILED, old?.delivery)
+        assertTrue(items.any { it.isNotice(NoticeKind.INFO, "1 条消息未发出") })
+        e.close()
+    }
+
+    @Test
+    fun crashRecoveryExhaustedManualRestartPreservesFailedCarry() = runBlocking {
+        // 自动恢复全部失败（放弃恢复）后调用 restart()，失败气泡仍在
+        val rt = ScriptedRuntime { n ->
+            { cmd ->
+                when {
+                    n == 1 && cmd.str("type") == "prompt" -> {
+                        ok(cmd, """{"disposition":"started"}""")
+                        emit("""{"type":"agent_start"}""")
+                        crash(1, "boom")
+                    }
+                    n in 2..4 -> {
+                        crash(1, "Cannot start")
+                    }
+                    else -> basics(cmd)
+                }
+            }
+        }
+        val e = engine(rt)
+        e.send("未送达消息")
+        // 等待 3 次自动恢复全部尝试并放弃，停在诊断页（retryInMs == null）
+        waitFor(10_000) { rt.processes.size == 4 && (e.status.value as? EngineStatus.Crashed)?.retryInMs == null }
+        // 诊断页手动调用 restart()
+        assertTrue(e.restart("用户诊断页重启") is Outcome.Ok)
+        waitFor { e.status.value is EngineStatus.Idle }
+        val items = e.chat.value.items
+        val users = items.filterIsInstance<ChatItem.User>()
+        val failed = users.firstOrNull { it.text == "未送达消息" }
+        assertNotNull(failed)
+        assertEquals(Delivery.FAILED, failed?.delivery)
+        assertTrue(items.any { it.isNotice(NoticeKind.INFO, "1 条消息未发出") })
+        e.close()
+    }
+
+    @Test
+    fun getMessagesFailurePreservesPendingCarryAndDoesNotDuplicateOnReload() = runBlocking {
+        // get_messages 失败后再次重建，失败气泡仍只出现一次
+        val failHistory = java.util.concurrent.atomic.AtomicBoolean(false)
+        val rt = ScriptedRuntime { n ->
+            { cmd ->
+                when {
+                    n == 1 && cmd.str("type") == "prompt" -> {
+                        ok(cmd, """{"disposition":"started"}""")
+                        emit("""{"type":"agent_start"}""")
+                        failHistory.set(true)
+                        crash(1, "boom")
+                    }
+                    cmd.str("type") == "get_messages" && failHistory.get() -> {
+                        fail(cmd, "history error")
+                    }
+                    else -> basics(cmd)
+                }
+            }
+        }
+        val e = engine(rt)
+        e.send("待保留消息")
+        // 等待第 2 个进程尝试恢复，get_messages 失败
+        waitFor { e.chat.value.items.any { it.isNotice(NoticeKind.ERROR, "历史记录加载失败") } }
+        failHistory.set(false)
+        assertTrue(e.reloadHistory() is Outcome.Ok)
+        val items1 = e.chat.value.items
+        assertEquals(1, items1.filterIsInstance<ChatItem.User>().count { it.text == "待保留消息" })
+        assertEquals(Delivery.FAILED, items1.filterIsInstance<ChatItem.User>().first { it.text == "待保留消息" }.delivery)
+
+        // 再次 reloadHistory，消费过的 carry 不会重复出现
+        assertTrue(e.reloadHistory() is Outcome.Ok)
+        val items2 = e.chat.value.items
+        assertEquals(1, items2.filterIsInstance<ChatItem.User>().count { it.text == "待保留消息" })
+        e.close()
+    }
+
+    @Test
+    fun resendingCarriedTextDropsItFromLaterRebuilds() = runBlocking {
+        // 用户点「重试」重新发送了接回的文字后，之后再重建不应再以「发送失败」接回它（不重复）。
+        val rt = ScriptedRuntime { n ->
+            { cmd ->
+                when {
+                    n == 1 && cmd.str("type") == "prompt" -> {
+                        ok(cmd, """{"disposition":"started"}""")
+                        emit("""{"type":"agent_start"}""")
+                        crash(1, "boom")
+                    }
+                    else -> basics(cmd)
+                }
+            }
+        }
+        val e = engine(rt)
+        e.send("要重试的")
+        waitFor { e.status.value is EngineStatus.Idle && e.chat.value.items.any { it is ChatItem.User && it.text == "要重试的" && it.delivery == Delivery.FAILED } }
+        assertTrue(e.send("要重试的") is Outcome.Ok)
+        assertTrue(e.reloadHistory() is Outcome.Ok)
+        val failed = e.chat.value.items.filterIsInstance<ChatItem.User>().filter { it.text == "要重试的" && it.delivery == Delivery.FAILED }
+        assertTrue(failed.isEmpty())
+        e.close()
+    }
+
+    @Test
+    fun newSessionClearsPendingCarry() = runBlocking {
+        val rt = ScriptedRuntime { n ->
+            { cmd ->
+                when {
+                    n == 1 && cmd.str("type") == "prompt" -> {
+                        ok(cmd, """{"disposition":"started"}""")
+                        emit("""{"type":"agent_start"}""")
+                        crash(1, "boom")
+                    }
+                    else -> basics(cmd)
+                }
+            }
+        }
+        val e = engine(rt)
+        e.send("旧会话消息")
+        waitFor {
+            val s = e.status.value
+            s is EngineStatus.Crashed && s.retryInMs != null
+        }
+        // 在新目录新建会话
+        assertTrue(e.newSession("/other/dir") is Outcome.Ok)
+        waitFor { e.status.value is EngineStatus.Idle }
+        // 新会话时间线不应包含旧会话的 pendingCarry
+        assertTrue(e.chat.value.items.filterIsInstance<ChatItem.User>().none { it.text == "旧会话消息" })
         e.close()
     }
 }

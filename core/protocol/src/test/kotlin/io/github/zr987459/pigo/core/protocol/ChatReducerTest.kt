@@ -212,6 +212,43 @@ class ChatReducerTest {
     }
 
     @Test
+    fun repeatedUserMessageOnlyOneInHistoryKeepsSecondAsFailed() {
+        // 用户连发两次「继续」，历史里只有第一次 → 第二次以 FAILED 保留
+        var s = r.addPendingUser(ChatState(), "local-0", "继续")
+        s = r.setDelivery(s, "local-0", Delivery.SENT)
+        s = r.addPendingUser(s, "local-1", "继续")
+        s = r.setDelivery(s, "local-1", Delivery.SENT)
+        val res = r.interruptWithdrawing(s, NoticeKind.STOPPED, "已强制停止")
+        assertEquals(2, res.withdrawn.size)
+        val rebuilt = r.fromMessages(arr("""{"role":"user","content":"继续"}"""), base = res.state, carry = res.withdrawn)
+        val users = rebuilt.items.filterIsInstance<ChatItem.User>()
+        assertEquals(2, users.size)
+        assertEquals(Delivery.SENT, users[0].delivery)
+        assertEquals(Delivery.FAILED, users[1].delivery)
+        assertEquals("local-1", users[1].key)
+    }
+
+    @Test
+    fun earlierConfirmedSameTextMessageDoesNotConsumeCarry() {
+        // 历史中更早已确认的同文本消息不会抵消 carry
+        var s = r.addPendingUser(ChatState(), "local-0", "继续")
+        s = r.reduce(s, ev("""{"type":"agent_start"}"""), 0)
+        s = r.reduce(s, userStart("继续"), 0) // 确认为 SENT
+        s = r.addPendingUser(s, "local-1", "继续")
+        s = r.setDelivery(s, "local-1", Delivery.SENT) // 第二条未确认
+        val res = r.interruptWithdrawing(s, NoticeKind.INTERRUPTED, "引擎意外退出")
+        assertEquals(1, res.withdrawn.size)
+        assertEquals("local-1", res.withdrawn.single().key)
+        // 历史里只有早先确认的那一条
+        val rebuilt = r.fromMessages(arr("""{"role":"user","content":"继续"}"""), base = res.state, carry = res.withdrawn)
+        val users = rebuilt.items.filterIsInstance<ChatItem.User>()
+        assertEquals(2, users.size)
+        assertEquals(Delivery.SENT, users[0].delivery)
+        assertEquals(Delivery.FAILED, users[1].delivery)
+        assertEquals("local-1", users[1].key)
+    }
+
+    @Test
     fun timedOutPromptStaysConfirmableAndIsNotDuplicated() {
         // 审查 Nit #6：prompt 应答超时只是「不确定」，之后的 message_start(user) 确认这条气泡而不是追加一条。
         var s = r.addPendingUser(ChatState(), "local-0", "慢慢来")

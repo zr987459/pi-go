@@ -131,6 +131,53 @@ class PiEngine(
     /** 本实例还没成功启动过：第一次成功启动时检查「上一轮被系统中断」（§3.9），之后不再检查。 */
     @Volatile private var coldStartCheck = true
 
+    /**
+     * 崩溃 / 强杀时没送达的消息（审查 R2 Important 1）。存在字段里而不是局部变量：任何 rebuild=true 的 boot
+     * （恢复循环、退避期间的按需启动、诊断页 restart、forceRestart 失败后的下一次启动）以及 reloadHistory
+     * 都会把它们以「发送失败」接回时间线。重建成功后不清空——之后再次重建（再崩溃、重新加载历史）仍要接回；
+     * 只在以下情况移除：历史里已出现（pi 其实已写入会话，见 fromMessages 去重）、用户重新发送了同样的文字、
+     * 切换 / 新建会话、引擎关闭。get_messages 失败时原样保留。
+     */
+    private val carryLock = Any()
+    @Volatile private var pendingCarry: List<ChatItem.User> = emptyList()
+
+    private fun addPendingCarry(items: List<ChatItem.User>) {
+        if (items.isEmpty()) return
+        synchronized(carryLock) {
+            val existing = pendingCarry.map { it.key }.toSet()
+            pendingCarry = pendingCarry + items.filter { it.key !in existing }
+        }
+    }
+
+    private fun snapshotPendingCarry(): List<ChatItem.User> = synchronized(carryLock) {
+        pendingCarry
+    }
+
+    /** 重建后：本批 carry 里没再出现在时间线上的（已写入会话的历史），不再需要接回。 */
+    private fun prunePendingCarry(batch: List<ChatItem.User>, timeline: List<ChatItem>) {
+        if (batch.isEmpty()) return
+        val shown = timeline.mapNotNullTo(HashSet()) { (it as? ChatItem.User)?.key }
+        val gone = batch.mapNotNullTo(HashSet()) { it.key.takeIf { k -> k !in shown } }
+        if (gone.isEmpty()) return
+        synchronized(carryLock) {
+            pendingCarry = pendingCarry.filterNot { it.key in gone }
+        }
+    }
+
+    /** 用户重新发送了某条「发送失败」的文字（重试或重新输入）：去掉一条同文本的待接回消息，避免之后重建时重复出现。 */
+    private fun dropPendingCarryText(text: String) {
+        synchronized(carryLock) {
+            val i = pendingCarry.indexOfFirst { it.text == text }
+            if (i >= 0) pendingCarry = pendingCarry.toMutableList().also { it.removeAt(i) }
+        }
+    }
+
+    private fun clearPendingCarry() {
+        synchronized(carryLock) {
+            pendingCarry = emptyList()
+        }
+    }
+
     /** 对话类扩展 UI 请求按到达顺序逐个投递（无人订阅时等一个短窗口，见 [deliverUi]）。 */
     private val uiQueue = Channel<Pair<Conn, ExtUiRequest>>(Channel.UNLIMITED)
 
@@ -252,7 +299,6 @@ class PiEngine(
 
     /**
      * 只在 [lifecycle] 锁内调用。
-     * @param carry 崩溃 / 强制重启时没送达的消息，重建后以「发送失败」气泡接回（不自动重发）
      * @param allowResume 本实例首次启动且调用方没指定会话时，可回到运行标记里那个被系统中断的会话
      * @param inRecovery 崩溃自动恢复中的一次尝试：失败时不关前台服务（由恢复循环决定）
      */
@@ -262,7 +308,6 @@ class PiEngine(
         rebuild: Boolean,
         reason: String,
         trailingNotice: Pair<NoticeKind, String>? = null,
-        carry: List<ChatItem.User> = emptyList(),
         allowResume: Boolean = false,
         inRecovery: Boolean = false,
     ): Outcome<Unit> {
@@ -283,7 +328,7 @@ class PiEngine(
                 resumed = true
             }
         }
-        val r = bootInner(bootSession, bootCwd, bootRebuild, reason, trailingNotice, carry, inRecovery, cold, coldMarker)
+        val r = bootInner(bootSession, bootCwd, bootRebuild, reason, trailingNotice, inRecovery, cold, coldMarker)
         // 回到被中断的会话却启动失败（会话文件损坏等）：清掉标记，下次按需启动走普通流程，不会一直卡在这个会话上。
         if (r is Outcome.Err && resumed) withContext(io) { runCatching { runMarker.clear() } }
         return r
@@ -295,7 +340,6 @@ class PiEngine(
         rebuild: Boolean,
         reason: String,
         trailingNotice: Pair<NoticeKind, String>?,
-        carry: List<ChatItem.User>,
         inRecovery: Boolean,
         cold: Boolean,
         coldMarker: String?,
@@ -368,7 +412,7 @@ class PiEngine(
         currentCwd = cwd
         c.ready = true
         mutate { reducer.applyPiState(it, st) }
-        if (rebuild) rebuildFromMessages(c, carry, live = st.isStreaming)
+        if (rebuild) rebuildFromMessages(c, carry = snapshotPendingCarry(), live = st.isStreaming)
         if (cold) {
             coldStartCheck = false
             applyColdStart(coldMarker, rebuilt = rebuild)
@@ -434,11 +478,16 @@ class PiEngine(
         }
     }
 
-    private suspend fun rebuildFromMessages(c: Conn, carry: List<ChatItem.User> = emptyList(), live: Boolean = false): Outcome<Unit> {
+    private suspend fun rebuildFromMessages(
+        c: Conn,
+        carry: List<ChatItem.User> = snapshotPendingCarry(),
+        live: Boolean = false,
+    ): Outcome<Unit> {
         val r = c.channel.request(RpcCommand.GetMessages(ids.next()), config.getMessagesTimeoutMs)
         return if (r is Outcome.Ok) {
             val messages = Responses.messages(r.value.data)
             mutate { reducer.fromMessages(messages, base = it, carry = carry, live = live) }
+            prunePendingCarry(carry, _chat.value.items)
             Outcome.Ok(Unit)
         } else {
             val err = r as Outcome.Err
@@ -458,7 +507,7 @@ class PiEngine(
         val s = ensureStarted()
         if (s is Outcome.Err) return s
         val c = conn ?: return Outcome.Err(ErrCode.ENGINE_EXIT, "引擎未运行")
-        return rebuildFromMessages(c, live = liveRunning)
+        return rebuildFromMessages(c, carry = snapshotPendingCarry(), live = liveRunning)
     }
 
     /** stdout 记录 → 归约协程；扩展 UI 请求直接分发。 */
@@ -555,7 +604,7 @@ class PiEngine(
             var hint = diag.hint
             log.w(TAG, "pi 异常退出：$hint")
             // 进程里的队列随进程一起没了：排队 / 发送中的消息标为「发送失败」，重建后接回时间线，由用户决定是否重发。
-            val carry = interruptCarrying(NoticeKind.INTERRUPTED, "引擎意外退出：$hint")
+            interruptCarrying(NoticeKind.INTERRUPTED, "引擎意外退出：$hint")
             if (clock() - c.bootedAt >= config.stableResetMs) crashCount = 0
             while (!closed) {
                 crashCount++
@@ -573,7 +622,6 @@ class PiEngine(
                     boot(
                         sessionFile, c.cwd, rebuild = true, reason = "崩溃后自动恢复（第 $crashCount 次）",
                         trailingNotice = NoticeKind.INTERRUPTED to "引擎意外退出（$hint），已自动恢复",
-                        carry = carry,
                         inRecovery = true,
                     )
                 }
@@ -605,6 +653,7 @@ class PiEngine(
             carry = r.withdrawn
             r.state
         }
+        addPendingCarry(carry)
         return carry
     }
 
@@ -624,8 +673,8 @@ class PiEngine(
             c.intentional = true
             conn = null
             withContext(io + NonCancellable) { safeStop(c.process, 0) }
-            val carry = interruptCarrying(notice.first, notice.second)
-            boot(sessionFile, c.cwd, rebuild = true, reason = reason, trailingNotice = notice, carry = carry)
+            interruptCarrying(notice.first, notice.second)
+            boot(sessionFile, c.cwd, rebuild = true, reason = reason, trailingNotice = notice)
         }
 
     /** App 退出 / 服务销毁：结束进程、释放唤醒锁。之后本实例不可再用。 */
@@ -635,6 +684,7 @@ class PiEngine(
         lifecycle.withLock { conn?.let { stopConn(it, config.stopGraceMs) } }
         setForeground(false)
         guard.releaseNow()
+        clearPendingCarry()
         uiQueue.close()
         _status.value = EngineStatus.Stopped
         inputs.close()
@@ -681,6 +731,7 @@ class PiEngine(
                         Disposition.HANDLED -> reducer.setDelivery(it, key, Delivery.SENT, confirmed = true)
                     }
                 }
+                dropPendingCarryText(text)
                 Outcome.Ok(d)
             }
             is Outcome.Err -> {
@@ -742,6 +793,7 @@ class PiEngine(
         if (cwd != null && cwd != currentCwd) {
             // 在其他目录新建：以新 cwd 重启（cwd 决定会话目录与 AGENTS.md）。
             val r = lifecycle.withLock {
+                clearPendingCarry()
                 mutate { reducer.cleared(it) }
                 sessionFile = null
                 boot(null, cwd, rebuild = false, reason = "在 $cwd 新建会话")
@@ -751,6 +803,7 @@ class PiEngine(
         val r = call { RpcCommand.NewSession(it) }
         if (r is Outcome.Err) return r
         if (Responses.cancelled((r as Outcome.Ok).value.data)) return Outcome.Err(ErrCode.CANCELLED, "新建会话被扩展取消")
+        clearPendingCarry()
         mutate { reducer.cleared(it) }
         refreshState()
         return Outcome.Ok(Unit)
@@ -760,6 +813,7 @@ class PiEngine(
         val c = conn
         if (c == null || !c.ready || cwd != currentCwd) {
             return lifecycle.withLock {
+                clearPendingCarry()
                 mutate { reducer.cleared(it) }
                 boot(guestPath, cwd, rebuild = true, reason = "打开会话（cwd=$cwd）")
             }
@@ -767,6 +821,7 @@ class PiEngine(
         val r = call { RpcCommand.SwitchSession(it, guestPath) }
         if (r is Outcome.Err) return r
         if (Responses.cancelled((r as Outcome.Ok).value.data)) return Outcome.Err(ErrCode.CANCELLED, "切换会话被扩展取消")
+        clearPendingCarry()
         sessionFile = guestPath
         val m = call { RpcCommand.GetMessages(it) }
         if (m is Outcome.Ok) {

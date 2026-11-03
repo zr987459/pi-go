@@ -321,10 +321,21 @@ class ChatReducer {
         if (!live) s = s.copy(items = s.items.map { if (it is ChatItem.Tool && it.status == ToolStatus.PENDING) it.notExecuted() else it })
         // 进程崩溃 / 强制重启时没能送达的消息（排队中、发送中），以「发送失败」气泡接在历史后面，由用户点「重试」，不自动重发。
         if (carry.isNotEmpty()) {
-            val tail = s.items.filterIsInstance<ChatItem.User>().map { it.text }.takeLast(carry.size)
-            // 「已发送」但没等到 message_start 的消息可能其实已写进会话：已出现在历史末尾的不再重复。
-            val kept = carry.filterNot { c -> c.delivery == Delivery.SENT && c.text in tail }
-            if (kept.isNotEmpty()) s = s.copy(items = s.items + kept.map { it.copy(delivery = Delivery.FAILED) }).withNotice(NoticeKind.INFO, withdrawnText(kept.size))
+            val confirmedCount = base.items.filterIsInstance<ChatItem.User>().count { it.delivery == Delivery.SENT }
+            val historyUserTexts = s.items.filterIsInstance<ChatItem.User>().map { it.text }
+            val newTexts = historyUserTexts.drop(confirmedCount).toMutableList()
+            val kept = ArrayList<ChatItem.User>()
+            for (c in carry) {
+                // 「已发送」但没等到 message_start 的消息可能其实已写进会话：只有 SENT 项且能在 newTexts 中按多重集消费到时才视为已写入并丢掉。
+                if (c.delivery == Delivery.SENT && newTexts.remove(c.text)) {
+                    continue
+                }
+                kept.add(c)
+            }
+            if (kept.isNotEmpty()) {
+                s = s.copy(items = s.items + kept.map { it.copy(delivery = Delivery.FAILED) })
+                    .withNotice(NoticeKind.INFO, withdrawnText(kept.size))
+            }
         }
         return s
     }

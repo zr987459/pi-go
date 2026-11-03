@@ -45,7 +45,8 @@ class EngineService : LifecycleService() {
         // 每次 startForegroundService 都要求服务调用 startForeground；先进入前台，再看引擎是否已经不需要服务了
         // （引擎在服务进入前台前就要求关闭时，ServiceForegroundPort 不会 stopService，而由这里 stopSelf，见 ForegroundGate）。
         startForeground(NOTIFICATION_ID, build(lastText))
-        if (gate.onForegroundStarted()) stopSelf()
+        // 只停到本次 startId，后面尚未送达的 startForegroundService 不会被一起停掉，它会自己再调 startForeground 并按 gate 决定。
+        if (gate.onForegroundStarted()) stopSelf(startId)
         // 被系统杀掉后不自动拉起：冷启动时由 App 按运行标记恢复会话（§3.9）。
         return START_NOT_STICKY
     }
