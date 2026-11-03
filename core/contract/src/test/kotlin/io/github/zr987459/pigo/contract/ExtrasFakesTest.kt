@@ -58,6 +58,76 @@ class ExtrasFakesTest {
         assertTrue("compact:只留代码改动" in e.calls)
     }
 
+    // ---------------- 审查第 1 轮 ----------------
+
+    @Test
+    fun fakeFork_onlyUserEntriesLikePi150() = runTest {
+        val e = FakeEngineExtras()
+        assertEquals("全部用户消息（含其他分支的 e5）", listOf("e1", "e3", "e5"), e.forkMessages().ok().map { it.entryId })
+        assertEquals("第一条问题", e.fork("e1").ok().text)
+        for (id in listOf("e2", "e4", "e6", "e7")) {
+            val r = e.fork(id)
+            assertTrue("非用户消息 $id 必须拒绝", r is Outcome.Err && r.code == ErrCode.RPC_REJECTED)
+        }
+    }
+
+    @Test
+    fun fakeMessageMeta_mapsTimelineKeysToEntryIdsAndUsage() = runTest {
+        val e = FakeEngineExtras()
+        val meta = e.messageMeta.value
+        assertEquals("e3", meta["user-2"]!!.entryId)
+        assertTrue(meta["user-2"]!!.forkable)
+        assertFalse(meta["assistant-3"]!!.forkable)
+        assertEquals(500L, meta["assistant-3"]!!.usage!!.output)
+        assertEquals(ModelRef("deepseek", "deepseek-reasoner"), meta["assistant-3"]!!.model)
+        // 每条可分叉的元数据都能被 fork 接受
+        meta.values.filter { it.forkable }.forEach { assertTrue(e.fork(it.entryId) is Outcome.Ok) }
+        e.setMessageMeta(emptyMap())
+        assertTrue(e.messageMeta.value.isEmpty())
+    }
+
+    @Test
+    fun cycleModelResult_fakeAndDefaultImplementation() = runTest {
+        val e = FakeEngineExtras()
+        val r = e.cycleModelResult().ok()!!
+        assertEquals("deepseek-reasoner", r.model.id)
+        assertFalse(r.isScoped)
+        // 接口默认实现：只包装 cycleModel()
+        // （`by` 委托会把 cycleModelResult 也转给 Fake 的覆盖，所以显式调用接口默认实现）
+        val plain = object : EngineExtras by FakeEngineExtras() {
+            override suspend fun cycleModelResult() = super<EngineExtras>.cycleModelResult()
+        }
+        val d = plain.cycleModelResult().ok()!!
+        assertEquals("deepseek-reasoner", d.model.id)
+        assertNull(d.thinkingLevel)
+        val bare = object : EngineExtras by FakeEngineExtras() {
+            override val messageMeta get() = super<EngineExtras>.messageMeta
+        }
+        assertTrue("接口默认 messageMeta 为空表", bare.messageMeta.value.isEmpty())
+    }
+
+    @Test
+    fun appendedContractFields_haveBackwardCompatibleDefaults() = runTest {
+        assertNull("1.5.0 get_state 无 autoRetry，Fake 初值为 null", FakeEngineExtras().sessionSettings().ok().autoRetry)
+        val o = RunOutcome(RunOutcomeKind.COMPLETED, "/s.jsonl", null)
+        assertNull(o.cwd)
+        val c = TimelineExtra.Compaction("k", null, 100, null, null)
+        assertNull(c.error)
+        assertFalse(c.aborted)
+        assertTrue(TimelineExtra.Compaction("k", null, 100, null, null, error = "超时").error == "超时")
+    }
+
+    @Test
+    fun fakeWorkspace_importIntoRootDirectory() = runTest {
+        val fs = FakeWorkspaceFs()
+        val n = fs.importStream("a.txt", "hi".toByteArray().inputStream(), "/").ok()
+        assertEquals("/a.txt", n.guestPath)
+        val again = fs.importStream("a.txt", "hi".toByteArray().inputStream(), "/").ok()
+        assertEquals("/a (1).txt", again.guestPath)
+        assertTrue("根目录下能列出", fs.list("/").ok().any { it.guestPath == "/a.txt" })
+        assertTrue(fs.stat("/a (1).txt") is Outcome.Ok)
+    }
+
     @Test
     fun fakeModelCatalog_marksMissingAuthAndSearches() = runTest {
         val cat = FakeModelCatalog()

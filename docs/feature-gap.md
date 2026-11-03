@@ -3,7 +3,7 @@
 > 基线：`main@f0a4a58`。对照对象：Pi-Web `agegr/pi-web`（0.14.2，MIT）、dsh-Go `ccch1mneyyy/dsh-Go`（AGPL-3.0，Flutter）、pi `@earendil-works/pi-coding-agent@1.5.0`（pi-go 锁定版本，RPC 命令以 1.5.0 的 `dist/modes/rpc/rpc-types.d.ts` 为准）。
 > 写于 2026-11-03。只写文档，未改代码。
 >
-> 许可：用户自用、不商用，可直接拷贝或移植代码，每次移植在 `THIRD_PARTY_NOTICES.md` 记一行来源（见 §3.4 的汇总方式）。dsh-Go 的名称、标识和吉祥物（Deepy、鲸娘）**不在其开源授权内**，不得使用；用户 14:40 也已要求先不要吉祥物。REVIEW.md 里“从 dsh-Go 拷代码即 Important”这条与用户最新授权冲突，需所有者改 REVIEW.md 或在 PR 描述里注明“已获授权”。
+> 许可：用户自用、不商用，可直接拷贝或移植代码，每次移植在 `THIRD_PARTY_NOTICES.md` 记一行来源（见 §3.4 的汇总方式）。dsh-Go 的名称、标识和吉祥物（Deepy、鲸娘）**不在其开源授权内**，不得使用；用户 14:40 也已要求先不要吉祥物。REVIEW.md 已按所有者 2026-11-03 的决定改为：允许移植 dsh-Go 代码，只要求记来源（见 §3.4「已拍板」②）。
 
 ---
 
@@ -42,7 +42,7 @@
 |---|---|---|---|---|---|---|---|
 | M1 | **pi 内置全部服务商**可配（42 个：amazon-bedrock、ant-ling、anthropic、azure、baseten、cerebras、cloudflare-ai-gateway、cloudflare-workers-ai、deepseek、fireworks、github-copilot、google、google-vertex、groq、huggingface、kimi-coding、meta、minimax、minimax-cn、mistral、moonshotai、moonshotai-cn、nvidia、openai、openai-codex、opencode、opencode-go、openrouter、qwen-token-plan、qwen-token-plan-cn、qwen-token-plan-individual、radius、together、typesafe、vercel-ai-gateway、xai、xiaomi、xiaomi-token-plan-ams/cn/sgp、zai、zai-coding-cn） | ✅ | ◐（DSH 自家模型为主） | 无列举命令；`get_available_models` 只返回**已有凭据**的模型 | ◐ 9 个预设 | **P0** | 服务商表不要手写。在容器里用 node 读 `@earendil-works/pi-ai@1.5.0` 的模型目录（包导出 `./models`），导出 `{provider, envVar, models[{id,name,reasoning,contextWindow,cost,input}]}` 到 JSON，按 pi 版本缓存在宿主。环境变量名来自 pi `docs/providers.md` 的表；需要额外配置的（Bedrock、Vertex、Azure、Cloudflare）单独给表单字段（region、resource、account id）。仍按 DESIGN §3.10：Key 只放 Keystore 和进程环境 |
 | M2 | **全模型可选**（未配 Key 的也能看到，选中时引导去配 Key） | ✅ | ◐ | `get_available_models`、`set_model` | ◐ 只列已配置的 | **P0** | 模型选择页数据 = M1 的目录 ∪ `get_available_models` ∪ `models.json` 自定义项。按服务商分组，支持搜索，显示上下文窗口、是否推理、是否看图、单价。未配凭据的灰显，点击跳到该服务商的 Key 或 OAuth 页 |
-| M3 | **OAuth / 订阅登录**（anthropic、openai-codex/chatgpt、github-copilot、kimi-coding、xai、openrouter、meta、radius） | ✅（Models 面板登录） | ❌ | **无**（`/login` 只在交互 TUI 里）；CLI 有 `pi auth check --provider` | ❌ | **P0**（至少 Copilot、Codex、Claude） | 在容器里跑一个小 node 脚本，调用 pi-ai 的 `./oauth` 导出的登录流程：device-code 类（Copilot）回传 user code 和 URL；PKCE 回调类（Claude、Codex）在宿主用 Custom Tab 打开授权页，拦截 redirect 或让用户粘贴 code。凭据只能写 pi 的 `auth.json`（需要刷新），**和 DESIGN §3.10“Key 不落容器磁盘”冲突，需所有者拍板**。建议：仅 OAuth 凭据例外，`auth.json` 设 600 权限、设置页明示。用 `pi auth check --provider <id> --json` 显示登录状态。注意 1.5.0 的确切导出函数名，实现时要先读 `dist/oauth` 核对 |
+| M3 | **OAuth / 订阅登录**（anthropic、openai-codex/chatgpt、github-copilot、kimi-coding、xai、openrouter、meta、radius） | ✅（Models 面板登录） | ❌ | **无**（`/login` 只在交互 TUI 里）；CLI 有 `pi auth check --provider` | ❌ | **P0**（至少 Copilot、Codex、Claude） | 在容器里跑一个小 node 脚本，调用 pi-ai 的 `./oauth` 导出的登录流程：device-code 类（Copilot）回传 user code 和 URL；PKCE 回调类（Claude、Codex）在宿主用 Custom Tab 打开授权页，拦截 redirect 或让用户粘贴 code。凭据只能写 pi 的 `auth.json`（需要刷新），**已拍板（2026-11-03）：OAuth 凭据作为 DESIGN §3.10“Key 不落容器磁盘”的例外，允许写入 `auth.json`**（权限 600、排除备份/导出/分享、日志脱敏、设置页明示），见 DESIGN §3.10。用 `pi auth check --provider <id> --json` 显示登录状态。注意 1.5.0 的确切导出函数名，实现时要先读 `dist/oauth` 核对 |
 | M4 | 会话内切模型 | ✅ | ✅ | `set_model`、`cycle_model` | ◐ 顶栏芯片，只能选已配置的 | **P0** | 顶栏“模型▾”打开 M2 的选择页（全屏底部弹层），选中即 `set_model`；生成中允许切换，下一轮生效，并提示。最近使用的 5 个置顶 |
 | M5 | 会话内思考强度 | ✅ | ✅ | `get_available_thinking_levels`、`set_thinking_level`、`cycle_thinking_level` | ◐ 芯片菜单 | **P0** | 并入模型选择页底部的分段控件，按模型能力过滤（`reasoning=false` 时隐藏）。中文标签沿用 `thinkingLabel` |
 | M6 | 自定义端点：获取模型列表、测试连接 | ✅ | ◐ | 无（宿主 HTTP） | ✅ | — | 已完成，保持 |
@@ -240,7 +240,7 @@ W1–W4 都从“合入 W0 之后的 main”切出，互相不等待。凡是需
 
 - 每条工作流的 PR 描述里列出移植来源，格式同 piweb-study：`- <上游>@<提交>，<许可证> —— <pi-go 文件> ← <上游文件:行号>`。
 - 所有新命令都按 1.5.0 的 `rpc-types.d.ts` 核对字段名。pi-mono main 的文档可能比 1.5.0 新，以锁定版本为准。
-- 需要所有者拍板的决策（实现前确认）：
+- 所有者决策（均已拍板，结论见下）：
   1. OAuth 凭据是否允许写进容器内的 `auth.json`（M3，涉及 DESIGN §3.10）。
   2. REVIEW.md 中 dsh-Go（AGPL）一条是否按最新授权修改。
   3. 费用换算人民币用固定汇率还是可配置汇率。
