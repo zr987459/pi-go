@@ -23,10 +23,20 @@ object LicenseHygiene {
         Regex("\\b" + "DS" + "HA" + "\\b"),
     )
 
-    /** PiMet `app/src/main/jniLibs/`（与 §4.1 第 3 条所述 GPL 项目 `app/libs/` 相同）各 .so 的 SHA256，取自 zr987459/pimet a80222c。 */
+    /**
+     * PiMet `app/src/main/jniLibs/`（与 §4.1 第 3 条所述 GPL 项目 `app/libs/` 相同）各 .so 的 SHA256，取自 zr987459/pimet a80222c。
+     *
+     * 2026-11-03（mvp/runtime 第 1 轮审查）移除了两份 `libandroidshmem.so` 的哈希
+     * （arm64-v8a `84475798…0731`、x86_64 `09292606…465f`）。原因：它们与 Termux 官方 libandroid-shmem 0.7 包的原样产物逐字节相同，
+     * 是 BSD-3-Clause 的官方构建，不是 GPL 项目的派生物；`libproot.so` 的 DT_NEEDED 依赖它，缺它 proot 无法启动。
+     * 来源（独立核对）：https://packages.termux.dev/apt/termux-main/pool/main/liba/libandroid-shmem/libandroid-shmem_0.7_aarch64.deb
+     * （.deb SHA256 0da3a24d558b93c92bcf8d611e0826a99ff96e396b148e6cdf33b47c47c57ff6）与 …_0.7_x86_64.deb
+     * （.deb SHA256 ffa9e4c87467b158b148d0ff92dda796aa038276c2075af3269cdcdb06f25797），解出的 `lib/libandroid-shmem.so`
+     * 的 SHA256 与被移除的两个值完全一致。详见 core/runtime/NOTICE-runtime.md「libandroid-shmem 的来源核对」与 tools/fetch-termux-libs.sh。
+     * PiMet 其余 .so 的哈希保持不变。
+     */
     val knownBadSoSha256: Set<String> = setOf(
         // arm64-v8a
-        "84475798e07c8174dbbfaec70a827fdb02f19ffa69a589380c13e7507fd0e731", // libandroidshmem.so
         "cbde86eb01b58413f9e4673e182caca5440e8fc4af8482a0e23d0faa0846f721", // libproot.so
         "a2cbccfc776e23225b75e6700dd1990fcd505d2e973f5bfa19c76642d4e41c7d", // libprootloader.so
         "4c649eb2dce258c9111231940fdbf0474bcf1cd6dd447ad9bdf2898b35a85554", // libprootloader32.so
@@ -37,7 +47,6 @@ object LicenseHygiene {
         "a4e74d75b66cdc02b080adfe863dbf9951c3b30610d77beddc95488d5fe5de01", // libproroot.so
         "3c9b207c0a6ea2896b7523e03f55d9ab0d9e88baa115d4c32b84058ff4246fbb", // libtalloc.so
         // x86_64
-        "092926060298acd3778e6239033d7aef1280dcb59aebe021a3719612e6a3465f", // libandroidshmem.so
         "5c6b99c48ebb87580551afd654e49eb8d178fd45fef0b65397c99a1d901c417b", // libproot.so
         "914564ea1c66f50b38f18cac857fcf814c6b1ab027789178880fca1d530599b3", // libprootloader.so
         "7fb73fa7f1879f7d210db70a0e3961161d0439e892c38bb834e6e17f162fae30", // libprootloader32.so

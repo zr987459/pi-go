@@ -48,19 +48,24 @@ class DomesticInstallerTest {
     private val files = File(tmp, "files")
     private val nativeDir = File(tmp, "native").apply {
         mkdirs()
-        listOf("libproot.so", "libprootloader.so", "libprootloader32.so", "libtalloc.so").forEach {
+        listOf("libproot.so", "libprootloader.so", "libprootloader32.so", "libtalloc.so", "libandroidshmem.so").forEach {
             File(this, it).apply { writeText("elf"); setExecutable(true) }
         }
     }
     private val paths = RuntimePaths(files, nativeDir, null)
 
+    /** 不易压缩的填充文件，让包大到需要分很多次读完（测速/过慢判定用）。 */
+    private val filler: String = java.util.Random(1).let { r -> buildString { repeat(96 * 1024) { append(('!' + r.nextInt(90))) } } }
+
     private val ubuntuTar = tgz(
+        Entry.File("./usr/share/filler", filler),
         Entry.Dir("./usr/bin/"), Entry.Link("./bin", "usr/bin"), Entry.File("./usr/bin/sh", "#!", 0b111_101_101),
         Entry.File("./etc/group", "root:x:0:\n"), Entry.Dir("./root/"), Entry.Dir("./tmp/"),
         Entry.Link("./etc/resolv.conf", "../run/systemd/resolve/stub-resolv.conf"),
     )
     private val nodeTar = tgz(
         Entry.File("node-v24.22.2-linux-arm64/bin/node", "node", 0b111_101_101),
+        Entry.File("node-v24.22.2-linux-arm64/share/filler", filler),
         Entry.Link("node-v24.22.2-linux-arm64/bin/npm", "../lib/node_modules/npm/bin/npm-cli.js"),
         Entry.Link("node-v24.22.2-linux-arm64/bin/npx", "../lib/node_modules/npm/bin/npx-cli.js"),
     )
@@ -130,8 +135,10 @@ class DomesticInstallerTest {
 
     private inner class Guest(var npmFails: Boolean = false) : GuestExec {
         val commands = mutableListOf<List<String>>()
+        val timeouts = mutableListOf<Long>()
         override suspend fun exec(cmd: List<String>, env: Map<String, String>, timeoutMs: Long): ExecResult {
             commands += cmd
+            timeouts += timeoutMs
             return when {
                 cmd.firstOrNull() == "npm" -> {
                     if (npmFails) ExecResult(1, "", "ETIMEDOUT")
@@ -170,7 +177,8 @@ class DomesticInstallerTest {
         host: HostInfo = Host(),
         log: AppLog = Log(),
         probe: MirrorProbe = inOrder,
-    ) = DomesticInstaller(paths, pins, m, Downloader(client), probe, host, guest, log)
+        downloader: Downloader = Downloader(client),
+    ) = DomesticInstaller(paths, pins, m, downloader, probe, host, guest, log)
 
     @Test fun fullInstallProducesRuntime() = runBlocking {
         val guest = Guest()
@@ -216,7 +224,7 @@ class DomesticInstallerTest {
         assertTrue(log.lines.any { it.startsWith("校验失败，已换镜像") })
         assertTrue("最终从完好的镜像取得", goodTarballHits.get() >= 1)
         assertTrue(File(paths.rootfs, "usr/bin/sh").isFile)
-        assertFalse(Downloader.partFile(File(paths.downloads, ubuntuName)).exists())
+        assertTrue(Downloader.allParts(File(paths.downloads, ubuntuName)).isEmpty())
     }
 
     @Test fun retryResumesFromFailedStepWithoutRedownloading() = runBlocking {
@@ -275,6 +283,87 @@ class DomesticInstallerTest {
             assertTrue(liar.requestCount >= 1)
         } finally {
             liar.shutdown()
+        }
+    }
+
+    @Test fun missingShmemIsHardPreflightFailureBeforeAnyDownload() {
+        File(nativeDir, "libandroidshmem.so").delete()
+        val log = Log()
+        val e = assertThrows(InstallFailure::class.java) {
+            runBlocking { installer(mirrors(good), log = log).run().toList() }
+        }
+        assertEquals(ErrCode.INSTALL_FAILED, e.code)
+        assertTrue(e.message, e.message!!.contains("libandroidshmem.so"))
+        assertTrue(e.message, e.message!!.contains("proot 无法启动"))
+        assertEquals("预检失败前不应发出任何下载/测速请求", 0, good.requestCount)
+        assertFalse(paths.rootfs.exists())
+        assertFalse(File(paths.markers, "${InstallStep.ROOTFS.name}.done").exists())
+    }
+
+    @Test fun missingTallocIsAlsoHardFailure() {
+        File(nativeDir, "libtalloc.so").delete()
+        val e = assertThrows(InstallFailure::class.java) {
+            runBlocking { installer(mirrors(good)).run().toList() }
+        }
+        assertTrue(e.message, e.message!!.contains("libtalloc.so"))
+        assertEquals(0, good.requestCount)
+    }
+
+    @Test fun aptRunsWithShortForegroundTimeout() = runBlocking {
+        val guest = Guest()
+        installer(mirrors(good), guest).run().toList()
+        val i = guest.commands.indexOfFirst { it.joinToString(" ").contains("apt-get") }
+        assertTrue(i >= 0)
+        assertTrue("APT 前台超时应只有几分钟：${guest.timeouts[i]}", guest.timeouts[i] <= DomesticInstaller.APT_FOREGROUND_TIMEOUT_MS)
+        assertTrue(DomesticInstaller.APT_FOREGROUND_TIMEOUT_MS <= 5 * 60_000L)
+    }
+
+    /** 支持 `Range: bytes=N-` 的限速镜像；记录每个大包请求的 Range 头。 */
+    private inner class SlowMirror : Dispatcher() {
+        val ranges = java.util.Collections.synchronizedList(mutableListOf<String?>())
+        override fun dispatch(request: RecordedRequest): MockResponse {
+            val path = request.path!!.substringBefore('?')
+            val bytes = when {
+                path.endsWith(ubuntuName) -> ubuntuTar
+                path.endsWith(nodeName) -> nodeTar
+                else -> return MockResponse().setResponseCode(404)
+            }
+            if (request.method == "HEAD") return MockResponse().setHeader("Content-Length", bytes.size)
+            val range = request.getHeader("Range")
+            ranges += range
+            val from = range?.removePrefix("bytes=")?.substringBefore('-')?.toIntOrNull() ?: 0
+            val resp = if (from > 0) MockResponse().setResponseCode(206).setBody(Buffer().write(bytes.copyOfRange(from, bytes.size)))
+            else MockResponse().setBody(Buffer().write(bytes))
+            return resp.throttleBody(1024, 1, java.util.concurrent.TimeUnit.MILLISECONDS)
+        }
+    }
+
+    @Test fun allMirrorsTooSlowFallsBackToBestProbedMirrorAndFinishes() = runBlocking {
+        val slowA = SlowMirror()
+        val slowB = SlowMirror()
+        val a = MockWebServer().apply { dispatcher = slowA; start() }
+        val b = MockWebServer().apply { dispatcher = slowB; start() }
+        try {
+            val log = Log()
+            var now = 0L
+            // 每读一次时钟前进 1 s，门槛 10 MB/s：第一轮每个镜像都会被判「过慢」（包要分很多次读完）
+            val judge = Downloader(client, clock = { now.also { now += 1_000 } }, slowWindowMs = 6_000, minBytesPerSec = 10_000_000)
+            val progress = installer(mirrors(a, b), log = log, downloader = judge).run().toList()
+
+            assertEquals(100, progress.last().percent)
+            assertTrue(log.lines.any { it.contains("速度过慢") })
+            assertTrue(log.lines.any { it.startsWith("所有镜像都较慢，回退到") })
+            assertTrue(File(paths.rootfs, "usr/bin/sh").isFile)
+            // 回退选测速排名第一的 A，并接着 A 自己的 .part 续传（B 的半截文件不拼进来）
+            val aRanges = slowA.ranges.toList()
+            assertTrue("A 应被请求两次以上（首轮 + 回退）：$aRanges", aRanges.size >= 2)
+            assertTrue("回退时应从 A 自己的 .part 续传：$aRanges", aRanges.drop(1).any { it != null && !it.startsWith("bytes=0-") })
+            assertTrue("B 不应在回退中被使用：${slowB.ranges}", slowB.ranges.size <= 2)
+            // 成功后所有来源的 .part 都清掉
+            assertTrue(Downloader.allParts(File(paths.downloads, ubuntuName)).isEmpty())
+            assertTrue(Downloader.allParts(File(paths.downloads, nodeName)).isEmpty())
+        } finally {
+            a.shutdown(); b.shutdown()
         }
     }
 

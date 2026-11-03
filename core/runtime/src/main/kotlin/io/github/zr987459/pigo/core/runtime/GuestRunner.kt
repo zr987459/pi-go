@@ -9,6 +9,7 @@ import io.github.zr987459.pigo.core.runtime.process.Signaller
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
@@ -22,8 +23,16 @@ class GuestRunner(
     private val tree: ProcessTree = ProcessTree(),
     private val processFactory: (argv: List<String>, hostEnv: Map<String, String>) -> Process = ::defaultStart,
 ) {
+    /**
+     * 启动容器内进程（非挂起，签名由 `RuntimeManager.start` 决定）。
+     *
+     * 会做少量文件系统操作（检查 `files/lib` 中的库副本是否就位、创建工作目录、fork proot），
+     * **调用方须在工作线程调用**（@WorkerThread 语义；`RealRuntimeManager.exec` 与安装流程已在 `Dispatchers.IO` 上）。
+     * 库副本的复制与 SHA256 比对放在安装/修复流程（[RuntimeFiles.ensure]）里做；这里只在副本缺失时补一次复制，
+     * 正常路径不读文件内容、不算哈希。
+     */
     fun start(spec: GuestSpec): GuestProcess {
-        RuntimeFiles.ensure(paths)
+        if (!RuntimeFiles.copiesPresent(paths)) RuntimeFiles.ensure(paths)
         paths.guest(spec.cwd).mkdirs()
         val argv = ProotLauncher.buildArgv(paths, spec)
         val p = processFactory(argv, ProotLauncher.hostEnv(paths))
@@ -43,20 +52,27 @@ class GuestRunner(
         maxOutputBytes: Int = 1 shl 20,
     ): ExecResult = coroutineScope {
         val gp = withContext(Dispatchers.IO) { start(GuestSpec(cmd, cwd = cwd, env = env)) }
-        val out = async(Dispatchers.IO) { drain(gp.stdout, maxOutputBytes) }
-        val err = async(Dispatchers.IO) { drain(gp.stderr, maxOutputBytes) }
-        withContext(Dispatchers.IO) {
-            runCatching {
-                if (stdinText != null) gp.stdin.write(stdinText.toByteArray())
-                gp.stdin.close()
+        try {
+            val out = async(Dispatchers.IO) { drain(gp.stdout, maxOutputBytes) }
+            val err = async(Dispatchers.IO) { drain(gp.stderr, maxOutputBytes) }
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    if (stdinText != null) gp.stdin.write(stdinText.toByteArray())
+                    gp.stdin.close()
+                }
             }
-        }
-        val code = withTimeoutOrNull(timeoutMs) { gp.awaitExit() }
-        if (code == null) {
-            gp.stop(graceMs = 1_000)
-            ExecResult(-1, out.await(), err.await(), timedOut = true)
-        } else {
-            ExecResult(code, out.await(), err.await())
+            val code = withTimeoutOrNull(timeoutMs) { gp.awaitExit() }
+            if (code == null) {
+                gp.stop(graceMs = 1_000)
+                ExecResult(-1, out.await(), err.await(), timedOut = true)
+            } else {
+                ExecResult(code, out.await(), err.await())
+            }
+        } finally {
+            // 无论正常结束、超时还是被取消（用户中止安装、ViewModel 销毁），都先按 §4.5 停掉整棵进程树：
+            // 进程退出后管道关闭，阻塞在 read() 的两个排空协程才能读到 EOF 结束，coroutineScope 才不会一直等，
+            // apt/npm 也不会在取消后继续跑（安装锁随之释放）。进程已退出时 stop() 立即返回。
+            withContext(NonCancellable) { gp.stop(graceMs = 1_000) }
         }
     }
 

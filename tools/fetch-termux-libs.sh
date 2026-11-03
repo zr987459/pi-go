@@ -27,9 +27,11 @@ DEBS=(
 
 PREFIX="data/data/com.termux/files/usr"
 
-# libandroid-shmem 0.7 官方构建与 PiMet 中那份逐字节相同，其 SHA256 目前在 checkLicenseHygiene 的禁用名单里，
-# 入库会让构建失败。在 scaffold 从名单中移除这两个哈希之前默认不写入 jniLibs（见 NOTICE-runtime.md）。
-INCLUDE_SHMEM="${INCLUDE_SHMEM:-0}"
+# libandroid-shmem 0.7：libproot.so 的 DT_NEEDED 依赖，缺它 proot 无法启动，默认写入。
+# 其官方构建与 PiMet 中那份逐字节相同；两个 .so 的 SHA256 已核对为 Termux 官方 BSD-3-Clause 包的原样产物，
+# 并已从 checkLicenseHygiene 禁用名单中移除（见 NOTICE-runtime.md「libandroid-shmem 的来源核对」）。
+# INCLUDE_SHMEM=0 可跳过（仅调试用；缺少它时安装器的 PREFLIGHT 会直接失败）。
+INCLUDE_SHMEM="${INCLUDE_SHMEM:-1}"
 
 # 包内路径 → jniLibs 文件名
 map_files() {
@@ -80,7 +82,7 @@ trap 'rm -rf "$WORK"' EXIT
 for row in "${DEBS[@]}"; do
   IFS='|' read -r name ver arch abi sha <<<"$row"
   if [[ "$name" == "libandroid-shmem" && "$INCLUDE_SHMEM" != "1" ]]; then
-    echo "跳过 $name（INCLUDE_SHMEM=1 时才写入，见脚本开头说明）"
+    echo "跳过 $name（INCLUDE_SHMEM=0；缺少它时 proot 无法启动，见脚本开头说明）"
     continue
   fi
   url="$REPO/$(pool_path "$name" "$ver" "$arch")"

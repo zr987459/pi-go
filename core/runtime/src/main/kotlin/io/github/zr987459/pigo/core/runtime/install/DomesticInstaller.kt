@@ -95,16 +95,30 @@ class DomesticInstaller(
 
     private fun preflight() {
         paths.filesDir.mkdirs()
+        checkRuntimeFiles()
         val free = host.freeBytes(paths.filesDir)
         if (free < minFreeBytes) {
             throw InstallFailure(ErrCode.DISK_FULL, "可用空间不足：需要至少 ${minFreeBytes / GB} GB，当前只有 ${"%.1f".format(free.toDouble() / GB)} GB。请清理手机存储后重试。")
         }
         if (!host.networkAvailable()) throw InstallFailure(ErrCode.NETWORK, "没有可用的网络连接，请联网后重试。")
-        if (!RuntimeFiles.prootAvailable(paths)) {
+    }
+
+    /** proot 本体与依赖库是否都随 APK 就位；缺失即硬失败（安装包问题，换网络/重试都无济于事）。 */
+    private fun checkRuntimeFiles() {
+        if (!paths.proot.isFile || !paths.proot.canExecute() || !paths.loader.isFile) {
             throw InstallFailure(ErrCode.INSTALL_FAILED, "找不到可执行的 proot（${paths.proot.name}），安装包可能不完整，请重新安装 pi-go。")
         }
+        // proot 的 DT_NEEDED 依赖（libtalloc.so.2、libandroid-shmem.so）缺任何一个，proot 都无法启动：
+        // 必须在下载任何东西之前硬失败，而不是下载几百 MB 后在验证步骤才失败。
         val report = RuntimeFiles.ensure(paths)
-        if (report.missing.isNotEmpty()) log.w(TAG, "nativeLibDir 缺少：${report.missing.joinToString()}")
+        if (report.missing.isNotEmpty() || !RuntimeFiles.prootAvailable(paths)) {
+            val missing = (report.missing + RuntimeFiles.missingLibs(paths)).distinct()
+            log.w(TAG, "nativeLibDir 缺少：${missing.joinToString()}")
+            throw InstallFailure(
+                ErrCode.INSTALL_FAILED,
+                "安装包缺少运行环境组件（${missing.joinToString("、")}），proot 无法启动。请重新安装或更新 pi-go。",
+            )
+        }
     }
 
     // ---------------------------------------------------------------- 2 ROOTFS
@@ -228,14 +242,16 @@ class DomesticInstaller(
                     "apt-get -o APT::Sandbox::User=root install -y --no-install-recommends ca-certificates git curl procps",
             ),
             env = mapOf("DEBIAN_FRONTEND" to "noninteractive"),
-            timeoutMs = 20 * 60_000,
+            // APT 失败不致命，也不写标记（下次安装/修复会再试）；前台只给几分钟，避免每次重试都卡在这一步 20 分钟
+            timeoutMs = APT_FOREGROUND_TIMEOUT_MS,
         )
         if (r.exitCode == 0) {
             markers.mark(InstallStep.APT)
             step(InstallStep.APT, 75, "基础工具已安装")
         } else {
             // 不影响 pi 运行；不写标记，下次「修复」会重试
-            log.w(TAG, "apt 安装失败（不影响使用，稍后可在设置里修复）：exit=${r.exitCode} ${r.stderr.takeLast(400)}")
+            val why = if (r.timedOut) "超过 ${APT_FOREGROUND_TIMEOUT_MS / 60_000} 分钟未完成" else "exit=${r.exitCode} ${r.stderr.takeLast(400)}"
+            log.w(TAG, "apt 安装失败（不影响使用，稍后可在设置里修复）：$why")
             step(InstallStep.APT, 75, "基础工具安装失败，已跳过（不影响使用）")
         }
     }
@@ -343,6 +359,8 @@ class DomesticInstaller(
         }
         var lastError: Throwable? = null
         var sawChecksum = false
+        /** 本轮因「过慢」放弃的镜像，保持测速排名顺序。它们各自的 `.part` 仍在，回退时可续传。 */
+        val tooSlow = mutableListOf<String>()
         for (url in ranked) {
             val host = hostOf(url)
             emit(InstallProgress(step, from, null, "正在从 $host 下载 ${dest.name}…"))
@@ -358,20 +376,7 @@ class DomesticInstaller(
                 continue
             }
             try {
-                coroutineScope {
-                    val job = async {
-                        downloader.download(url, dest, pinnedSha) { p ->
-                            val frac = p.total?.takeIf { it > 0 }?.let { p.downloaded.toDouble() / it } ?: 0.0
-                            val pct = from + ((to - from) * frac).toInt().coerceIn(0, to - from)
-                            lastProgress = InstallProgress(step, pct, p.bytesPerSec, "正在从 $host 下载 ${dest.name}（${p.downloaded / MB} MB${p.total?.let { " / ${it / MB} MB" } ?: ""}）")
-                        }
-                    }
-                    while (job.isActive) {
-                        delay(PROGRESS_INTERVAL_MS)
-                        lastProgress?.let { emit(it); lastProgress = null }
-                    }
-                    job.await()
-                }
+                downloadWithProgress(step, from, to, url, dest, pinnedSha, detectSlow = true)
                 log.i(TAG, "${dest.name} 下载完成并通过校验（$host）")
                 return
             } catch (e: Downloader.ChecksumMismatch) {
@@ -381,7 +386,30 @@ class DomesticInstaller(
                 sawChecksum = true
                 lastError = e
             } catch (e: Downloader.TooSlow) {
-                log.w(TAG, "$host 速度过慢（${e.bytesPerSec / 1024} KB/s），换线")
+                log.w(TAG, "$host 速度过慢（${e.bytesPerSec / 1024} KB/s），换线（保留该镜像已下载的部分）")
+                tooSlow += url
+                lastError = e
+            } catch (e: IOException) {
+                log.w(TAG, "$host 下载失败：${e.message}")
+                lastError = e
+            }
+        }
+        // 所有可用镜像都只是「慢」：网络整体偏慢时不能因此判失败。回退到测速排名最好的那个慢镜像，
+        // 关闭过慢判定一直下完（接着它自己的 .part 续传，不拼接其他来源）。
+        val fallback = tooSlow.firstOrNull()
+        if (fallback != null) {
+            val host = hostOf(fallback)
+            log.w(TAG, "所有镜像都较慢，回退到 $host 继续下载（不再按速度换线）")
+            emit(InstallProgress(step, from, null, "网络较慢，继续从 $host 下载 ${dest.name}…"))
+            try {
+                downloadWithProgress(step, from, to, fallback, dest, pinnedSha, detectSlow = false)
+                log.i(TAG, "${dest.name} 下载完成并通过校验（$host，慢速回退）")
+                return
+            } catch (e: Downloader.ChecksumMismatch) {
+                log.w(TAG, "校验失败，已换镜像：$host（已删除损坏的文件）")
+                emit(InstallProgress(step, from, null, "校验失败，已换镜像"))
+                badUrls += fallback
+                sawChecksum = true
                 lastError = e
             } catch (e: IOException) {
                 log.w(TAG, "$host 下载失败：${e.message}")
@@ -393,6 +421,33 @@ class DomesticInstaller(
             "所有镜像都下载失败（${dest.name}），请换网络或稍后再试。",
             lastError,
         )
+    }
+
+    /** 下载一个镜像，并按 [PROGRESS_INTERVAL_MS] 节流上报进度。 */
+    private suspend fun FlowCollector<InstallProgress>.downloadWithProgress(
+        step: InstallStep,
+        from: Int,
+        to: Int,
+        url: String,
+        dest: File,
+        pinnedSha: String,
+        detectSlow: Boolean,
+    ) {
+        val host = hostOf(url)
+        coroutineScope {
+            val job = async {
+                downloader.download(url, dest, pinnedSha, detectSlow) { p ->
+                    val frac = p.total?.takeIf { it > 0 }?.let { p.downloaded.toDouble() / it } ?: 0.0
+                    val pct = from + ((to - from) * frac).toInt().coerceIn(0, to - from)
+                    lastProgress = InstallProgress(step, pct, p.bytesPerSec, "正在从 $host 下载 ${dest.name}（${p.downloaded / MB} MB${p.total?.let { " / ${it / MB} MB" } ?: ""}）")
+                }
+            }
+            while (job.isActive) {
+                delay(PROGRESS_INTERVAL_MS)
+                lastProgress?.let { emit(it); lastProgress = null }
+            }
+            job.await()
+        }
     }
 
     @Volatile private var lastProgress: InstallProgress? = null
@@ -423,6 +478,8 @@ class DomesticInstaller(
         private const val GB = 1024L * 1024 * 1024
         const val MIN_FREE_BYTES = 3L * GB
         private const val PROGRESS_INTERVAL_MS = 300L
+        /** APT 步骤的前台超时（DESIGN §4.3 第 5 步：失败不致命）。 */
+        const val APT_FOREGROUND_TIMEOUT_MS = 5L * 60_000
 
         fun hostOf(url: String): String = runCatching { URI(url).host }.getOrNull() ?: url
     }

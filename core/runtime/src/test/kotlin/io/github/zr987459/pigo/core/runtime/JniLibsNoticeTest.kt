@@ -30,8 +30,8 @@ class JniLibsNoticeTest {
         for ((path, sha) in rec) assertEquals("$path 的 SHA256", sha, actual[path])
     }
 
-    @Test fun bothAbisCarryProotLoaderAndTalloc() {
-        val names = listOf("libproot.so", "libprootloader.so", "libprootloader32.so", "libtalloc.so")
+    @Test fun bothAbisCarryProotLoaderTallocAndShmem() {
+        val names = listOf("libproot.so", "libprootloader.so", "libprootloader32.so", "libtalloc.so", "libandroidshmem.so")
         for (abi in listOf("arm64-v8a", "x86_64")) for (n in names) {
             assertTrue("缺少 $abi/$n", File(jni, "$abi/$n").isFile)
         }

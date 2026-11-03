@@ -45,7 +45,24 @@ object RuntimeFiles {
         return Report(copied, missing)
     }
 
-    /** proot 及其 loader 是否就位且可执行（PREFLIGHT 用）。 */
+    /** APK（nativeLibDir）中缺少的、proot 启动必需的库（按 APK 内文件名）。 */
+    fun missingLibs(paths: RuntimePaths): List<String> =
+        SONAME_COPIES.keys.filter { !File(paths.nativeLibDir, it).isFile }
+
+    /**
+     * `files/lib` 中按 SONAME 命名的副本是否都在、且与 APK 中的源文件长度一致（只做 stat，不读内容、不算哈希；
+     * [GuestRunner.start] 用）。完整的 SHA256 比对在安装/修复流程的 [ensure] 里做。
+     */
+    fun copiesPresent(paths: RuntimePaths): Boolean = SONAME_COPIES.all { (apkName, soname) ->
+        val src = File(paths.nativeLibDir, apkName)
+        val dst = File(paths.lib, soname)
+        src.isFile && dst.isFile && dst.length() == src.length()
+    }
+
+    /**
+     * proot、loader 以及 `libproot.so` 的 `DT_NEEDED` 依赖库是否都在（PREFLIGHT 用）。
+     * 缺任何一个 proot 都无法在真机上启动，必须视为硬失败，不能只记警告。
+     */
     fun prootAvailable(paths: RuntimePaths): Boolean =
-        paths.proot.isFile && paths.proot.canExecute() && paths.loader.isFile
+        paths.proot.isFile && paths.proot.canExecute() && paths.loader.isFile && missingLibs(paths).isEmpty()
 }

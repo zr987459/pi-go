@@ -111,6 +111,30 @@ class MiscRuntimeTest {
         assertTrue(RuntimeFiles.ensure(paths).copied.isEmpty())
     }
 
+    @Test fun prootUnavailableWhenAnyNeededLibraryIsMissing() {
+        paths.nativeLibDir.mkdirs()
+        listOf("libproot.so", "libprootloader.so", "libtalloc.so").forEach {
+            File(paths.nativeLibDir, it).apply { writeText("elf"); setExecutable(true) }
+        }
+        assertEquals(listOf("libandroidshmem.so"), RuntimeFiles.missingLibs(paths))
+        assertFalse("缺 libandroidshmem.so 时 proot 不可用", RuntimeFiles.prootAvailable(paths))
+        File(paths.nativeLibDir, "libandroidshmem.so").writeText("shm")
+        assertTrue(RuntimeFiles.missingLibs(paths).isEmpty())
+        assertTrue(RuntimeFiles.prootAvailable(paths))
+    }
+
+    @Test fun copiesPresentIsStatOnlyAndDetectsStaleCopies() {
+        paths.nativeLibDir.mkdirs()
+        File(paths.nativeLibDir, "libtalloc.so").writeText("talloc")
+        File(paths.nativeLibDir, "libandroidshmem.so").writeText("shm")
+        assertFalse(RuntimeFiles.copiesPresent(paths))
+        RuntimeFiles.ensure(paths)
+        assertTrue(RuntimeFiles.copiesPresent(paths))
+        // APK 更新后库变了（长度不同）：需要重新复制
+        File(paths.nativeLibDir, "libtalloc.so").writeText("talloc-2.6")
+        assertFalse(RuntimeFiles.copiesPresent(paths))
+    }
+
     @Test fun fixupsAreIdempotentAndKeepUserNpmrcLines() {
         paths.guest("/etc").mkdirs()
         paths.guest("/etc/group").writeText("root:x:0:\naid_inet:x:3003:\n")
