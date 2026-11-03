@@ -14,6 +14,8 @@
 
 - `feature/models/RealModelPanels.kt`：实现契约 `ModelPanels`（模型面板全部/常用/最近、服务商列表含已连接与拼音搜索、服务商表单、OAuth 面板、自定义服务商表单、退出登录）；`onPanelEvent` 处理选择 / 搜索 / 星标（`enabledModels`）/ 设为默认（default*）/ 刷新 / 提交 / 发现 / 测试 / OAuth code。生成中 `set_model` 照发并提示「下一轮生效」；未配置模型点选 → 服务商表单 → 保存 Key 或 OAuth 完成后自动选回（`pending`）。测试 `RealModelPanelsTest`（8 条）、`ModelPanelsRenderFixtureTest`（两种形态参考夹具渲染器）；本地 kotlinc + JDK17 跑过 12/12 绿。
 
+- `feature/settings`：`SettingsScreen` 只渲染模型（「模型」组标题取自 `ModelsSettings`、默认模型、服务商分组、页底 `FOOTER_HINT`）；删掉「后台运行」「运行环境与关于」两块（`runtimeStatus/onRepairRuntime` 参数保留兼容 app，不再显示）；`ui/DshComponents.kt` 已删，换成 `ui/SettingsComponents.kt`（纯 Material 3，无玻璃/渐变/彩色图标）；`BackgroundGuide`/`SettingsPreviews` 改用新组件。feature/settings 内本来就没有回收站浏览页（X7 本线部分无需删除，路由归 r3/app）。**Android 模块未能本地编译，靠 CI。**
+
 ## CI
 - 302ac2b（含以上全部代码）run 41740714769：构建 debug APK ✅、W3 仪器测试编译 ✅、单元测试（全部模块）✅；「编译全部仪器测试」在本状态推送时仍在跑（本次推送会取消它，看新 run）。
 
@@ -23,7 +25,7 @@
 
 ## 下一步（按顺序）
 1. 看 CI（GET /actions/runs?branch=r3/models），修编译 / 测试失败。
-2. `feature/settings`：（结构与测试已完成）把 `SettingsScreen` 公开签名保留（app 在用），内部改为只渲染模型设置、Material 默认主题；页底「pi 的其他设置在 ⌘ › pi 设置」。
-3. 删 `feature/settings/ui/DshComponents.kt`（先确认 SettingsScreen/RomGuide/BackgroundGuide 不再引用）；回收站浏览页（feature/settings 内若有）。
+2. ~~`feature/settings`~~（已完成，待 CI）把 `SettingsScreen` 公开签名保留（app 在用），内部改为只渲染模型设置、Material 默认主题；页底「pi 的其他设置在 ⌘ › pi 设置」。
+3. ~~删 DshComponents~~（已完成）（先确认 SettingsScreen/RomGuide/BackgroundGuide 不再引用）；回收站浏览页（feature/settings 内若有）。
 4. ~~`feature/models/RealModelPanels`~~（已完成）（实现契约 `ModelPanels`，依赖 `ModelCatalog`/`AuthManager`/`CustomProviderStore`/`EngineClient`），产出 SelectList/Form/Text；生成中 set_model 提示「下一轮生效」；未配置模型点选 → providerForm → 配好后自动选回（复用 PendingModel 思路）；单测用契约 Fake。
 5. 等 #15 合入 → POST /merges {base:r3/models, head:main} → CI 绿 → 开 PR（标题 r3/models…）。
