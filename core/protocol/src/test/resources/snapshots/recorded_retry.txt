@@ -1,0 +1,11 @@
+running=false queue=steer[] followUp[] retry=null
+session=null model=null thinking=null status=null
+-- transitions
+  #0 agent_start running=true
+  #10 auto_retry_start retry=1/3 2000ms "503: {\"message\":\"The server is overloaded, please retry\",\"type\":\"overloaded\"}"
+  #19 auto_retry_end retry=null
+  #22 agent_settled running=false
+-- items
+[u-0] USER SENT "#retry 第一次会失败"
+[a-3] ASSISTANT streaming=false stop=stop error=null
+    #0 TEXT "OK: #retry 第一次会失败"

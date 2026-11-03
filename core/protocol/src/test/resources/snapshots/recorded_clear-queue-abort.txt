@@ -1,0 +1,12 @@
+running=false queue=steer[] followUp[] retry=null
+session=null model=null thinking=null status=null
+-- transitions
+  #0 agent_start running=true
+  #9 queue_update queue=steer[] followUp["#text 不该被发出"]
+  #10 queue_update queue=steer[] followUp[]
+  #15 agent_settled running=false
+-- items
+[u-0] USER SENT "#slow 慢慢说"
+[a-1] ASSISTANT streaming=false stop=aborted error="Request was aborted"
+    #0 TEXT "片段0 "
+[n-2] NOTICE STOPPED "已停止"

@@ -144,9 +144,13 @@ class ChatReducerFixtureTest {
 
     @Test
     fun compaction() {
+        // 真 pi 1.5.0 录制：一轮对话后手动 compact，pi 回 "Nothing to compact (session too small)"。
+        // 成功压缩的「已压缩上下文」由 ChatReducerTest 手写事件覆盖。
         val st = snapshot("recorded/compaction")
-        assertTrue(st.all<ChatItem.Notice>().any { it.kind == NoticeKind.COMPACTION })
+        assertTrue(st.all<ChatItem.Notice>().any { it.kind == NoticeKind.ERROR && it.text.startsWith("压缩上下文失败") })
+        assertFalse(st.all<ChatItem.Notice>().any { it.kind == NoticeKind.COMPACTION })
         assertNull(st.statusLine)
+        assertFalse(st.running)
     }
 
     @Test

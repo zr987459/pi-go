@@ -1,0 +1,12 @@
+running=false queue=steer[] followUp[] retry=null
+session=null model=null thinking=null status=null
+-- transitions
+  #0 agent_start running=true
+  #25 agent_settled running=false
+-- items
+[u-0] USER SENT "#tool-fail 读一个不存在的文件"
+[a-1] ASSISTANT streaming=false stop=toolUse error=null
+    #0 TOOLCALL call_fail_1 read {"path":"/nonexistent/pi-go/missing.txt"}
+[tool-call_fail_1] TOOL read call_fail_1 ERROR args={"path":"/nonexistent/pi-go/missing.txt"} partial=null result="ENOENT: no such file or directory, access '/nonexistent/pi-go/missing.txt'" dur=set
+[a-2] ASSISTANT streaming=false stop=stop error=null
+    #0 TEXT "工具已完成。"

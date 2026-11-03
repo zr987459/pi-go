@@ -28,7 +28,8 @@ object Fixtures {
         // 只按 LF 切
         return text.split('\n').map { it.removeSuffix("\r") }.filter { it.isNotBlank() }.mapNotNull { l ->
             when {
-                l.startsWith("//> ") -> (RecordCodec.json.parseToJsonElement(l.removePrefix("//> ").trim()) as? JsonObject)?.let { Line.Cmd(it) }
+                // 客户端命令行可能故意是坏 JSON（例如 protocol-errors 的 `not json`），这种只作注释
+                l.startsWith("//> ") -> (runCatching { RecordCodec.json.parseToJsonElement(l.removePrefix("//> ").trim()) }.getOrNull() as? JsonObject)?.let { Line.Cmd(it) }
                 l.startsWith("//") -> null
                 else -> when (val d = RecordCodec.decode(l)) {
                     is RecordCodec.Decoded.Record -> Line.Out(l, d.record)

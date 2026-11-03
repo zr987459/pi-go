@@ -311,10 +311,13 @@ class PiEngine(
         sessionFile = st.sessionFile ?: session
         currentCwd = cwd
         c.ready = true
-        _status.value = if (st.isStreaming) EngineStatus.Running(st) else EngineStatus.Idle(st)
         mutate { reducer.applyPiState(it, st) }
         if (rebuild) rebuildFromMessages(c)
         if (trailingNotice != null) mutate { reducer.addNotice(it, trailingNotice.first, trailingNotice.second) }
+        // 聊天记录恢复完、提示加上之后才发布就绪状态：观察者不会看到「空闲」而聊天还是半恢复的样子。
+        // 恢复期间 afterPublish 不改 Starting；这里按聊天里的 running（含恢复期间到达的事件）定状态。
+        _status.value = if (st.isStreaming || _chat.value.running) EngineStatus.Running(lastPiState.copy(isStreaming = true))
+        else EngineStatus.Idle(lastPiState.copy(isStreaming = false))
         log.i(TAG, "pi 就绪：session=${st.sessionFile} model=${st.model?.provider}/${st.model?.id}")
         return Outcome.Ok(Unit)
     }

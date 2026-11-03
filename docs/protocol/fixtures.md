@@ -25,7 +25,7 @@
 | `steer.jsonl` | 工具执行中 `prompt + streamingBehavior:"steer"` | steer、Q2 |
 | `clear-queue-abort.jsonl` | 有排队消息时 `clear_queue` → `abort` | 停止、Q3（撤回的消息不再发出） |
 | `retry.jsonl` | 模型服务先回 503，pi 自动重试成功 | `auto_retry_start/end`、重试黄条 |
-| `compaction.jsonl` | 一轮对话后手动 `compact` | `compaction_start/end`、「已压缩上下文」 |
+| `compaction.jsonl` | 一轮对话后手动 `compact` | `compaction_start/end`；会话太短，pi 1.5.0 返回 `Nothing to compact (session too small)` → 「压缩上下文失败」错误卡、状态行清空（成功压缩由 `ChatReducerTest` 手写事件覆盖） |
 | `provider-error.jsonl` | 模型服务回 401 | `stopReason:"error"`、「Key 错误」中文提示 |
 | `protocol-errors.jsonl` | 非 JSON 命令、`set_model` 失败、模型/思考级别/统计查询 | 不带 id 的 `parse` 错误、`success:false`、各响应字段 |
 

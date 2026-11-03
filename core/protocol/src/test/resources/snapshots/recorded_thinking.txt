@@ -1,0 +1,10 @@
+running=false queue=steer[] followUp[] retry=null
+session=null model=null thinking=null status=null
+-- transitions
+  #0 agent_start running=true
+  #17 agent_settled running=false
+-- items
+[u-0] USER SENT "#think 想一想再回答"
+[a-1] ASSISTANT streaming=false stop=stop error=null
+    #0 THINKING 500ms "先想一想：用户要问候。"
+    #1 TEXT "想好了。"
