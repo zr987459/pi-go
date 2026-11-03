@@ -16,5 +16,7 @@
 
 - 16:55 真 pi 1.5.0 集成：本地（linux aarch64、Node v22.23.3、`npm i @earendil-works/pi-coding-agent@1.5.0`）`RealPiExtrasIntegrationTest` 7/7 通过（get_commands 列出 prompts/x.md、fork 后 sessionFile 改变且 text 正确、get_tree ≥2 层、compact 成功、bash echo hi、export_html 文件存在、1×1 PNG 以 image_url 到达 mock），原有 `RealPiIntegrationTest` 8/8 通过。`MockOpenAiServer` 记录 image_url。轮末再全量 get_entries 一次（messageMeta 防漏）。`docs/notices/feat-engine-rpc.md`、`docs/protocol/engine-rpc.md` 已写。
 
-## 剩余（按顺序）
-5. notices、docs/protocol、assembleDebug、开 PR。
+- 17:00 全量本地：`:core:contract:test` 28/28、`:core:protocol:test` 99/99、`:core:engine:testDebugUnitTest` 72 过 1 跳过（RecordFixturesTest 录制开关）0 失败（含真 pi 15 个）。`assembleDebug` 本地 linux aarch64 在 `:app:processDebugResources`（aapt2 只有 x86_64）失败，属环境问题，以 CI 为准。
+
+## 剩余
+- 开 PR 到 main，确认 push 与 PR 两次 CI。
