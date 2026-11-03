@@ -10,3 +10,5 @@
 
 ## 进度
 - 07:35 建分支，读设计文档中。
+- 07:37 `docs/r3/coverage-map.tsv`（229 行：191 动作、17 BASE、16 FORM、5 NA）由 pi-features.md §1–§11 表格行生成，映射依据 DESIGN-r3 §2 各表；`PiActionCatalog` 新增 `ext.commands`、`help.powershell`、`help.env`、`help.easterEgg`（共 79 个）。
+- 下一步：`PiFeatureCoverageTest` → `SessionHostImpl` + `PiActionsImpl` → `FormSwitchContractTest` / `SessionHostFormSwitchTest` → `PiSettings` → `SessionCatalog` → §7.3 测试 → 移动 LineDiff/SessionTreeRows/Ansi → 删除 AutoNamer/AutoTitle/commands ui。

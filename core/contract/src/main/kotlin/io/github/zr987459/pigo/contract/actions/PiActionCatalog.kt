@@ -686,6 +686,42 @@ object PiActionCatalog {
             ui = UiEntry.Command,
             term = TermEntry.KeyStrip("⇞⇟"),
         ),
+        spec(
+            id = "ext.commands",
+            title = "扩展命令",
+            group = ActionGroup.EXT,
+            slash = listOf(),
+            featureRefs = listOf("§3 扩展命令"),
+            ui = UiEntry.Command,
+            term = TermEntry.Slash,
+        ),
+        spec(
+            id = "help.powershell",
+            title = "PowerShell 工具说明",
+            group = ActionGroup.HELP,
+            slash = listOf(),
+            featureRefs = listOf("§4 powershell"),
+            ui = UiEntry.Explain("powershell 工具只在 Windows 上可用；手机上的 pi 运行在 Linux 环境里，用 bash 工具代替。"),
+            term = TermEntry.Explain("powershell 工具只在 Windows 上可用；手机上的 pi 运行在 Linux 环境里，用 bash 工具代替。"),
+        ),
+        spec(
+            id = "help.env",
+            title = "环境变量说明",
+            group = ActionGroup.HELP,
+            slash = listOf(),
+            featureRefs = listOf("§8.1 服务商 key", "§8.1 渲染", "§8.1 给 bash 工具的会话变量"),
+            ui = UiEntry.Explain("服务商 Key 走 auth.json（优先级更高、更安全），不用环境变量；渲染类变量只影响桌面终端；PI_SESSION_ID 等会话变量由 pi 自动提供给 bash 工具。"),
+            term = TermEntry.Explain("服务商 Key 走 auth.json（优先级更高、更安全），不用环境变量；渲染类变量只影响桌面终端；PI_SESSION_ID 等会话变量由 pi 自动提供给 bash 工具。"),
+        ),
+        spec(
+            id = "help.easterEgg",
+            title = "彩蛋说明",
+            group = ActionGroup.HELP,
+            slash = listOf(),
+            featureRefs = listOf("§11 彩蛋（armin、3D、earendil 公告）"),
+            ui = UiEntry.Explain("pi 桌面终端里的彩蛋（armin、3D、earendil 公告）不在本 App 里复刻。"),
+            term = TermEntry.Explain("pi 桌面终端里的彩蛋（armin、3D、earendil 公告）不在本 App 里复刻。"),
+        ),
     )
 
     private val byId: Map<String, PiActionSpec> = all.associateBy { it.id }
