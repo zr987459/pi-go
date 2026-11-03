@@ -53,6 +53,10 @@ private fun Destination.glyph(): Glyph = when (this) {
     Destination.Sessions -> AppIcons.history
     Destination.Settings -> AppIcons.settings
     Destination.Onboarding -> AppIcons.terminal
+    Destination.Files -> AppIcons.folderOpen
+    Destination.Tree -> AppIcons.fork
+    Destination.Skills -> AppIcons.skill
+    Destination.Usage -> AppIcons.chart
 }
 
 /**
@@ -79,6 +83,10 @@ fun PiGoDrawer(
                         selected = current == Destination.Chat.route,
                         modifier = Modifier.padding(horizontal = 10.dp),
                     ) { onDestination(Destination.Chat) }
+                    // W5 抽屉入口：文件、会话树、技能与模板、用量。
+                    for (d in listOf(Destination.Files, Destination.Tree, Destination.Skills, Destination.Usage)) {
+                        DrawerRow(d, selected = current == d.route, modifier = Modifier.padding(horizontal = 10.dp)) { onDestination(d) }
+                    }
                     DrawerRow(
                         Destination.Onboarding,
                         selected = current == Destination.Onboarding.route,
