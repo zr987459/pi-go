@@ -69,7 +69,7 @@ object PickerLogic {
     fun contextText(tokens: Long?): String? = when {
         tokens == null || tokens <= 0 -> null
         tokens >= 1_000_000 && tokens % 1_000_000 == 0L -> "${tokens / 1_000_000}M"
-        tokens >= 1_000_000 -> String.format(Locale.ROOT, "%.1fM", tokens / 1_000_000.0)
+        tokens >= 1_000_000 -> String.format(Locale.ROOT, "%.1f", tokens / 1_000_000.0).removeSuffix(".0") + "M"
         tokens >= 1_000 -> "${tokens / 1_000}K"
         else -> tokens.toString()
     }

@@ -56,7 +56,8 @@ class PickerLogicTest {
     @Test fun textHelpers() {
         assertEquals("128K", PickerLogic.contextText(128_000))
         assertEquals("1M", PickerLogic.contextText(1_000_000))
-        assertEquals("1.1M", PickerLogic.contextText(1_048_576))
+        assertEquals("1M", PickerLogic.contextText(1_048_576))
+        assertEquals("1.5M", PickerLogic.contextText(1_500_000))
         val usd = CostDisplaySettings()
         assertEquals("输入 \$0.27 · 输出 \$1.10（每百万 token）", PickerLogic.priceText(ModelCost(0.27, 1.1), usd))
         val cny = CostDisplaySettings(showCny = true, usdToCny = 7.1)

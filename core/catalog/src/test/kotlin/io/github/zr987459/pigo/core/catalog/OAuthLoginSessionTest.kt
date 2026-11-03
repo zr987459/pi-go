@@ -4,7 +4,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.consumeAsFlow
 import kotlinx.coroutines.test.runTest
-import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -36,19 +36,19 @@ class OAuthLoginSessionTest {
         var finished: Boolean? = null
         val s = OAuthLoginSession("github-copilot", proc, backgroundScope) { finished = it }
         proc.out.send("""{"type":"prompt","id":"p1","prompt":{"type":"text","message":"GitHub Enterprise URL/domain (blank for github.com)"}}""")
-        advanceUntilIdle()
+        runCurrent()
         assertTrue(s.state.value is OAuthLoginSession.State.AwaitingInput)
         s.answer("p1", "")
         assertEquals("""{"type":"answer","id":"p1","value":""}""", proc.sent.single())
         proc.out.send("""{"type":"event","event":{"type":"device_code","userCode":"ABCD-1234","verificationUri":"https://github.com/login/device","expiresInSeconds":900}}""")
-        advanceUntilIdle()
+        runCurrent()
         val dc = s.state.value as OAuthLoginSession.State.AwaitingDeviceCode
         assertEquals("ABCD-1234", dc.userCode)
         proc.out.send("""{"type":"event","event":{"type":"progress","message":"Enabling models..."}}""")
-        advanceUntilIdle()
+        runCurrent()
         assertTrue("设备码页面在轮询期间保持", s.state.value is OAuthLoginSession.State.AwaitingDeviceCode)
         proc.out.send("""{"type":"done","provider":"github-copilot","credential":"oauth"}""")
-        advanceUntilIdle()
+        runCurrent()
         assertEquals(OAuthLoginSession.State.Succeeded, s.state.value)
         assertEquals(true, finished)
     }
@@ -58,7 +58,7 @@ class OAuthLoginSessionTest {
         val s = OAuthLoginSession("anthropic", proc, backgroundScope)
         proc.out.send("""{"type":"event","event":{"type":"auth_url","url":"https://claude.ai/oauth/authorize?state=GOOD&redirect_uri=http%3A%2F%2Flocalhost%3A53692%2Fcallback"}}""")
         proc.out.send("""{"type":"prompt","id":"p1","prompt":{"type":"manual_code","message":"paste"}}""")
-        advanceUntilIdle()
+        runCurrent()
         val st = s.state.value as OAuthLoginSession.State.AwaitingBrowser
         assertEquals("p1", st.pendingPrompt!!.id)
         try {
@@ -73,7 +73,7 @@ class OAuthLoginSessionTest {
     @Test fun cancelStopsProcessAndProcessDeathFails() = runTest {
         val proc = FakeProc()
         val s = OAuthLoginSession("xai", proc, backgroundScope)
-        advanceUntilIdle()
+        runCurrent()
         s.cancel()
         assertTrue(proc.stopped)
         assertTrue(proc.sent.single().contains("cancel"))
@@ -82,7 +82,7 @@ class OAuthLoginSessionTest {
         val proc2 = FakeProc()
         val s2 = OAuthLoginSession("xai", proc2, backgroundScope)
         proc2.out.close()
-        advanceUntilIdle()
+        runCurrent()
         assertFalse((s2.state.value as OAuthLoginSession.State.Failed).cancelled)
     }
 }
