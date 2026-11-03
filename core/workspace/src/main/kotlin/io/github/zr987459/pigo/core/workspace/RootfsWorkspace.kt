@@ -227,14 +227,15 @@ class RootfsWorkspace(
         val ps = paths()
         var dir: String? = GuestPaths.normalize(cwd)
         while (dir != null) {
-            val git = ps.rawHost(GuestPaths.child(dir, ".git").let { runCatching { ps.resolve(it) }.getOrDefault(it) })
-            if (git.exists()) {
+            // 只读允许范围内的文件（hostFile 做越界与符号链接检查）；范围外（例如 `/.git`）当作不存在继续往上找。
+            val git = runCatching { ps.hostFile(GuestPaths.child(dir, ".git")) }.getOrNull()
+            if (git != null && git.exists()) {
                 val head: File = if (git.isFile) {
                     val content = runCatching { git.readText().trim() }.getOrNull() ?: return null
                     if (!content.startsWith("gitdir: ")) return null
                     val gd = content.removePrefix("gitdir: ").trim()
-                    val gitDirGuest = if (gd.startsWith("/")) GuestPaths.normalize(gd) else GuestPaths.normalize("$dir/$gd")
-                    ps.rawHost(gitDirGuest).resolve("HEAD")
+                    val gitDirGuest = collapse(if (gd.startsWith("/")) gd else "$dir/$gd")
+                    runCatching { ps.hostFile(GuestPaths.child(gitDirGuest, "HEAD")) }.getOrNull() ?: return null
                 } else git.resolve("HEAD")
                 if (!head.isFile) return null
                 val content = runCatching { head.readText().trim() }.getOrNull() ?: return null
@@ -304,6 +305,17 @@ class RootfsWorkspace(
 
     companion object {
         const val HOME = "/root"
+
+        /** 字面折叠 `.`、`..`（worktree 的相对 `gitdir:`）；越过根时停在 `/`。 */
+        internal fun collapse(path: String): String {
+            val out = ArrayList<String>()
+            for (seg in path.split('/')) when (seg) {
+                "", "." -> Unit
+                ".." -> if (out.isNotEmpty()) out.removeAt(out.size - 1)
+                else -> out += seg
+            }
+            return "/" + out.joinToString("/")
+        }
 
         internal const val GIT_REMOVED = "Git 页已删除（pi 没有此功能，DESIGN-r3 §1.1 X5）"
 

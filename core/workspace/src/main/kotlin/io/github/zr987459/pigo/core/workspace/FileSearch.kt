@@ -39,20 +39,23 @@ object FileSearch {
         val seen = HashSet<String>()
         val entries = (first + rec).filter { seen.add(it.path) }
         return entries
-            .map { Scored(it.path, it.isDir, if (q.isEmpty()) 1 else score(it.path, q, it.isDir)) }
+            // pi 打分与排序时目录路径带结尾 `/`（fd 的输出格式），这里同样处理
+            .map { Scored(it.path, it.isDir, if (q.isEmpty()) 1 else score(slashed(it), q, it.isDir)) }
             .filter { it.score > 0 }
             .sortedWith(
                 compareByDescending<Scored> { it.score }
                     .thenBy { it.path.split('/').count { s -> s.isNotEmpty() } }
-                    .thenBy { it.path.length }
-                    .thenBy { it.path },
+                    .thenBy { it.path.length + if (it.isDir) 1 else 0 }
+                    .thenBy { if (it.isDir) it.path + "/" else it.path },
             )
             .take(limit.coerceAtLeast(0))
     }
 
-    /** pi-tui `scoreEntry`。 */
+    private fun slashed(e: Entry) = if (e.isDir) e.path + "/" else e.path
+
+    /** pi-tui `scoreEntry`（[path] 为目录时带结尾 `/`，文件名取 basename，与 node 的 `basename` 一致）。 */
     fun score(path: String, query: String, isDir: Boolean): Int {
-        val name = path.substringAfterLast('/').lowercase()
+        val name = path.trimEnd('/').substringAfterLast('/').lowercase()
         val lq = query.lowercase()
         var s = when {
             name == lq -> 100
