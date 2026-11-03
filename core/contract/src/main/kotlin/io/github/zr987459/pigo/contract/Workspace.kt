@@ -176,6 +176,10 @@ enum class ExportFormat(val extension: String, val mimeType: String) {
 }
 
 interface SessionExporter {
-    /** 导出到宿主缓存目录（供分享或另存），返回宿主文件。HTML 走引擎 `export_html`。 */
+    /**
+     * 导出到宿主缓存目录（供分享或另存），返回宿主文件。可传任意会话。
+     * HTML：RPC `export_html` 只能导出**当前**会话，所以 [sessionGuestPath] 是当前会话时可走 `EngineExtras.exportHtml`，
+     * 非当前会话用 `pi --export <会话文件> [输出路径]`（一次性进程，不影响正在运行的引擎）。
+     */
     suspend fun export(sessionGuestPath: String, format: ExportFormat): Outcome<File>
 }
