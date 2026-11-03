@@ -104,6 +104,19 @@ class JsonlFramerTest {
     }
 
     @Test
+    fun oversizedKeepsLineHeadAcrossChunks() {
+        val f = JsonlFramer(maxLineBytes = 600)
+        val out = mutableListOf<Frame>()
+        val line = """{"id":"r-1","type":"response","command":"get_tree",""" + "x".repeat(2_000)
+        line.chunked(37).forEach { f.feed(it) { fr -> out += fr } }
+        f.feed("\n") { out += it }
+        val o = out.single() as Frame.Oversized
+        assertEquals(line.length.toLong(), o.bytes)
+        assertEquals(JsonlFramer.HEAD_BYTES, o.head.length)
+        assertTrue(o.head.startsWith("""{"id":"r-1","type":"response""""))
+    }
+
+    @Test
     fun exactlyMaxLineBytesIsAccepted() {
         val f = JsonlFramer(maxLineBytes = 4)
         val out = mutableListOf<Frame>()

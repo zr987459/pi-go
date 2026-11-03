@@ -21,7 +21,14 @@ class JsonlFramer(
         data class Line(val text: String) : Frame
 
         /** 一条超长记录被丢弃；[bytes] 为该行的总字节数（不含 LF）。 */
-        data class Oversized(val bytes: Long) : Frame
+        data class Oversized(val bytes: Long) : Frame {
+            /**
+             * 行首至多 [HEAD_BYTES] 字节（按 UTF-8 解码，末尾可能截断一个字符）。超长的 response 靠它按 id 立即结束等待中的请求，
+             * 不让调用方空等到超时。不参与 equals。
+             */
+            var head: String = ""
+                internal set
+        }
     }
 
     private var buf = ByteArray(INITIAL_CAPACITY)
@@ -29,6 +36,8 @@ class JsonlFramer(
     /** 当前行是否已超长、正在丢弃。 */
     private var discarding = false
     private var discardedBytes = 0L
+    /** 超长行的行首（见 [Frame.Oversized.head]）。 */
+    private var discardHead = ""
 
     init {
         require(maxLineBytes > 0) { "maxLineBytes must be > 0" }
@@ -72,6 +81,11 @@ class JsonlFramer(
             return
         }
         if (len.toLong() + count > maxLineBytes) {
+            val h = ByteArray(minOf(HEAD_BYTES.toLong(), len.toLong() + count).toInt())
+            val fromBuf = minOf(len, h.size)
+            System.arraycopy(buf, 0, h, 0, fromBuf)
+            System.arraycopy(src, from, h, fromBuf, h.size - fromBuf)
+            discardHead = String(h, Charsets.UTF_8)
             discarding = true
             discardedBytes = len.toLong() + count
             len = 0
@@ -89,7 +103,9 @@ class JsonlFramer(
             discarding = false
             discardedBytes = 0
             len = 0
-            sink(Frame.Oversized(n))
+            val head = discardHead
+            discardHead = ""
+            sink(Frame.Oversized(n).also { it.head = head })
             return
         }
         var n = len
@@ -113,6 +129,9 @@ class JsonlFramer(
         private const val LF: Byte = 0x0A
         private const val CR: Byte = 0x0D
         private const val INITIAL_CAPACITY = 8 * 1024
+
+        /** [Frame.Oversized.head] 保留的行首字节数。pi 的 response 以 `{"id":…,"type":"response","command":…` 开头。 */
+        const val HEAD_BYTES = 512
 
         /** 单条记录上限。`get_messages` 的长会话可达数 MB，留足余量。 */
         const val DEFAULT_MAX_LINE_BYTES = 32 * 1024 * 1024

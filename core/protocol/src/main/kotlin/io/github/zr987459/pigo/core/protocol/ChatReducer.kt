@@ -3,6 +3,8 @@ package io.github.zr987459.pigo.core.protocol
 import io.github.zr987459.pigo.contract.ChatItem
 import io.github.zr987459.pigo.contract.ChatState
 import io.github.zr987459.pigo.contract.ContentBlock
+import io.github.zr987459.pigo.contract.ImageInput
+import io.github.zr987459.pigo.contract.TimelineExtra
 import io.github.zr987459.pigo.contract.Delivery
 import io.github.zr987459.pigo.contract.NoticeKind
 import io.github.zr987459.pigo.contract.PiState
@@ -10,7 +12,10 @@ import io.github.zr987459.pigo.contract.QueueSnapshot
 import io.github.zr987459.pigo.contract.RetryBanner
 import io.github.zr987459.pigo.contract.ToolStatus
 import io.github.zr987459.pigo.contract.rpc.AssistantMessageEvent
+import io.github.zr987459.pigo.contract.rpc.BashResultRecord
+import io.github.zr987459.pigo.contract.rpc.CompactionResultRecord
 import io.github.zr987459.pigo.contract.rpc.EngineEvent
+import io.github.zr987459.pigo.contract.rpc.EngineEvents
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -35,17 +40,59 @@ class ChatReducer {
     private var streamingKey: String? = null
     /** 发出后尚未被 pi 的 `message_start(user)` 确认的乐观气泡，按发送顺序。 */
     private val unconfirmed = LinkedHashSet<String>()
+
+    /** 当前会话的工作目录（引擎在启动 / 切换后设置），轮末汇总据此把相对路径转成绝对路径。 */
+    @Volatile var cwd: String? = null
+
+    /** 本轮 agent_start 时时间线最后一条的 key：轮末汇总以它之后为本轮。 */
+    private var turnStartAfterKey: String? = null
     /** 被扩展命令消费（`disposition:"handled"`）的用户气泡：标「已发送」，但不会写入会话文件。 */
     private val notPersisted = HashSet<String>()
+
+    /** 尚未写入会话文件的用户气泡（乐观气泡、扩展消费掉的输入）：[MessageMetaTracker] 配对时跳过。返回副本。 */
+    val unpersistedKeys: Set<String> get() = HashSet(notPersisted).apply { addAll(unconfirmed) }
     /** (助手条目 key, contentIndex) → 思考块开始时间。 */
     private val thinkingStartedAt = HashMap<Pair<String, Int>, Long>()
 
+    /** 用户气泡 key → 随消息发送 / 历史里带的图片（C1）。ChatItem.User 本身只有文本，图片以 [TimelineExtra.UserImages] 输出。 */
+    private val images = LinkedHashMap<String, List<ImageInput>>()
+
+    /** 当前所有带图片的用户气泡（key → 图片）。只在归约协程里读写；返回副本。 */
+    val userImages: Map<String, List<ImageInput>> get() = LinkedHashMap(images)
+
+    /**
+     * 时间线附加项（压缩卡、bash 卡、轮末汇总），按产生顺序。W0 契约不许新增 [ChatItem] 子类，这些卡片经
+     * `EngineExtras.timelineExtras` 输出，用 [TimelineExtra.anchorKey] 挂在某条 [ChatItem] 之后。
+     * key 用独立序号（`x-…`），不占用 [ChatItem] 的序号，原有时间线的 key 与快照不变。
+     */
+    private val extras = ArrayList<TimelineExtra>()
+    private var extraSeq = 0
+
+    /** 当前全部附加项：用户图片在前（按气泡顺序），其余按产生顺序。只在归约协程里调用；返回新列表。 */
+    val timelineExtras: List<TimelineExtra>
+        get() = images.map { (k, v) -> TimelineExtra.UserImages("img-$k", k, v) } + extras
+
+    /** 本轮计时（C10），与归约同序喂入。 */
+    val turnClock = TurnClock()
+
     // ------------------------------------------------------------------ 事件
 
-    fun reduce(state: ChatState, event: EngineEvent, nowMillis: Long): ChatState = when (event) {
-        is EngineEvent.AgentStart -> state.copy(running = true)
+    /** 最近一次事件的时间（中断时结束计时用）。 */
+    private var lastNow = 0L
+
+    fun reduce(state: ChatState, event: EngineEvent, nowMillis: Long): ChatState {
+        lastNow = nowMillis
+        turnClock.onEvent(event, nowMillis)
+        return reduceEvent(state, event, nowMillis)
+    }
+
+    private fun reduceEvent(state: ChatState, event: EngineEvent, nowMillis: Long): ChatState = when (event) {
+        is EngineEvent.AgentStart -> {
+            if (!state.running) turnStartAfterKey = state.items.lastOrNull()?.key
+            state.copy(running = true)
+        }
         is EngineEvent.AgentEnd -> state
-        is EngineEvent.AgentSettled -> onSettled(state, event.aborted)
+        is EngineEvent.AgentSettled -> onSettled(state, event.aborted).also { if (!event.aborted) addTurnSummary(it, nowMillis) }
         is EngineEvent.TurnStart, is EngineEvent.TurnEnd -> state
         is EngineEvent.MessageStart -> onMessageStart(state, event.message)
         is EngineEvent.MessageUpdate -> onUpdate(state, event.event, nowMillis)
@@ -62,7 +109,7 @@ class ChatReducer {
             val s = state.copy(retry = null)
             if (event.success) s else s.withNotice(NoticeKind.ERROR, "重试 ${event.attempt} 次仍失败：" + ProviderErrors.hint(event.finalError).text)
         }
-        is EngineEvent.CompactionStart -> state.copy(statusLine = COMPACTING)
+        is EngineEvent.CompactionStart -> onCompactionStart(state, event)
         is EngineEvent.CompactionEnd -> onCompactionEnd(state, event)
         is EngineEvent.SessionInfoChanged -> state.copy(sessionName = event.name)
         is EngineEvent.ThinkingLevelChanged -> state.copy(thinkingLevel = event.level)
@@ -71,6 +118,16 @@ class ChatReducer {
             "扩展出错" + (event.extensionPath?.let { "（${it.substringAfterLast('/')}）" } ?: "") + "：" + (event.error ?: "未知错误"),
         )
         is EngineEvent.Unknown -> state
+        // ---- pi 1.5.0 其余事件（feat/engine-rpc） ----
+        is EngineEvents.BashExecutionUpdate -> onBashDelta(state, event.id, event.delta)
+        is EngineEvents.EntryAppended -> state
+        is EngineEvents.SummarizationRetryScheduled -> state.copy(
+            statusLine = "生成摘要失败，${(event.delayMs + 999) / 1000} 秒后重试（第 ${event.attempt}/${event.maxAttempts} 次）",
+        )
+        is EngineEvents.SummarizationRetryAttemptStart ->
+            if (event.source == "compaction") state.copy(statusLine = COMPACTING) else state.copy(statusLine = SUMMARIZING)
+        is EngineEvents.SummarizationRetryFinished ->
+            if (state.statusLine?.startsWith("生成摘要失败") == true || state.statusLine == SUMMARIZING) state.copy(statusLine = null) else state
     }
 
     private fun onSettled(state: ChatState, aborted: Boolean): ChatState {
@@ -96,7 +153,7 @@ class ChatReducer {
     }
 
     private fun onMessageStart(state: ChatState, message: JsonObject): ChatState = when (message.str("role")) {
-        "user" -> confirmUser(state, Messages.text(message["content"]))
+        "user" -> confirmUser(state, message["content"])
         "assistant" -> {
             val key = nextKey("a")
             streamingKey = key
@@ -107,19 +164,32 @@ class ChatReducer {
         else -> state
     }
 
-    private fun confirmUser(state: ChatState, text: String): ChatState {
+    private fun confirmUser(state: ChatState, content: JsonElement?): ChatState {
+        val text = Messages.text(content)
+        val textOnly = ExtraResponses.textOnly(content)
+        val pics = ExtraResponses.images(content).map { ImageInput(it.mimeType, it.data) }
         val items = state.items
         fun pendingAt(key: String) = items.indexOfFirst { it.key == key }
-        val key = unconfirmed.firstOrNull { k -> (items.getOrNull(pendingAt(k)) as? ChatItem.User)?.text == text }
+        // 文本 + 图片签名一起匹配（移植自 Pi-Web lib/prompt-recovery.ts:39-47 的 userMessageKey 思路）：
+        // 带图的乐观气泡显示的是纯文本，pi 回来的内容是「文本 + 图片」。
+        fun matches(k: String): Boolean {
+            val u = items.getOrNull(pendingAt(k)) as? ChatItem.User ?: return false
+            if (u.text == text && pics.isEmpty() && images[k].isNullOrEmpty()) return true
+            return u.text == textOnly && sameImages(images[k].orEmpty(), pics)
+        }
+        val key = unconfirmed.firstOrNull { k -> matches(k) }
             // pi 可能展开模板/技能命令，文本与发送时不同：退而取最早一条「发送中/已发送」但未确认的气泡。
             // 已排队的气泡只按原文匹配（它们送达时文本不变），避免被别的消息误确认。
             ?: unconfirmed.firstOrNull { k ->
                 (items.getOrNull(pendingAt(k)) as? ChatItem.User)?.delivery.let { it == Delivery.SENDING || it == Delivery.SENT }
             }
         if (key == null) {
-            return state.copy(items = items + ChatItem.User(nextKey("u"), text, Delivery.SENT))
+            val k = nextKey("u")
+            if (pics.isNotEmpty()) images[k] = pics
+            return state.copy(items = items + ChatItem.User(k, text, Delivery.SENT))
         }
         unconfirmed.remove(key)
+        if (pics.isNotEmpty()) images[key] = pics
         val idx = pendingAt(key)
         val bubble = (items[idx] as ChatItem.User).copy(text = text, delivery = Delivery.SENT)
         // 排队消息在真正送达时才进入时间线：移到末尾。
@@ -198,7 +268,7 @@ class ChatReducer {
             // 正常流程已在 message_start 处理；只在漏了 start 时补一条。
             val text = Messages.text(message["content"])
             val last = state.items.lastOrNull { it is ChatItem.User } as? ChatItem.User
-            if (last != null && last.text == text) state else confirmUser(state, text)
+            if (last != null && last.text == text) state else confirmUser(state, message["content"])
         }
         "toolResult" -> applyToolResult(state, message)
         "system" -> state
@@ -279,13 +349,154 @@ class ChatReducer {
         return state.copy(items = items, retry = RetryBanner(e.attempt, e.maxAttempts, e.delayMs, e.errorMessage))
     }
 
+    /** `compaction_start`：附加一张「正在压缩」的卡（U3）；已有进行中的卡（重复事件）不再加。 */
+    private fun onCompactionStart(state: ChatState, e: EngineEvent.CompactionStart): ChatState {
+        if (extras.none { it is TimelineExtra.Compaction && it.running }) {
+            extras += TimelineExtra.Compaction(
+                key = nextExtraKey("c"),
+                anchorKey = state.items.lastOrNull()?.key,
+                tokensBefore = null,
+                estimatedTokensAfter = null,
+                summary = null,
+                manual = e.reason == "manual",
+                running = true,
+            )
+        }
+        return state.copy(statusLine = COMPACTING)
+    }
+
+    /**
+     * `compaction_end`：时间线行为与 main 一致（一行提示）；压缩卡定稿：成功 → tokensBefore/After、摘要、读改过的文件，
+     * 并把上下文占用置空（U2：pi 压缩后 percent 为 null，到下一次回复前不显示旧值）；中止 → aborted；失败 → error。
+     */
     private fun onCompactionEnd(state: ChatState, e: EngineEvent.CompactionEnd): ChatState {
         val s = state.copy(statusLine = if (state.statusLine == COMPACTING) null else state.statusLine)
+        val result = ExtraResponses.compaction(e.result)
+        val manual = e.raw.str("reason") == "manual"
         return when {
-            e.result != null -> s.withNotice(NoticeKind.COMPACTION, "已压缩上下文")
-            e.aborted -> s.withNotice(NoticeKind.INFO, "已取消压缩上下文")
-            e.errorMessage != null -> s.withNotice(NoticeKind.ERROR, "压缩上下文失败：" + e.errorMessage)
-            else -> s
+            result != null -> applyCompaction(s, result, manual).withNotice(NoticeKind.COMPACTION, "已压缩上下文")
+            e.aborted -> {
+                finishRunningCompaction { it.copy(running = false, aborted = true) }
+                s.withNotice(NoticeKind.INFO, "已取消压缩上下文")
+            }
+            e.errorMessage != null -> {
+                finishRunningCompaction { it.copy(running = false, error = e.errorMessage) }
+                s.withNotice(NoticeKind.ERROR, "压缩上下文失败：" + e.errorMessage)
+            }
+            else -> {
+                finishRunningCompaction { it.copy(running = false) }
+                s
+            }
+        }
+    }
+
+    private fun finishRunningCompaction(f: (TimelineExtra.Compaction) -> TimelineExtra.Compaction) {
+        val i = extras.indexOfLast { it is TimelineExtra.Compaction && it.running }
+        if (i >= 0) extras[i] = f(extras[i] as TimelineExtra.Compaction)
+    }
+
+    /**
+     * `compact` 的响应（或 `compaction_end.result`）定稿压缩卡，并把上下文占用置空。幂等：事件已经定稿过同一结果时只补全缺的字段；
+     * 没有进行中的卡（例如事件丢了）就新建一张，挂在时间线末尾。
+     */
+    fun applyCompaction(state: ChatState, result: CompactionResultRecord, manual: Boolean = true): ChatState {
+        val parsed = CompactionSummary.parse(result.summary)
+        fun card(key: String, anchor: String?, prev: TimelineExtra.Compaction?) = TimelineExtra.Compaction(
+            key = key,
+            anchorKey = anchor,
+            tokensBefore = result.tokensBefore ?: prev?.tokensBefore,
+            estimatedTokensAfter = result.estimatedTokensAfter ?: prev?.estimatedTokensAfter,
+            summary = parsed.body,
+            readFiles = parsed.readFiles,
+            modifiedFiles = parsed.modifiedFiles,
+            manual = manual || prev?.manual == true,
+            running = false,
+        )
+        val running = extras.indexOfLast { it is TimelineExtra.Compaction && it.running }
+        val done = extras.indexOfLast { it is TimelineExtra.Compaction }
+        when {
+            running >= 0 -> (extras[running] as TimelineExtra.Compaction).let { extras[running] = card(it.key, it.anchorKey, it) }
+            done >= 0 && (extras[done] as TimelineExtra.Compaction).summary == parsed.body ->
+                (extras[done] as TimelineExtra.Compaction).let { extras[done] = card(it.key, it.anchorKey, it) }
+            else -> extras += card(nextExtraKey("c"), state.items.lastOrNull()?.key, null)
+        }
+        return state.copy(contextPercent = null, statusLine = if (state.statusLine == COMPACTING) null else state.statusLine)
+    }
+
+    // ------------------------------------------------------------------ bash（C6）
+
+    /** 发出 `bash` 命令时附加一张运行中的终端卡；key 为 `bash-<命令 id>`，挂在当前时间线末尾。 */
+    fun startBash(state: ChatState, bashId: String, command: String, excludeFromContext: Boolean): ChatState {
+        extras += TimelineExtra.Bash(
+            key = bashKey(bashId),
+            anchorKey = state.items.lastOrNull()?.key,
+            command = command,
+            output = "",
+            running = true,
+            excludedFromContext = excludeFromContext,
+        )
+        return state
+    }
+
+    /** `bash_execution_update`：按 id 追加到对应的卡；没有 id 时追加到最后一张运行中的卡。 */
+    private fun onBashDelta(state: ChatState, id: String?, delta: String): ChatState {
+        if (delta.isEmpty()) return state
+        val i = extras.indexOfLast { it is TimelineExtra.Bash && it.running && (id == null || it.key == bashKey(id)) }
+        if (i < 0) return state
+        val b = extras[i] as TimelineExtra.Bash
+        val out = b.output + delta
+        extras[i] = if (out.length > MAX_BASH_OUTPUT) b.copy(output = out.takeLast(MAX_BASH_OUTPUT), truncated = true) else b.copy(output = out)
+        return state
+    }
+
+    /** `bash` 的响应：以 pi 的 `output` 为准定稿；[error] 为命令被拒绝 / 引擎退出等（追加在输出末尾）。 */
+    fun finishBash(state: ChatState, bashId: String, result: BashResultRecord?, error: String?): ChatState {
+        val i = extras.indexOfFirst { it.key == bashKey(bashId) }
+        if (i < 0) return state
+        val b = extras[i] as? TimelineExtra.Bash ?: return state
+        extras[i] = if (result != null) {
+            b.copy(
+                running = false,
+                output = result.output.ifEmpty { b.output },
+                exitCode = result.exitCode,
+                truncated = result.truncated || b.truncated,
+                fullOutputPath = result.fullOutputPath,
+            )
+        } else {
+            b.copy(running = false, output = b.output + (if (b.output.isEmpty() || b.output.endsWith("\n")) "" else "\n") + "[" + (error ?: "命令未完成") + "]")
+        }
+        return state
+    }
+
+    // ------------------------------------------------------------------ 轮末汇总（C10）
+
+    /** `agent_settled`（未中止）后附加轮末汇总：本轮写过的文件、耗时、输出 token 与速率。没有可显示的内容时不加。 */
+    private fun addTurnSummary(state: ChatState, now: Long) {
+        val st = TurnStats.derive(state, turnClock.snapshot(), now, cwd, turnStartAfterKey)
+        if (st.startedAtMillis == null) return
+        if (st.writtenFiles.isEmpty() && st.durationMs == null && st.outputTokens == null) return
+        extras += TimelineExtra.TurnSummary(
+            key = nextExtraKey("t"),
+            anchorKey = state.items.lastOrNull()?.key,
+            writtenFiles = st.writtenFiles,
+            durationMs = st.durationMs,
+            outputTokens = st.outputTokens,
+            tokensPerSecond = st.tokensPerSecond,
+        )
+    }
+
+    /** 重建：每轮（两条用户消息之间）有写文件或输出 token 时补一条汇总；历史里没有可靠的耗时，durationMs/速率为 null。 */
+    private fun rebuildTurnSummaries(state: ChatState, outputByAssistant: Map<String, Long>) {
+        val items = state.items
+        val userIdx = items.indices.filter { items[it] is ChatItem.User }
+        for ((n, ui) in userIdx.withIndex()) {
+            val endExcl = userIdx.getOrNull(n + 1) ?: items.size
+            if (endExcl - ui <= 1) continue
+            val turn = state.copy(items = items.subList(ui, endExcl))
+            val files = TurnFiles.written(turn)
+            val tokens = items.subList(ui, endExcl).sumOf { outputByAssistant[it.key] ?: 0L }
+            if (files.isEmpty() && tokens <= 0) continue
+            extras += TimelineExtra.TurnSummary(nextExtraKey("t"), items[endExcl - 1].key, files, null, tokens.takeIf { it > 0 }, null)
         }
     }
 
@@ -303,10 +514,13 @@ class ChatReducer {
     ): ChatState {
         // 时间线里已写入会话的用户消息数（排除 handled 气泡），必须在 reset() 清掉簿记之前算出。
         val confirmedCount = base.items.count { it is ChatItem.User && it.delivery == Delivery.SENT && it.key !in notPersisted }
+        val carryImages = carry.mapNotNull { c -> images[c.key]?.let { c.key to it } }
         reset()
+        images.putAll(carryImages)
         // 队列与上下文占用属于进程 / 旧会话：重建后以新的 queue_update、get_session_stats 为准。
         // 例外：live（同一进程里仍在生成）时保留 running 与队列，否则会被当成「这一轮结束」（释放唤醒锁、停止键消失）。
         val keepRun = live && base.running
+        val outputByAssistant = HashMap<String, Long>()
         var s = base.copy(
             items = emptyList(),
             running = keepRun,
@@ -317,7 +531,11 @@ class ChatReducer {
         for (m in messages) {
             val o = m as? JsonObject ?: continue
             s = when (val role = o.str("role")) {
-                "user" -> s.copy(items = s.items + ChatItem.User(nextKey("u"), Messages.text(o["content"]), Delivery.SENT))
+                "user" -> {
+                    val k = nextKey("u")
+                    ExtraResponses.images(o["content"]).takeIf { it.isNotEmpty() }?.let { l -> images[k] = l.map { ImageInput(it.mimeType, it.data) } }
+                    s.copy(items = s.items + ChatItem.User(k, Messages.text(o["content"]), Delivery.SENT))
+                }
                 "assistant" -> {
                     val a = Messages.assistant(nextKey("a"), o, previous = emptyList())
                     var t = s.copy(items = s.items + a).withToolPlaceholders(a).withStopNotices(a)
@@ -326,9 +544,14 @@ class ChatReducer {
                 }
                 "toolResult" -> applyToolResult(s, o)
                 "system" -> s
-                else -> appendAux(s, role, o)
+                else -> appendAux(s, role, o).also { t -> t.items.lastOrNull()?.takeIf { t !== s }?.let { historyExtra(role, o, it.key) } }
+            }
+            if (o.str("role") == "assistant") (s.items.lastOrNull { it is ChatItem.Assistant })?.let { a ->
+                val out = o.obj("usage")?.long("output") ?: 0
+                if (out > 0) outputByAssistant[a.key] = out
             }
         }
+        rebuildTurnSummaries(s, outputByAssistant)
         // 没有 toolResult 的工具调用：会话不在运行中时 pi 不会再执行它们，标「未执行」，不留转圈的卡片。
         if (!live) s = s.copy(items = s.items.map { if (it is ChatItem.Tool && it.status == ToolStatus.PENDING) it.notExecuted() else it })
         // 进程崩溃 / 强制重启时没能送达的消息（排队中、发送中），以「发送失败」气泡接在历史后面，由用户点「重试」，不自动重发。
@@ -357,8 +580,9 @@ class ChatReducer {
     // ------------------------------------------------------------------ 客户端侧操作（非 pi 事件）
 
     /** 发送后立即出现的乐观气泡（「发送中」）。 */
-    fun addPendingUser(state: ChatState, key: String, text: String): ChatState {
+    fun addPendingUser(state: ChatState, key: String, text: String, images: List<ImageInput> = emptyList()): ChatState {
         unconfirmed += key
+        if (images.isNotEmpty()) this.images[key] = images
         return state.copy(items = state.items + ChatItem.User(key, text, Delivery.SENDING))
     }
 
@@ -388,6 +612,7 @@ class ChatReducer {
     fun removeItem(state: ChatState, key: String): ChatState {
         unconfirmed.remove(key)
         notPersisted.remove(key)
+        images.remove(key)
         return state.copy(items = state.items.filterNot { it.key == key })
     }
 
@@ -447,6 +672,12 @@ class ChatReducer {
             }
             add(ChatItem.Notice(nextKey("n"), kind, text))
         }
+        turnClock.interrupt(lastNow)
+        for (i in extras.indices) {
+            val x = extras[i]
+            if (x is TimelineExtra.Bash && x.running) extras[i] = x.copy(running = false, output = x.output + (if (x.output.isEmpty() || x.output.endsWith("\n")) "" else "\n") + "[引擎已退出，命令未完成]")
+            if (x is TimelineExtra.Compaction && x.running) extras[i] = x.copy(running = false, aborted = true)
+        }
         val next = state.copy(
             items = items + orphans + notices,
             running = false,
@@ -460,6 +691,7 @@ class ChatReducer {
     /** 新会话：清空时间线与簿记，保留模型与思考级别。 */
     fun cleared(state: ChatState): ChatState {
         reset()
+        turnClock.reset()
         return ChatState(model = state.model, thinkingLevel = state.thinkingLevel)
     }
 
@@ -468,11 +700,43 @@ class ChatReducer {
         unconfirmed.clear()
         notPersisted.clear()
         thinkingStartedAt.clear()
+        images.clear()
+        extras.clear()
     }
 
     // ------------------------------------------------------------------ 工具
 
     private fun nextKey(prefix: String) = "$prefix-${seq++}"
+
+    private fun nextExtraKey(prefix: String) = "x-$prefix-${extraSeq++}"
+
+    /** 历史里的 `bashExecution` / `compactionSummary` 消息：时间线仍是一行提示（同 main），另附一张卡挂在该提示之后。 */
+    private fun historyExtra(role: String?, o: JsonObject, anchor: String) {
+        when (role) {
+            "bashExecution" -> extras += TimelineExtra.Bash(
+                key = nextExtraKey("b"),
+                anchorKey = anchor,
+                command = o.str("command") ?: "",
+                output = o.str("output") ?: "",
+                running = false,
+                exitCode = o.long("exitCode")?.toInt(),
+                excludedFromContext = o.bool("excludeFromContext") ?: false,
+                truncated = o.bool("truncated") ?: false,
+                fullOutputPath = o.str("fullOutputPath"),
+            )
+            "compactionSummary" -> CompactionSummary.parse(o.str("summary") ?: "").let { p ->
+                extras += TimelineExtra.Compaction(
+                    key = nextExtraKey("c"),
+                    anchorKey = anchor,
+                    tokensBefore = o.long("tokensBefore"),
+                    estimatedTokensAfter = null,
+                    summary = p.body,
+                    readFiles = p.readFiles,
+                    modifiedFiles = p.modifiedFiles,
+                )
+            }
+        }
+    }
 
     private fun ChatState.withNotice(kind: NoticeKind, text: String) = copy(items = items + ChatItem.Notice(nextKey("n"), kind, text))
 
@@ -505,6 +769,15 @@ class ChatReducer {
 
     companion object {
         const val COMPACTING = "正在压缩上下文…"
+        const val SUMMARIZING = "正在生成分支摘要…"
+
+        /** 终端卡最多保留的输出字符数（超出保留末尾并标截断；完整输出以 pi 的 fullOutputPath 为准）。 */
+        const val MAX_BASH_OUTPUT = 256 * 1024
+
+        fun bashKey(bashId: String) = "bash-$bashId"
+
+        private fun sameImages(a: List<ImageInput>, b: List<ImageInput>): Boolean =
+            a.size == b.size && a.indices.all { a[it].mimeType == b[it].mimeType && a[it].base64Data == b[it].base64Data }
 
         fun toolKey(toolCallId: String) = "tool-$toolCallId"
 

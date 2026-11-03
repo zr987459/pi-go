@@ -1,5 +1,6 @@
 package io.github.zr987459.pigo.core.protocol
 
+import kotlinx.serialization.json.JsonObject
 import io.github.zr987459.pigo.contract.ErrCode
 import io.github.zr987459.pigo.contract.Outcome
 import io.github.zr987459.pigo.contract.rpc.RpcCommand
@@ -74,7 +75,8 @@ class RpcChannel(
     fun start() {
         if (!started.compareAndSet(false, true)) return
         thread("$name-stdout") { readStdout() }
-        stderr?.let { s -> thread("$name-stderr") { drainStderr(s) } }
+        // stderr 只按行转日志，不解析 JSON：用默认栈，不占 64 MB 地址空间（32 位设备，审查第 1 轮 Nit）。
+        stderr?.let { s -> thread("$name-stderr", stackBytes = 0) { drainStderr(s) } }
     }
 
     /**
@@ -137,6 +139,8 @@ class RpcChannel(
                     is JsonlFramer.Frame.Oversized -> {
                         log(Level.WARN, "丢弃超长记录：${frame.bytes} 字节")
                         onProtocolError(ProtocolError.Oversized(frame.bytes))
+                        // 超长的 response（>32 MB 的 get_entries / get_tree / get_messages）按行首的 id 立即以失败结束，不等满超时。
+                        failMalformedResponse(frame.head)
                     }
                 }
             }
@@ -154,12 +158,26 @@ class RpcChannel(
             is RecordCodec.Decoded.Malformed -> {
                 log(Level.WARN, "stdout 非 JSON 记录：${d.reason}：${redactor.redact(line.take(200))}")
                 onProtocolError(ProtocolError.Malformed(line, d.reason))
+                failMalformedResponse(line)
             }
             is RecordCodec.Decoded.Record -> when (val r = d.record) {
                 is RpcResponse -> onResponse(r)
                 else -> _events.trySend(r)
             }
         }
+    }
+
+    /**
+     * 解析失败的那一行若是某个等待中请求的 response（超深的 get_tree 等），从行首抽出 id 直接以失败结束它，
+     * 不让调用方空等到超时再触发探活（审查第 1 轮 Nit）。pi 的 response 以 `{"id":…,"type":"response"` 开头（rpc-mode.js success/error）。
+     */
+    private fun failMalformedResponse(line: String) {
+        val head = line.take(512)
+        if (!head.contains("\"type\":\"response\"")) return
+        val id = RESPONSE_ID.find(head)?.groupValues?.get(1) ?: return
+        val command = RESPONSE_COMMAND.find(head)?.groupValues?.get(1) ?: ""
+        val waiter = pending.remove(id) ?: return
+        waiter.complete(RpcResponse(id, command, success = false, error = TOO_LARGE, raw = JsonObject(emptyMap())))
     }
 
     private fun onResponse(r: RpcResponse) {
@@ -211,7 +229,20 @@ class RpcChannel(
 
     private fun closedErr(command: RpcCommand) = Outcome.Err(ErrCode.ENGINE_EXIT, "引擎已退出，${command.type} 未完成")
 
-    private fun thread(n: String, body: () -> Unit) = Thread(body, n).apply { isDaemon = true }.start()
+    // stdout 读线程用大栈：`get_tree` 的响应是一棵与会话条目数一样深的嵌套 JSON（线性会话 = 一条长链），
+    // kotlinx 的树解析是递归的，默认栈（约 512 KB–1 MB）在几千层时会 StackOverflowError（feat/engine-rpc 实测）。
+    // 栈空间按需提交，64 MB 只是保留的虚拟地址。
+    private fun thread(n: String, stackBytes: Long = READER_STACK_BYTES, body: () -> Unit) =
+        Thread(null, body, n, stackBytes).apply { isDaemon = true }.start()
 
     class ChannelClosedException : IOException("pi 连接已断开")
+
+    companion object {
+        /** 超长 / 解析失败的 response 以此错误立即结束对应请求（调用方据此识别「会话太大」）。 */
+        const val TOO_LARGE = "会话太大，无法读取"
+
+        const val READER_STACK_BYTES = 64L * 1024 * 1024
+        private val RESPONSE_ID = Regex("^\\{\\s*\"id\"\\s*:\\s*\"([^\"]+)\"")
+        private val RESPONSE_COMMAND = Regex("\"command\"\\s*:\\s*\"([^\"]+)\"")
+    }
 }

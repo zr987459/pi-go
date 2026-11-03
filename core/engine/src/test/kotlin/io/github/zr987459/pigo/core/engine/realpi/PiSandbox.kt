@@ -24,7 +24,7 @@ class PiSandbox : AutoCloseable {
               "baseUrl": "${mock.baseUrl}",
               "api": "openai-completions",
               "apiKey": "${'$'}PIGO_KEY_MOCK",
-              "models": [{"id": "mock-model", "name": "Mock 模型", "reasoning": true, "contextWindow": 32000, "maxTokens": 4096}]
+              "models": [{"id": "mock-model", "name": "Mock 模型", "reasoning": true, "input": ["text", "image"], "contextWindow": 32000, "maxTokens": 4096}]
             }}}
             """.trimIndent(),
         )

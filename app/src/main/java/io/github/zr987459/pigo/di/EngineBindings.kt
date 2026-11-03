@@ -4,6 +4,12 @@ import io.github.zr987459.pigo.contract.AppLog
 import io.github.zr987459.pigo.contract.Outcome
 import io.github.zr987459.pigo.contract.SessionRepository
 import io.github.zr987459.pigo.contract.EngineClient
+import io.github.zr987459.pigo.contract.EngineExtras
+import io.github.zr987459.pigo.contract.fake.FakeEngineExtras
+import io.github.zr987459.pigo.core.engine.ActivityVisibility
+import io.github.zr987459.pigo.core.engine.AndroidTaskNotifications
+import io.github.zr987459.pigo.core.engine.TaskNotifier
+import android.app.Application
 import io.github.zr987459.pigo.contract.LaunchEnvProvider
 import io.github.zr987459.pigo.contract.Phase
 import io.github.zr987459.pigo.contract.RuntimeManager
@@ -68,11 +74,23 @@ object EngineBindings {
             foreground = ServiceForegroundPort(app),
         )
         EngineService.boundEngine = engine
+        // N1：App 在后台时，一轮完成 / 出错 / 需要回答发一条 pigo-tasks 通知（停止不发）。
+        (app as? Application)?.let { application ->
+            runCatching { TaskNotifier(ActivityVisibility(application), AndroidTaskNotifications(application)).start(engine.runOutcomes, ctx.appScope) }
+                .onFailure { log.w(TAG, "任务通知初始化失败", it) }
+        }
         val ready = runtime.status.map { it.phase == Phase.READY }
             .stateIn(ctx.appScope, SharingStarted.Eagerly, runtime.status.value.phase == Phase.READY)
         val gate = WarmUpGate(bypass = { runtime.status.value.phase != Phase.READY })
         return GatedEngineClient(engine, gate, ready, ctx.appScope).also { gates[it] = gate }
     }
+
+    /**
+     * [EngineExtras]（W0 契约，W1 实现）：真实引擎即 [PiEngine] 本身（[GatedEngineClient] 包装前的那个），Fake 模式给 [FakeEngineExtras]。
+     * 由 W5 在 `AppGraph` 装配；这里不改 `AppGraph.kt`。
+     */
+    fun extras(engine: EngineClient): EngineExtras =
+        ((engine as? GatedEngineClient)?.inner ?: engine) as? EngineExtras ?: FakeEngineExtras()
 
     /** 每个包装后的引擎对应的预热闸门。 */
     private val gates: MutableMap<EngineClient, WarmUpGate> = Collections.synchronizedMap(WeakHashMap())
