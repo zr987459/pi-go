@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- feature/files 的 FileProvider 只暴露应用缓存里的两个目录，不暴露 rootfs。 -->
+<paths>
+    <cache-path name="share" path="pigo-share/" />
+    <cache-path name="camera" path="pigo-camera/" />
+</paths>
