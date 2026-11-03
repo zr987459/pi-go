@@ -95,33 +95,66 @@ class MessageMetaTracker {
         val omitted = branch.asSequence()
             .filter { it.type == "context_edit" && it.raw["replacement"].let { r -> r == null || r is JsonNull } }
             .mapNotNullTo(HashSet()) { it.raw.str("targetId") }
-        val path = branch.filter { it.message != null && it.id !in omitted }
+        // path 保留被 context_edit 排除的条目（标 excluded），尾部配对时与失败气泡一起跳过，而不是从序列里消失后让两边错位。
+        val path = branch.filter { it.message != null }
         if (path.isEmpty()) return emptyMap()
         val out = LinkedHashMap<String, MessageMeta>()
 
         // toolResult：按 toolCallId（有条目才配，与顺序无关）。
         val toolKeys = items.mapNotNullTo(HashSet()) { (it as? ChatItem.Tool)?.key }
         for (m in path) {
-            if (m.role != "toolResult") continue
+            if (m.role != "toolResult" || m.id in omitted) continue
             val callId = m.message?.str("toolCallId") ?: continue
             val key = ChatReducer.toolKey(callId)
             if (key in toolKeys) out[key] = meta(m)
         }
 
-        fun pairFromEnd(role: String, timeline: List<ChatItem>) {
-            val entries = path.filter { it.role == role }
+        val users = path.filter { it.role == "user" && it.id !in omitted }
+        run {
+            val timeline = items.filter { it is ChatItem.User && it.delivery == Delivery.SENT && it.key !in notPersisted && it.key in covered }
             var i = timeline.size - 1
-            var j = entries.size - 1
-            while (i >= 0 && j >= 0) {
-                out[timeline[i].key] = meta(entries[j])
-                i--
-                j--
+            var j = users.size - 1
+            while (i >= 0 && j >= 0) out[timeline[i--].key] = meta(users[j--])
+        }
+        val retried = retriedFailures(items, retrying)
+        pairAssistants(
+            items.filter { it is ChatItem.Assistant && !it.streaming && it.key in covered && it.key !in retried }.map { it as ChatItem.Assistant },
+            path.filter { it.role == "assistant" },
+            omitted,
+            out,
+        )
+        return out
+    }
+
+    /**
+     * 助手消息从末尾往前配对，失败消息由 tracker 自己对齐（不靠时间线猜）。「失败条目」= 被 context_edit 排除的条目
+     * （自动重试 / 重试中停止 / 放弃重试后的失败消息），或 `stopReason=error` 但还没收到 context_edit 的条目
+     * （扩展 turn_end/agent_end 异步 await 的瞬时窗口）。失败条目与失败气泡（`stopReason=error`）都不发 meta：
+     * - 两边都是失败：一起跳过；
+     * - 只有条目失败（空失败消息已被时间线删掉、或重建后没有它）：只跳条目；
+     * - 只有气泡失败（没有对应条目）：只跳气泡。
+     * 这样失败消息无论留没留在时间线上，都不会让后面的配对整体错开一位。
+     */
+    private fun pairAssistants(
+        timeline: List<ChatItem.Assistant>,
+        entries: List<Msg>,
+        omitted: Set<String>,
+        out: MutableMap<String, MessageMeta>,
+    ) {
+        var i = timeline.size - 1
+        var j = entries.size - 1
+        while (i >= 0 && j >= 0) {
+            val bubble = timeline[i]
+            val entry = entries[j]
+            val bubbleFailed = bubble.stopReason == "error"
+            val entryFailed = entry.id in omitted || entry.message?.str("stopReason") == "error"
+            when {
+                bubbleFailed && entryFailed -> { i--; j-- }
+                entryFailed -> j--
+                bubbleFailed -> i--
+                else -> { out[bubble.key] = meta(entry); i--; j-- }
             }
         }
-        pairFromEnd("user", items.filter { it is ChatItem.User && it.delivery == Delivery.SENT && it.key !in notPersisted && it.key in covered })
-        val retried = retriedFailures(items, retrying)
-        pairFromEnd("assistant", items.filter { it is ChatItem.Assistant && !it.streaming && it.key in covered && it.key !in retried })
-        return out
     }
 
     /** 时间线上已被自动重试取代的失败助手消息：其后、下一条用户消息之前还有助手消息；或正在重试时的最后一条失败消息。 */
