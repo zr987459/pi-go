@@ -67,7 +67,11 @@ class PiSessionIndex(
                     .filter { it.isFile && it.name.endsWith(".jsonl") }.toList()
                 val list = scanner.scanAll(files)
                 sessions.value = list
-                metaStore.retain(list.mapNotNull { guestOf(it.path) }.toSet())
+                // 目录不存在或暂时读不到（运行环境没装好、正在修复）时扫描结果为空：不清置顶/归档/名字锁定（审查第 1 轮 Nit）。
+                // 回收站里的会话恢复后要找回原来的标记，所以按原路径保留它们。
+                if (sessionsHostDir.isDirectory && list.isNotEmpty()) {
+                    metaStore.retain(list.mapNotNull { guestOf(it.path) }.toSet() + trashedGuestPaths())
+                }
                 metas.value = metaStore.all()
                 cacheFile?.let { runCatching { scanner.save(it) } }
                 loaded = true
@@ -99,6 +103,27 @@ class PiSessionIndex(
     }
 
     // ---------------- 映射 ----------------
+
+    /**
+     * 回收站（`~/.pi/agent/sessions-trash/<子目录>/<文件名>[~N].jsonl`，见 core/store FileSessionRepository）里
+     * 每个会话恢复后会回到的原路径。
+     */
+    internal fun trashedGuestPaths(): Set<String> {
+        val trash = trashHostDir ?: return emptySet()
+        if (!trash.isDirectory) return emptySet()
+        val root = trash.canonicalFile.path
+        val g = sessionsGuestDir.trimEnd('/')
+        return trash.walkTopDown().maxDepth(3)
+            .filter { it.isFile && it.name.endsWith(".jsonl") }
+            .map { f ->
+                val rel = f.canonicalFile.parentFile.path.removePrefix(root).trimStart('/')
+                val name = f.name.removeSuffix(".jsonl").replace(TRASH_SUFFIX, "") + ".jsonl"
+                if (rel.isEmpty()) "$g/$name" else "$g/$rel/$name"
+            }
+            .toSet()
+    }
+
+    private val trashHostDir: File? get() = sessionsHostDir.parentFile?.let { File(it, "sessions-trash") }
 
     internal fun guestOf(hostPath: String): String? {
         val root = sessionsHostDir.canonicalFile.path
@@ -136,4 +161,8 @@ class PiSessionIndex(
                 compareByDescending<SessionGroup> { g -> g.sessions.any { it.meta.pinned } }
                     .thenByDescending { g -> g.sessions.maxOf { it.summary.updatedAt } },
             )
+
+    private companion object {
+        val TRASH_SUFFIX = Regex("~\\d+$")
+    }
 }
