@@ -13,7 +13,8 @@ data class ErrorInfo(
     val raw: String?,
 ) {
     /** 是否值得提供「去设置模型」入口。 */
-    val suggestsSettings: Boolean get() = kind == ErrorKind.BAD_KEY || kind == ErrorKind.NO_MODEL || kind == ErrorKind.QUOTA
+    val suggestsSettings: Boolean
+        get() = kind == ErrorKind.BAD_KEY || kind == ErrorKind.NO_MODEL || kind == ErrorKind.QUOTA || kind == ErrorKind.NO_NETWORK
 }
 
 /**
@@ -48,7 +49,7 @@ object ErrorText {
             ErrorKind.BAD_KEY -> "Key 错误" to "API Key 无效或没有权限，请到「设置」里检查模型和 Key。"
             ErrorKind.QUOTA -> "额度不足或请求太频繁" to "账户余额/套餐额度可能用完了，或请求过于频繁，稍等再试。"
             ErrorKind.NO_MODEL -> "模型不存在" to "当前选择的模型不可用，请到「设置」里换一个模型。"
-            ErrorKind.NO_NETWORK -> "无网络" to "连不上模型服务，请检查手机网络后重试。"
+            ErrorKind.NO_NETWORK -> "连不上模型服务" to "请检查手机网络；如果网络正常，可能是接口地址填错了，到「设置」里检查。"
             ErrorKind.TIMEOUT -> "请求超时" to "模型服务响应太慢，请稍后重试。"
             ErrorKind.SERVER -> "模型服务出错" to "对方服务器暂时有问题，请稍后重试。"
             ErrorKind.UNKNOWN -> "出错了" to "这一轮没有完成，可以点「重试」再发一次。"

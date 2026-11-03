@@ -23,6 +23,8 @@ sealed interface ChatRow {
         val delivery: Delivery,
         val localId: String? = null,
         val error: String? = null,
+        /** 失败原因是没配模型 / Key 错误 / 连不上模型服务：气泡上给「去设置模型」。 */
+        val needsSettings: Boolean = false,
     ) : ChatRow
 
     /**
@@ -125,6 +127,8 @@ data class LocalSend(
     val seenInQueue: Boolean = false,
     /** 发出后见到过 running=true。 */
     val sawRunning: Boolean = false,
+    /** 失败原因与模型配置有关（没配模型、Key 错误、连不上模型服务）。 */
+    val needsSettings: Boolean = false,
 )
 
 fun formatSeconds(ms: Long): String {
@@ -155,7 +159,7 @@ object ChatRows {
         }
         // 乐观气泡总在最后：它们是引擎还没确认的发送。
         local.forEach { l ->
-            out += ChatRow.User("local-${l.id}", l.text, l.status, localId = l.id, error = l.error)
+            out += ChatRow.User("local-${l.id}", l.text, l.status, localId = l.id, error = l.error, needsSettings = l.needsSettings)
         }
         return out
     }

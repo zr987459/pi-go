@@ -13,6 +13,7 @@ import io.github.zr987459.pigo.contract.ExtUiRequest
 import io.github.zr987459.pigo.contract.ModelInfo
 import io.github.zr987459.pigo.contract.Outcome
 import io.github.zr987459.pigo.contract.QueueSnapshot
+import io.github.zr987459.pigo.contract.RetryBanner
 import io.github.zr987459.pigo.contract.SendMode
 import io.github.zr987459.pigo.feature.chat.logic.ChatRow
 import io.github.zr987459.pigo.feature.chat.logic.ChatRows
@@ -23,6 +24,9 @@ import io.github.zr987459.pigo.feature.chat.logic.ExtUiAction
 import io.github.zr987459.pigo.feature.chat.logic.ExtUiAnswer
 import io.github.zr987459.pigo.feature.chat.logic.LocalSend
 import io.github.zr987459.pigo.feature.chat.logic.Outbox
+import io.github.zr987459.pigo.feature.chat.logic.ErrorText
+import io.github.zr987459.pigo.feature.chat.logic.PhaseLabel
+import io.github.zr987459.pigo.feature.chat.logic.RetryVisibility
 import io.github.zr987459.pigo.feature.chat.logic.PrimaryAction
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -73,6 +77,10 @@ data class ChatScreenState(
     val statusLines: List<String> = emptyList(),
     val title: String = "新会话",
     val contextPercent: Double? = null,
+    /** 要显示的自动重试黄条；重试已开始出字或回合结束后为 null（见 [RetryVisibility]）。 */
+    val retry: RetryBanner? = null,
+    /** 发送到出第一个字之间、长时间跑工具时的阶段提示（见 [PhaseLabel]）；已并入 [statusLines] 的第一行。 */
+    val phase: String? = null,
 )
 
 /**
@@ -249,7 +257,19 @@ class ChatController(
     /** 思考计时所属的会话代数；变化时清空计时缓存（跨会话 assistant key 可能相同）。 */
     private var thinkingGeneration = 0
 
+    /** 当前这次自动重试开始时最后一条助手消息的 key；只在合成协程里读写。 */
+    private var retryAnchor: String? = null
+    private var retryShownAttempt: RetryBanner? = null
+
     private fun compose(chat: ChatState, status: EngineStatus, l: Local): ChatScreenState {
+        val retry = chat.retry
+        if (retry == null) {
+            retryShownAttempt = null
+        } else if (retryShownAttempt == null) {
+            // 黄条第一次出现：记下此刻最后一条助手消息，之后出现的新助手消息就是重试那一轮的输出。
+            retryShownAttempt = retry
+            retryAnchor = RetryVisibility.lastAssistantKey(chat)
+        }
         if (l.generation != thinkingGeneration) {
             thinkingStart.clear()
             thinkingEnd.clear()
@@ -263,7 +283,9 @@ class ChatController(
             local = Outbox.visible(l.sends, chat),
             thinkingMs = ::thinkingMs,
         )
+        val phase = PhaseLabel.of(status, chat, l.sends, l.composer.stopping)
         val statusLines = buildList {
+            phase?.let(::add)
             chat.statusLine?.takeIf { it.isNotBlank() }?.let(::add)
             l.status.values.filter { it.isNotBlank() }.forEach(::add)
         }
@@ -279,6 +301,8 @@ class ChatController(
             statusLines = statusLines,
             title = l.title?.takeIf { it.isNotBlank() } ?: chat.sessionName?.takeIf { it.isNotBlank() } ?: "新会话",
             contextPercent = chat.contextPercent ?: l.statsPercent,
+            retry = retry?.takeIf { RetryVisibility.visible(chat, retryAnchor) },
+            phase = phase,
         )
     }
 
@@ -369,7 +393,7 @@ class ChatController(
                         Disposition.QUEUED -> cur.copy(status = Delivery.QUEUED, sawRunning = now.running)
                         Disposition.HANDLED -> null
                     }
-                    is Outcome.Err -> cur.copy(status = Delivery.FAILED, error = sendErrorText(r))
+                    is Outcome.Err -> cur.copy(status = Delivery.FAILED, error = sendErrorText(r), needsSettings = needsModelSettings(r))
                 }
                 val sends = s.sends.map { if (it.id == id) next else it }.filterNotNull()
                 s.copy(sends = Outbox.reconcile(sends, now))
@@ -415,6 +439,13 @@ class ChatController(
         _messages.trySend(text)
     }
 
+    /** 没配模型、Key/鉴权失败、连不上模型服务时，失败气泡上给「去设置模型」。 */
+    private fun needsModelSettings(e: Outcome.Err): Boolean = when (e.code) {
+        ErrCode.NO_MODEL, ErrCode.PROVIDER -> true
+        ErrCode.RPC_REJECTED, ErrCode.UNKNOWN -> ErrorText.classify(e.message).suggestsSettings
+        else -> false
+    }
+
     private fun sendErrorText(e: Outcome.Err): String = when (e.code) {
         ErrCode.RPC_TIMEOUT -> "发送超时，pi 没有回应"
         ErrCode.RPC_REJECTED -> "pi 拒绝了这条消息" + e.message.takeIf { it.isNotBlank() }?.let { "：$it" }.orEmpty()
@@ -433,7 +464,23 @@ class ChatController(
      */
     fun stop() {
         if (local.value.composer.stopping) return
-        local.update { it.copy(composer = it.composer.copy(stopping = true, stopSlow = false), withdrawnDuringStop = emptyList()) }
+        // 先收起所有还在等用户回答的阻塞类对话框（工具确认、提问等），不留悬空弹窗（piweb-study G1）。
+        // pi 1.5.0 的 RPC 对话框在 abort 时不会自己结束、也不发关闭事件：不先应答 cancelled，
+        // 扩展没传 signal 时 abort 会一直等到 20 s 超时被强杀。移植自 agegr/pi-web@025e24e
+        // `lib/rpc-manager.ts:1323-1345`（停止先撤销扩展对话框，再 abort），MIT。
+        var dropped: List<DialogEntry> = emptyList()
+        local.update { s ->
+            dropped = s.dialogs.filter { it.request.needsResponse }
+            s.copy(
+                composer = s.composer.copy(stopping = true, stopSlow = false),
+                withdrawnDuringStop = emptyList(),
+                dialogs = s.dialogs.filterNot { it.request.needsResponse },
+            )
+        }
+        for (d in dropped) {
+            notifier?.cancel(d.request.id)
+            scope.launch { engine.answerUi(d.request.id, cancelled = true) }
+        }
         stopJob = scope.launch {
             val slow = launch {
                 delay(config.stopSlowHintMs)

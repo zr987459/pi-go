@@ -115,6 +115,10 @@ private fun UserBubble(row: ChatRow.User, isLatest: Boolean, actions: RowActions
                 TextButton(onClick = { actions.onEditLocal(row.localId) }) { Text("改一改") }
                 TextButton(onClick = { actions.onRetryLocal(row.localId) }, modifier = Modifier.testTag("failed:retry")) { Text("重试") }
             }
+            val settings = actions.onOpenModelSettings
+            if (row.needsSettings && settings != null) {
+                TextButton(onClick = settings, modifier = Modifier.testTag("failed:settings")) { Text("去设置模型") }
+            }
         }
     }
 }
@@ -372,7 +376,7 @@ private fun ErrorCard(row: ChatRow.Error, actions: RowActions, modifier: Modifie
                 }
                 val settings = actions.onOpenModelSettings
                 if (settings != null && row.info.suggestsSettings) {
-                    TextButton(onClick = settings) { Text("去设置模型") }
+                    TextButton(onClick = settings, modifier = Modifier.testTag("error:settings")) { Text("去设置模型") }
                 }
                 if (row.retryText != null) {
                     OutlinedButton(onClick = { actions.onResend(row.retryText) }, modifier = Modifier.testTag("error:retry")) { Text("重试") }

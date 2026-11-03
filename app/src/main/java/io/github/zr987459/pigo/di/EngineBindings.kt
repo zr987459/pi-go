@@ -55,4 +55,12 @@ object EngineBindings {
         EngineService.boundEngine = engine
         return engine
     }
+
+    /**
+     * 运行环境就绪后预先拉起引擎（get_state 握手、恢复上次会话 L5），让聊天页一打开就有模型与会话信息。
+     * 真实引擎才需要；Fake 引擎无需启动。失败不抛出，聊天页会显示引擎状态与诊断。
+     */
+    suspend fun warmUp(engine: EngineClient) {
+        (engine as? PiEngine)?.start()
+    }
 }

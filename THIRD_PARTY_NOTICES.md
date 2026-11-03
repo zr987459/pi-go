@@ -74,3 +74,13 @@ GPL/LGPL 义务：mvp/runtime 引入时在 `core/runtime/NOTICE-runtime.md` 记�
 ## 6. 明确不使用的资源
 
 - PiMet 内置桌宠素材 `assets/pets/doro.codex-pet/`、`assets/pets/elaina-2/`：无许可证说明，且涉及第三方角色形象，不引入。
+
+## 7. 移植 / 改写的第三方代码
+
+- agegr/pi-web @ 025e24e（npm @agegr/pi-web 0.14.2），MIT，Copyright (c) 2026 agegr —— 移植/改写（TypeScript → Kotlin，逻辑对照改写，未打包其运行时）：
+  - `feature/chat/.../logic/PhaseLabel.kt`（`PhaseLabel`）← `lib/chat-phase-label.ts:11-43`、`lib/tool-execution-progress.ts:1-29`
+  - `feature/chat/.../logic/PhaseLabel.kt`（`RetryVisibility`）← `hooks/useAgentSession.ts:1778-1789`
+  - `feature/chat/.../ChatController.kt`（`stop()` 先收起并取消阻塞类对话框）← `lib/rpc-manager.ts:1323-1345`
+  - `core/store/.../ModelDiscovery.kt` ← `lib/model-discovery.ts:1-135`、`app/api/models-config/discover/route.ts:13-99`
+  - `core/store/.../ProviderTester.kt` ← `app/api/models-config/test/route.ts:11`、`:28-121`
+

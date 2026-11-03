@@ -1,12 +1,16 @@
 # mvp/integration 进度
 
-状态：**已开始**（2026-11-03 12:5x CST）
+状态：**进行中**（2026-11-03 13:1x CST）
 
-## 计划
-1. 从 main 切出 mvp/integration，普通 merge origin/mvp/engine（PR #5 未合入）。
-2. 通读 DESIGN.md §2.3 / §5 / §6、REVIEW.md、docs/piweb-study.md。
-3. BindingMode 全部切为真实实现，修各模块接线（必要时最小改动 di/*Bindings.kt）。
-4. 用户追加项：聊天页接会话/设置；错误卡“去设置模型”；Pi-Web 缺口 a–e。
-5. app/src/androidTest 端到端冒烟（CI 只编译）。
-6. docs/testing/mvp-acceptance.md 逐条 §5 验收记录。
-7. 推送前再 fetch：engine 合入则 merge main，否则再 merge mvp/engine。开 PR，CI 绿。
+## 已完成
+- [x] 从 main（635dfdc）切出，普通 merge `origin/mvp/engine`（e82843e）→ c91ffca。
+- [x] BindingMode 四组全部切为 REAL。
+- [x] 导航接入真实页面：聊天 ↔ 会话（当前会话、打开/新建/删除当前会话）↔ 设置（Key 末 4 位、引擎重启、运行环境、自定义端点预填）。
+- [x] 「去设置模型」：错误卡 / 失败气泡 / 未配置模型横条 → `settings?focus=models`。
+- [x] Pi-Web 缺口 a–e（停止收起对话框、获取模型列表、测试连接、重试黄条、阶段提示）+ 单测。
+- [x] app/src/androidTest 冒烟测试。
+
+## 进行中
+- [ ] CI 绿
+- [ ] docs/testing/mvp-acceptance.md
+- [ ] 推送前再 fetch 并 merge engine/main；开 PR
