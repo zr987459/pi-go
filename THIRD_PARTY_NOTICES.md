@@ -54,6 +54,9 @@ GPL/LGPL 义务：mvp/runtime 引入时在 `core/runtime/NOTICE-runtime.md` 记�
 | Apache Commons Compress | 1.27.1 | Apache-2.0 | tar.gz 解压（替代 TarGzipExtractor） | 已声明（mvp/runtime 使用） |
 | multiplatform-markdown-renderer-m3（mikepenz） | 0.28.0 | Apache-2.0 | Markdown 渲染 | 已声明（mvp/chat-ui 使用） |
 | 仅测试（不进 APK）：JUnit 4、kotlinx-coroutines-test、OkHttp MockWebServer、AndroidX Test、Compose UI Test、JankStats（androidx.metrics） | 4.13.2 等 | JUnit 为 EPL-1.0，其余 Apache-2.0 | 单测与仪器测试 | 已声明 |
+| Coil（coil-compose，含传递依赖 coil-compose-base、coil、coil-base；以及 coil-base 引入的 Okio 3.9.0、accompanist-drawablepainter 0.32.0，均为 Apache-2.0；OkHttp 4.12.0 见上） | 2.7.0 | Apache-2.0 | 图片加载：模型/服务商图标、文件页与输入框的图片预览 | 已声明（feature/files、feature/models 使用；W0 feat/modules 登记） |
+| AndroidX Browser（Custom Tabs） | 1.8.0 | Apache-2.0 | OAuth 登录在 Custom Tab 中打开授权页（M3） | 已声明（core/catalog、feature/models 使用；W0 登记） |
+| AndroidX ExifInterface | 1.3.7 | Apache-2.0 | 读取图片 EXIF 方向，压缩前纠正旋转（C1 图片输入） | 已声明（core/workspace、feature/files 使用；W0 登记） |
 | Termux terminal-emulator / terminal-view v0.118.0 | — | Apache-2.0 | 浮动终端 | 第二期 |
 | Shizuku API / provider 13.1.5 | — | MIT | 特权操作 | 第三期 |
 
@@ -84,6 +87,21 @@ GPL/LGPL 义务：mvp/runtime 引入时在 `core/runtime/NOTICE-runtime.md` 记�
   - `core/store/.../ModelDiscovery.kt` ← `lib/model-discovery.ts:1-135`、`app/api/models-config/discover/route.ts:13-99`
   - `core/store/.../ProviderTester.kt` ← `app/api/models-config/test/route.ts:11`、`:28-121`
 
+- 以下由 W5（feat/wiring）从 `docs/notices/*.md` 并入（各工作流原文件保留作为出处）：
+- feat/commands（W4，`docs/notices/feat-commands.md`）：
+  - agegr/pi-web@025e24e（npm @agegr/pi-web 0.14.2），MIT，Copyright (c) 2026 agegr —— 移植/改写：`feature/usage/.../logic/CompactionSummary.kt` ← `lib/compaction-summary.ts:1-34`
+  - agegr/pi-web@025e24e，MIT，Copyright (c) 2026 agegr —— 移植/改写：`feature/commands/.../data/AutoTitle.kt`（SessionTitle：提示词、对话摘录截断、结果清洗）← `lib/session-title.ts:13-48`、`:131-210`、`:225-270`
+  - agegr/pi-web@025e24e，MIT，Copyright (c) 2026 agegr —— 思路移植（续读点 + 头部/采样哈希校验）：`feature/commands/.../data/SessionScanner.kt` ← `lib/session-list-scanner.ts:44-66`、`:140-260`
+  - agegr/pi-web@025e24e，MIT，Copyright (c) 2026 agegr —— 思路移植（只认成功的 write/edit 结果、路径去重保序；耗时格式）：`feature/usage/.../logic/TurnSummary.kt` ← `lib/turn-written-files.ts:83-127`、`lib/turn-duration.ts:56-64`
+  - earendil-works/pi @earendil-works/pi-coding-agent 1.5.0，MIT —— 对照接口（未拷代码）：edit 工具参数与 details.patch（`dist/core/tools/edit.d.ts`）、提示模板格式（`docs/prompt-templates.md`）、settings.json 资源排除语法（`docs/settings.md`「Resources」）、CLI 参数（`docs/cli.md`）
+- feat/models（W2，`docs/notices/feat-models.md`）：
+  - earendil-works/pi（npm `@earendil-works/pi-ai@1.5.0`），MIT —— 数据：`core/store/src/main/resources/pigo/catalog-1.5.0.json` 由 `core/catalog/src/main/assets/pigo/pigo-catalog.mjs` 从 `dist/providers/all.js`（`builtinProviders()`）与 `dist/models.js`（`getSupportedThinkingLevels`）导出（42 个服务商、1592 个模型，SHA256 6c1fe7517ded12b37ea08bc9e4caa775c5220e86c7463ac79d67920da8e6a253）
+  - earendil-works/pi（npm `@earendil-works/pi-ai@1.5.0`），MIT —— 移植/改写：`core/catalog/.../Pkce.kt` 的 `parseAuthorizationInput` ← `dist/auth/oauth/anthropic.js:20-46`
+  - earendil-works/pi（npm `@earendil-works/pi-ai@1.5.0`），MIT —— 参考（未拷贝代码）：`core/store/.../ProviderSpecs.kt` 的环境变量表 ← `dist/env-api-keys.js:68-120` 与 `pi-coding-agent` `docs/providers.md`
+  - earendil-works/pi（npm `@earendil-works/pi-coding-agent@1.5.0`），MIT —— 运行时调用（不复制）：`pigo-auth.mjs` 在容器内 import pi 自带的 `ModelRuntime`、`SettingsManager`、`getAgentDir`；`AuthJsonLock.kt` 遵循其 `dist/core/auth-storage.js` 的 proper-lockfile 锁目录约定
+- feat/modules（W0，`docs/notices/feat-modules.md`）：无移植代码；新增 Gradle 依赖已并入 §3。
+- feat/wiring（W5）：无新增移植；`app/.../nav/WiredPages.kt`、`feature/chat/.../ui/ChatWiring.kt` 为原创接线代码。
+- feat/engine-rpc（W1）、feat/files（W3）合入 main 后，其 `docs/notices/*.md` 在此追加。
 
 ## 8. dsh-Go 界面移植（ui/dsh-style、ui/dsh-panels）
 
