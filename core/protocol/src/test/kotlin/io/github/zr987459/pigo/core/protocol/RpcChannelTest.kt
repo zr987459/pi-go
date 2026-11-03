@@ -231,7 +231,7 @@ class RpcChannelTest {
             onProtocolError = { errors += it },
         )
         ch.start()
-        val pending = async { ch.request(RpcCommand.GetEntries("c-9", null), timeoutMs = 30_000) }
+        val pending = async { ch.request(io.github.zr987459.pigo.contract.rpc.RpcCommands.GetEntries("c-9", null), timeoutMs = 30_000) }
         delay(100)
         val started = System.currentTimeMillis()
         val big = "x".repeat(20_000)
