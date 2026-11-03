@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 引擎前台服务（DESIGN.md §3.2）。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- 只在 agent_start → agent_settled 之间持有部分唤醒锁（N1）。 -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application>
+        <!-- targetSdk 28：不需要 foregroundServiceType（Android 14 只对 targetSdk ≥ 34 强制）。 -->
+        <service
+            android:name="io.github.zr987459.pigo.core.engine.EngineService"
+            android:exported="false" />
+    </application>
+</manifest>

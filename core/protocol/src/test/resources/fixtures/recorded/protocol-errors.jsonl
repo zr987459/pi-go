@@ -1,0 +1,13 @@
+// 由 RecordFixturesTest 用桌面真 pi 1.5.0 + MockOpenAiServer 录制；见 docs/protocol/fixtures.md
+//> {"id":"boot-1","type":"get_state"}
+{"id":"boot-1","type":"response","command":"get_state","success":true,"data":{"model":{"id":"mock-model","name":"Mock 模型","api":"openai-completions","provider":"mock","baseUrl":"http://127.0.0.1:PORT/v1","reasoning":true,"input":["text"],"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextWindow":32000,"maxTokens":4096},"thinkingLevel":"medium","isStreaming":false,"isCompacting":false,"steeringMode":"one-at-a-time","followUpMode":"one-at-a-time","sessionFile":"/root/.pi/agent/sessions/--root-pi-cwd--/2026-11-03T03-29-12-919Z_01a19f74-2ad6-73a8-bd8f-2fd781b15cd0.jsonl","sessionId":"01a19f74-2ad6-73a8-bd8f-2fd781b15cd0","autoCompactionEnabled":true,"messageCount":0,"pendingMessageCount":0}}
+//> not json
+{"type":"response","command":"parse","success":false,"error":"Failed to parse command: Unexpected token 'o', \"not json\" is not valid JSON"}
+//> {"id":"c-1","type":"set_model","provider":"nope","modelId":"missing"}
+{"id":"c-1","type":"response","command":"set_model","success":false,"error":"Model not found: nope/missing"}
+//> {"id":"c-2","type":"get_available_models"}
+{"id":"c-2","type":"response","command":"get_available_models","success":true,"data":{"models":[{"id":"mock-model","name":"Mock 模型","api":"openai-completions","provider":"mock","baseUrl":"http://127.0.0.1:PORT/v1","reasoning":true,"input":["text"],"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextWindow":32000,"maxTokens":4096}]}}
+//> {"id":"c-3","type":"get_available_thinking_levels"}
+{"id":"c-3","type":"response","command":"get_available_thinking_levels","success":true,"data":{"levels":["off","minimal","low","medium","high"]}}
+//> {"id":"c-4","type":"get_session_stats"}
+{"id":"c-4","type":"response","command":"get_session_stats","success":true,"data":{"sessionFile":"/root/.pi/agent/sessions/--root-pi-cwd--/2026-11-03T03-29-12-919Z_01a19f74-2ad6-73a8-bd8f-2fd781b15cd0.jsonl","sessionId":"01a19f74-2ad6-73a8-bd8f-2fd781b15cd0","userMessages":0,"assistantMessages":0,"toolCalls":0,"toolResults":0,"totalMessages":0,"tokens":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0},"cost":0,"contextUsage":{"tokens":0,"contextWindow":32000,"percent":0}}}

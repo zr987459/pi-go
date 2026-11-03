@@ -1,0 +1,12 @@
+running=false queue=steer[] followUp[] retry=null
+session=null model=null thinking=null status=null
+-- transitions
+  #0 agent_start running=true
+  #27 agent_settled running=false
+-- items
+[u-0] USER SENT "#tool-ok 运行一个命令"
+[a-1] ASSISTANT streaming=false stop=toolUse error=null
+    #0 TOOLCALL call_ok_1 bash {"command":"echo pi-go-ok"}
+[tool-call_ok_1] TOOL bash call_ok_1 OK args={"command":"echo pi-go-ok"} partial="pi-go-ok\n" result="pi-go-ok\n" dur=set
+[a-2] ASSISTANT streaming=false stop=stop error=null
+    #0 TEXT "工具已完成。"

@@ -1,0 +1,15 @@
+running=false queue=steer[] followUp[] retry=null
+session=null model=null thinking=null status=null
+-- transitions
+  #0 agent_start running=true
+  #14 queue_update queue=steer["#text 先别跑了"] followUp[]
+  #21 queue_update queue=steer[] followUp[]
+  #33 agent_settled running=false
+-- items
+[u-0] USER SENT "#slow-tool 跑个慢命令"
+[a-1] ASSISTANT streaming=false stop=toolUse error=null
+    #0 TOOLCALL call_slow_1 bash {"command":"sleep 2; echo slow-done"}
+[tool-call_slow_1] TOOL bash call_slow_1 OK args={"command":"sleep 2; echo slow-done"} partial="slow-done\n" result="slow-done\n" dur=set
+[u-2] USER SENT "#text 先别跑了"
+[a-3] ASSISTANT streaming=false stop=stop error=null
+    #0 TEXT "你好，世界\u2028第二行"

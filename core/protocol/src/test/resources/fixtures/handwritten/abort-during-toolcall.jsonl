@@ -1,0 +1,25 @@
+// 手写夹具（审查 #3）：工具调用参数还在流式输出时用户点停止。pi 发出 stopReason=aborted 的 message_end，
+// 里面带着半截 toolCall；pi 不会执行它（没有 tool_execution_*），卡片必须落为「未执行」而不是一直转圈。
+// 第二段：stopReason=toolUse 的消息之后被中止、工具还没开始执行就 agent_settled(aborted)。
+//> {"type":"prompt","id":"req-1","message":"列一下文件"}
+{"id":"req-1","type":"response","command":"prompt","success":true,"data":{"disposition":"started"}}
+{"type":"agent_start"}
+{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"列一下文件"}],"timestamp":1}}
+{"type":"message_start","message":{"role":"assistant","content":[],"stopReason":"pending"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_start","contentIndex":0,"id":"call_abort_1","toolName":"bash"}}
+{"type":"message_update","assistantMessageEvent":{"type":"toolcall_delta","contentIndex":0,"delta":"{\"command\":\"ls"}}
+//> {"type":"abort","id":"req-2"}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"toolCall","id":"call_abort_1","name":"bash","arguments":{}}],"stopReason":"aborted"}}
+{"type":"agent_end","messages":[],"willRetry":false}
+{"type":"agent_settled","aborted":true}
+{"id":"req-2","type":"response","command":"abort","success":true}
+//> {"type":"prompt","id":"req-3","message":"再试一次"}
+{"id":"req-3","type":"response","command":"prompt","success":true,"data":{"disposition":"started"}}
+{"type":"agent_start"}
+{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"再试一次"}],"timestamp":2}}
+{"type":"message_start","message":{"role":"assistant","content":[],"stopReason":"pending"}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"toolCall","id":"call_abort_2","name":"read","arguments":{"path":"README.md"}}],"stopReason":"toolUse"}}
+//> {"type":"abort","id":"req-4"}
+{"type":"agent_end","messages":[],"willRetry":false}
+{"type":"agent_settled","aborted":true}
+{"id":"req-4","type":"response","command":"abort","success":true}

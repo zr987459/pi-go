@@ -1,0 +1,16 @@
+running=false queue=steer[] followUp[] retry=null
+session=null model=null thinking=high status=null
+-- transitions
+  #0 agent_start running=true
+  #14 session_info_changed name="新名字"
+  #15 thinking_level_changed thinking=high
+  #21 agent_settled running=false
+  #22 session_info_changed name=null
+-- items
+[u-0] USER SENT "看看新东西[图片]"
+[raw-1] RAW role=futureRole {"role":"futureRole","payload":"?","timestamp":2}
+[n-2] NOTICE INFO "扩展插入的提示"
+[a-4] ASSISTANT streaming=false stop=length error=null
+    #0 TEXT "收到"
+[n-5] NOTICE TRUNCATED "输出被截断"
+[n-6] NOTICE INFO "扩展出错（demo.ts）：boom"
