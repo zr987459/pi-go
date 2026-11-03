@@ -4,6 +4,7 @@ import io.github.zr987459.pigo.contract.BashEvent
 import io.github.zr987459.pigo.contract.BashResult
 import io.github.zr987459.pigo.contract.CommandSource
 import io.github.zr987459.pigo.contract.CompactResult
+import io.github.zr987459.pigo.contract.CycleModelResult
 import io.github.zr987459.pigo.contract.ContextUsage
 import io.github.zr987459.pigo.contract.Disposition
 import io.github.zr987459.pigo.contract.EngineExtras
@@ -13,6 +14,8 @@ import io.github.zr987459.pigo.contract.ExtensionSurface
 import io.github.zr987459.pigo.contract.ForkPoint
 import io.github.zr987459.pigo.contract.ForkResult
 import io.github.zr987459.pigo.contract.ImageInput
+import io.github.zr987459.pigo.contract.MessageMeta
+import io.github.zr987459.pigo.contract.ModelRef
 import io.github.zr987459.pigo.contract.ModelInfo
 import io.github.zr987459.pigo.contract.Outcome
 import io.github.zr987459.pigo.contract.QueueMode
@@ -39,7 +42,9 @@ import kotlinx.coroutines.flow.update
 
 /**
  * [EngineExtras] 的内存实现，W4/W5 在 W1 合入前开发用。所有调用记录在 [calls]（`"fork:e2"` 形式），便于断言。
- * 夹具：3 个斜杠命令、两条可分叉消息、一棵 3 个叶子的树、一份用量统计。
+ * 夹具：3 个斜杠命令、一棵 3 个叶子的树（其中 3 条用户消息可分叉：e1、e3、e5）、一份用量统计、
+ * 一份时间线消息元数据（[FIXTURE_MESSAGE_META]）。
+ * 分叉行为对齐 pi 1.5.0：[fork] 只接受用户消息的 entryId，[forkMessages] 从 [treeFixture] 筛出全部用户消息。
  */
 class FakeEngineExtras(
     var commandList: List<SlashCommand> = FIXTURE_COMMANDS,
@@ -47,11 +52,12 @@ class FakeEngineExtras(
     var stats: UsageStats = FIXTURE_USAGE,
     var models: List<ModelInfo> = listOf(ModelInfo("deepseek", "deepseek-chat"), ModelInfo("deepseek", "deepseek-reasoner", reasoning = true)),
     var thinkingLevels: List<String> = listOf("off", "low", "medium", "high"),
+    messageMetaFixture: Map<String, MessageMeta> = FIXTURE_MESSAGE_META,
 ) : EngineExtras {
 
     val calls = mutableListOf<String>()
     val sentImages = mutableListOf<List<ImageInput>>()
-    private var settings = SessionSettings(autoCompaction = true, autoRetry = true, steeringMode = QueueMode.ONE_AT_A_TIME, followUpMode = QueueMode.ONE_AT_A_TIME)
+    private var settings = SessionSettings(autoCompaction = true, autoRetry = null, steeringMode = QueueMode.ONE_AT_A_TIME, followUpMode = QueueMode.ONE_AT_A_TIME)
     private var modelIndex = 0
     private var thinkingIndex = 0
 
@@ -67,9 +73,15 @@ class FakeEngineExtras(
     private val _surface = MutableStateFlow(ExtensionSurface())
     override val extensionSurface: StateFlow<ExtensionSurface> = _surface.asStateFlow()
 
+    private val _meta = MutableStateFlow(messageMetaFixture)
+    override val messageMeta: StateFlow<Map<String, MessageMeta>> = _meta.asStateFlow()
+
+    /** 测试用：替换时间线消息元数据（模拟切换会话或 entry_appended）。 */
+    fun setMessageMeta(meta: Map<String, MessageMeta>) { _meta.value = meta }
+
     /** 测试用：模拟一次回合结束。 */
     fun emitOutcome(kind: RunOutcomeKind, message: String? = null) {
-        _outcomes.tryEmit(RunOutcome(kind, "/root/.pi/agent/sessions/fake.jsonl", "假会话", message, "完成了", System.currentTimeMillis()))
+        _outcomes.tryEmit(RunOutcome(kind, "/root/.pi/agent/sessions/fake.jsonl", "假会话", message, "完成了", System.currentTimeMillis(), cwd = "/root"))
     }
 
     fun setSurface(surface: ExtensionSurface) { _surface.value = surface }
@@ -90,13 +102,14 @@ class FakeEngineExtras(
 
     override suspend fun forkMessages(): Outcome<List<ForkPoint>> {
         calls += "forkMessages"
-        return Outcome.Ok(listOf(ForkPoint("e1", "第一条问题"), ForkPoint("e3", "第二条问题")))
+        return Outcome.Ok(userEntries().map { ForkPoint(it.id, it.preview) })
     }
 
     override suspend fun fork(entryId: String): Outcome<ForkResult> {
         calls += "fork:$entryId"
-        val node = treeFixture.find(entryId) ?: return Outcome.Err(ErrCode.RPC_REJECTED, "没有这条消息：$entryId")
-        return Outcome.Ok(ForkResult(node.entry.preview, cancelled = false))
+        val entry = userEntries().firstOrNull { it.id == entryId }
+            ?: return Outcome.Err(ErrCode.RPC_REJECTED, "Invalid entry ID for forking：$entryId（只能从用户消息分叉）")
+        return Outcome.Ok(ForkResult(entry.preview, cancelled = false))
     }
 
     override suspend fun clone(): Outcome<Boolean> {
@@ -126,6 +139,15 @@ class FakeEngineExtras(
         modelIndex = (modelIndex + 1) % models.size
         return Outcome.Ok(models[modelIndex])
     }
+
+    override suspend fun cycleModelResult(): Outcome<CycleModelResult?> {
+        val m = (cycleModel() as Outcome.Ok).value ?: return Outcome.Ok(null)
+        val level = if (m.reasoning) thinkingLevels.getOrNull(thinkingIndex) else null
+        return Outcome.Ok(CycleModelResult(m, level, isScoped = false))
+    }
+
+    private fun userEntries(): List<SessionEntry> =
+        flatten(treeFixture.roots).filter { it.type == "message" && it.role == "user" }
 
     override suspend fun cycleThinking(): Outcome<String?> {
         calls += "cycleThinking"
@@ -224,6 +246,25 @@ class FakeEngineExtras(
                 ),
             ),
             leafId = "e4",
+        )
+
+        /**
+         * 时间线 key → entry 的示例（对应 e1–e4 这条分支，key 为 [FakeChatReducer] 风格的编号）。
+         * 测试或界面开发可用 [setMessageMeta] 换成实际时间线的 key。分叉只认 entryId，不按文本匹配。
+         */
+        val FIXTURE_MESSAGE_META: Map<String, MessageMeta> = mapOf(
+            "user-0" to MessageMeta("e1", role = "user"),
+            "assistant-1" to MessageMeta(
+                "e2", role = "assistant",
+                usage = TokenUsage(input = 1_200, output = 300, cacheRead = 0, cacheWrite = 0, total = 1_500),
+                costUsd = 0.0021, model = ModelRef("deepseek", "deepseek-chat"),
+            ),
+            "user-2" to MessageMeta("e3", role = "user"),
+            "assistant-3" to MessageMeta(
+                "e4", role = "assistant",
+                usage = TokenUsage(input = 2_000, output = 500, cacheRead = 1_000, cacheWrite = 0, total = 3_500),
+                costUsd = 0.0042, model = ModelRef("deepseek", "deepseek-reasoner"),
+            ),
         )
 
         val FIXTURE_USAGE = UsageStats(

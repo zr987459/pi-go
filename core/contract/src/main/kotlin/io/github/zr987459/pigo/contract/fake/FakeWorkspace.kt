@@ -129,9 +129,10 @@ class FakeWorkspaceFs(
         dirs += dir; addParents(dir)
         val base = fileName.substringBeforeLast('.', fileName)
         val ext = fileName.substringAfterLast('.', "").let { if (it.isEmpty() || it == fileName) "" else ".$it" }
-        var candidate = "$dir/$fileName"
+        val prefix = if (dir == "/") "/" else "$dir/"
+        var candidate = "$prefix$fileName"
         var i = 1
-        while (candidate in files) candidate = "$dir/$base ($i)$ext".also { i++ }
+        while (candidate in files) candidate = "$prefix$base ($i)$ext".also { i++ }
         files[candidate] = input.readBytes()
         return Outcome.Ok(node(candidate)!!)
     }
