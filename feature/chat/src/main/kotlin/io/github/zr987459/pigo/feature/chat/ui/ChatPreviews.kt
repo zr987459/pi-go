@@ -52,7 +52,7 @@ private fun SampleTopBar(status: HeaderStatus) = ChatTopBar(
 @Composable
 private fun ChatHomeSample(engine: EngineStatus) {
     AppBackdrop {
-        ChatEmptyState(engine, {}, {}, Modifier.fillMaxSize().padding(top = 64.dp, bottom = 80.dp), now = LocalTime.of(15, 0))
+        ChatEmptyState(engine, {}, Modifier.fillMaxSize().padding(top = 64.dp, bottom = 80.dp), now = LocalTime.of(15, 0))
         SampleTopBar(headerStatus(engine, false))
         Box(Modifier.fillMaxSize().padding(12.dp), contentAlignment = Alignment.BottomCenter) {
             ComposerBar(
