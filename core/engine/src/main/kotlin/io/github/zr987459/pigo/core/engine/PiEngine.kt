@@ -1,6 +1,34 @@
 package io.github.zr987459.pigo.core.engine
 
 import io.github.zr987459.pigo.contract.AppLog
+import io.github.zr987459.pigo.contract.BashEvent
+import io.github.zr987459.pigo.contract.CompactResult
+import io.github.zr987459.pigo.contract.CycleModelResult
+import io.github.zr987459.pigo.contract.EngineExtras
+import io.github.zr987459.pigo.contract.EntriesPage
+import io.github.zr987459.pigo.contract.ExtensionSurface
+import io.github.zr987459.pigo.contract.ForkPoint
+import io.github.zr987459.pigo.contract.ForkResult
+import io.github.zr987459.pigo.contract.ImageInput
+import io.github.zr987459.pigo.contract.MessageMeta
+import io.github.zr987459.pigo.contract.QueueMode
+import io.github.zr987459.pigo.contract.RunOutcome
+import io.github.zr987459.pigo.contract.SessionSettings
+import io.github.zr987459.pigo.contract.SessionTree
+import io.github.zr987459.pigo.contract.SlashCommand
+import io.github.zr987459.pigo.contract.TimelineExtra
+import io.github.zr987459.pigo.contract.UsageStats
+import io.github.zr987459.pigo.contract.rpc.EngineEvents
+import io.github.zr987459.pigo.contract.rpc.RpcCommands
+import io.github.zr987459.pigo.core.protocol.ContractMapping
+import io.github.zr987459.pigo.core.protocol.ExtraResponses
+import io.github.zr987459.pigo.core.protocol.MessageMetaTracker
+import io.github.zr987459.pigo.core.protocol.RunResults
+import io.github.zr987459.pigo.core.protocol.bool
+import io.github.zr987459.pigo.core.protocol.obj
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.channelFlow
 import io.github.zr987459.pigo.contract.ChatItem
 import io.github.zr987459.pigo.contract.ChatState
 import io.github.zr987459.pigo.contract.Delivery
@@ -90,7 +118,7 @@ class PiEngine(
     private val io: CoroutineDispatcher = Dispatchers.IO,
     private val compute: CoroutineDispatcher = Dispatchers.Default,
     private val clock: () -> Long = System::currentTimeMillis,
-) : EngineClient {
+) : EngineClient, EngineExtras {
 
     private class Conn(
         val gen: Int,
@@ -197,6 +225,37 @@ class PiEngine(
     private val _uiRequests = MutableSharedFlow<ExtUiRequest>(extraBufferCapacity = 32)
     override val uiRequests: SharedFlow<ExtUiRequest> = _uiRequests.asSharedFlow()
 
+    // ---- EngineExtras 的可观察状态（feat/engine-rpc） ----
+
+    private val _extras = MutableStateFlow<List<TimelineExtra>>(emptyList())
+    override val timelineExtras: StateFlow<List<TimelineExtra>> = _extras.asStateFlow()
+
+    /** 回合结果（N1）。有缓冲：通知层晚订阅几毫秒不丢。 */
+    private val _runOutcomes = MutableSharedFlow<RunOutcome>(extraBufferCapacity = 16)
+    override val runOutcomes: SharedFlow<RunOutcome> = _runOutcomes.asSharedFlow()
+
+    private val _usage = MutableStateFlow<UsageStats?>(null)
+    override val usageState: StateFlow<UsageStats?> = _usage.asStateFlow()
+
+    private val _surface = MutableStateFlow(ExtensionSurface())
+    override val extensionSurface: StateFlow<ExtensionSurface> = _surface.asStateFlow()
+
+    private val _meta = MutableStateFlow<Map<String, MessageMeta>>(emptyMap())
+    override val messageMeta: StateFlow<Map<String, MessageMeta>> = _meta.asStateFlow()
+
+    /** 只在归约协程里读写（经 [mutate] 或 [applyInput]）。 */
+    private val metaTracker = MessageMetaTracker()
+    private var metaSignature: List<Any?> = emptyList()
+
+    /** `bash_execution_update` 的增量，按命令 id 分发给正在收集的 [bash] 流。 */
+    private val bashDeltas = MutableSharedFlow<Pair<String?, String>>(extraBufferCapacity = 1024)
+
+    /** 最近一次 `set_auto_retry` 成功的值（1.5.0 的 get_state 不返回 autoRetry）。 */
+    @Volatile private var autoRetryKnown: Boolean? = null
+
+    /** `get_commands` 按 cwd 缓存。 */
+    @Volatile private var commandCache: Pair<String, List<SlashCommand>>? = null
+
     init {
         scope.launch(compute) { actorLoop() }
         scope.launch(compute) { for ((c, req) in uiQueue) deliverUi(c, req) }
@@ -214,6 +273,7 @@ class PiEngine(
                 state = applyInput(state, next, waiters)
             }
             _chat.value = state
+            publishExtras(state)
             afterPublish(state)
             waiters.forEach { it.complete(Unit) }
             waiters.clear()
@@ -235,8 +295,17 @@ class PiEngine(
             is Input.Rec -> {
                 if (input.gen != conn?.gen) return state // 旧进程的残留事件
                 val event = input.record as? EngineEvent ?: return state
+                when (event) {
+                    is EngineEvents.EntryAppended -> event.entry?.let { metaTracker.append(it) }
+                    is EngineEvents.BashExecutionUpdate -> bashDeltas.tryEmit(event.id to event.delta)
+                    else -> Unit
+                }
                 try {
-                    reducer.reduce(state, event, clock())
+                    reducer.reduce(state, event, clock()).also { next ->
+                        if (event is EngineEvent.AgentSettled) {
+                            _runOutcomes.tryEmit(RunResults.onSettled(next, event.aborted, clock(), currentCwd, redactor::redact))
+                        }
+                    }
                 } catch (e: Exception) {
                     // 归约器不应抛异常；万一抛了，丢掉这一条，不影响后续（REVIEW：未知事件不得崩溃）。
                     log.w(TAG, "归约事件异常：${event.raw["type"]}", e)
@@ -261,6 +330,28 @@ class PiEngine(
             refreshState()
             stats()
         }
+    }
+
+    /** 归约协程里：发布时间线附加项；时间线或 entry 变化时重新配对 messageMeta（S1、U1）。 */
+    private fun publishExtras(state: ChatState) {
+        val x = reducer.timelineExtras
+        if (x != _extras.value) _extras.value = x
+        val unpersisted = reducer.unpersistedKeys
+        val last = state.items.lastOrNull()
+        val sig = listOf(
+            metaTracker.version, state.items.size, state.items.firstOrNull()?.key, last?.key, (last as? ChatItem.Assistant)?.streaming,
+            unpersisted.size, state.items.count { it is ChatItem.User && it.delivery == Delivery.SENT },
+        )
+        if (sig != metaSignature) {
+            metaSignature = sig
+            val m = metaTracker.compute(state.items, unpersisted)
+            if (m != _meta.value) _meta.value = m
+        }
+    }
+
+    private fun clearedAll(state: ChatState): ChatState {
+        metaTracker.clear()
+        return reducer.cleared(state)
     }
 
     private fun afterPublish(state: ChatState) {
@@ -413,6 +504,11 @@ class PiEngine(
         c.ready = true
         mutate { reducer.applyPiState(it, st) }
         if (rebuild) rebuildFromMessages(c, carry = snapshotPendingCarry(), live = st.isStreaming)
+        else mutate {
+            metaTracker.clear()
+            it
+        }
+        commandCache = null
         if (cold) {
             coldStartCheck = false
             applyColdStart(coldMarker, rebuilt = rebuild)
@@ -488,6 +584,7 @@ class PiEngine(
             val messages = Responses.messages(r.value.data)
             mutate { reducer.fromMessages(messages, base = it, carry = carry, live = live) }
             prunePendingCarry(carry, _chat.value.items)
+            scope.launch(io) { refreshEntries() }
             Outcome.Ok(Unit)
         } else {
             val err = r as Outcome.Err
@@ -557,6 +654,10 @@ class PiEngine(
         if (r.method == "setStatus") {
             val text = o.str("statusText")
             inputs.trySend(Input.Mut({ it.copy(statusLine = text) }, null))
+        }
+        updateSurface(r.method, o)
+        if (req.needsResponse) {
+            RunResults.onUiRequest(_chat.value, req, clock(), currentCwd, redactor::redact)?.let { _runOutcomes.tryEmit(it) }
         }
         if (!req.needsResponse) {
             if (_uiRequests.subscriptionCount.value > 0) _uiRequests.tryEmit(req)
@@ -708,8 +809,12 @@ class PiEngine(
     private suspend fun call(build: (String) -> RpcCommand): Outcome<RpcResponse> {
         val s = ensureStarted()
         if (s is Outcome.Err) return s
+        return callCmd(build(ids.next()))
+    }
+
+    /** 发一条已带 id 的命令（调用方已确保引擎启动）；超时按命令类型取（[EngineConfig.timeoutFor]）。 */
+    private suspend fun callCmd(cmd: RpcCommand): Outcome<RpcResponse> {
         val c = conn ?: return Outcome.Err(ErrCode.ENGINE_EXIT, "引擎未运行")
-        val cmd = build(ids.next())
         val r = c.channel.request(cmd, config.timeoutFor(cmd.type))
         if (r is Outcome.Err && r.code == ErrCode.RPC_TIMEOUT && cmd.type != "get_state" && cmd.type != "abort") {
             // §3.9：命令超时 → 先 get_state 探活，探活也超时则强杀重启。
@@ -723,16 +828,24 @@ class PiEngine(
         return r
     }
 
-    override suspend fun send(text: String, mode: SendMode): Outcome<Disposition> {
+    override suspend fun send(text: String, mode: SendMode): Outcome<Disposition> = sendInternal(text, emptyList(), mode)
+
+    /** C1：带图片发送（`prompt.images`）；[images] 为空时等同 [send]。 */
+    override suspend fun send(text: String, images: List<ImageInput>, mode: SendMode): Outcome<Disposition> = sendInternal(text, images, mode)
+
+    private suspend fun sendInternal(text: String, images: List<ImageInput>, mode: SendMode): Outcome<Disposition> {
         val s = ensureStarted()
         if (s is Outcome.Err) return s
         val key = "local-${localSeq.getAndIncrement()}"
-        mutate { reducer.addPendingUser(it, key, text) }
+        mutate { reducer.addPendingUser(it, key, text, images) }
         val behavior = if (mode == SendMode.STEER) RpcCommand.STREAMING_STEER else RpcCommand.STREAMING_FOLLOW_UP
-        var r = call { RpcCommand.Prompt(it, text, if (liveRunning) behavior else null) }
+        val rpcImages = images.map(ContractMapping::image)
+        fun prompt(id: String, b: String?): RpcCommand =
+            if (rpcImages.isEmpty()) RpcCommand.Prompt(id, text, b) else RpcCommands.PromptWithImages(id, text, rpcImages, b)
+        var r = call { prompt(it, if (liveRunning) behavior else null) }
         if (r is Outcome.Err && r.code == ErrCode.RPC_REJECTED && isBusyError(r.message)) {
             // 本地还没看到 agent_start 但 pi 已在生成：按用户选择的方式重发一次（上一条被拒绝了，不会重复）。
-            r = call { RpcCommand.Prompt(it, text, behavior) }
+            r = call { prompt(it, behavior) }
         }
         return when (r) {
             is Outcome.Ok -> {
@@ -807,7 +920,7 @@ class PiEngine(
             // 在其他目录新建：以新 cwd 重启（cwd 决定会话目录与 AGENTS.md）。
             val r = lifecycle.withLock {
                 clearPendingCarry()
-                mutate { reducer.cleared(it) }
+                mutate { clearedAll(it) }
                 sessionFile = null
                 boot(null, cwd, rebuild = false, reason = "在 $cwd 新建会话")
             }
@@ -817,7 +930,7 @@ class PiEngine(
         if (r is Outcome.Err) return r
         if (Responses.cancelled((r as Outcome.Ok).value.data)) return Outcome.Err(ErrCode.CANCELLED, "新建会话被扩展取消")
         clearPendingCarry()
-        mutate { reducer.cleared(it) }
+        mutate { clearedAll(it) }
         refreshState()
         return Outcome.Ok(Unit)
     }
@@ -830,7 +943,7 @@ class PiEngine(
             return lifecycle.withLock {
                 if (!reopenSame) {
                     clearPendingCarry()
-                    mutate { reducer.cleared(it) }
+                    mutate { clearedAll(it) }
                 }
                 boot(guestPath, cwd, rebuild = true, reason = "打开会话（cwd=$cwd）")
             }
@@ -851,8 +964,9 @@ class PiEngine(
             val messages = Responses.messages(m.value.data)
             // fromMessages 会清掉旧会话的队列与上下文占用；占用随后由 stats() 重新取。
             mutate { reducer.fromMessages(messages, base = it.copy(sessionName = null, statusLine = null, running = false), live = liveRunning) }
+            scope.launch(io) { refreshEntries() }
         } else {
-            mutate { reducer.addNotice(reducer.cleared(it), NoticeKind.ERROR, HISTORY_FAILED) }
+            mutate { reducer.addNotice(clearedAll(it), NoticeKind.ERROR, HISTORY_FAILED) }
         }
         refreshState()
         scope.launch(io) { stats() }
@@ -901,7 +1015,9 @@ class PiEngine(
         return when (val r = c.channel.request(RpcCommand.GetSessionStats(ids.next()), config.defaultTimeoutMs)) {
             is Outcome.Ok -> {
                 val s = Responses.stats(r.value.data)
-                mutate { it.copy(contextPercent = s.contextPercent ?: it.contextPercent) }
+                _usage.value = ContractMapping.usage(ExtraResponses.stats(r.value.data))
+                // U2：pi 给 percent == null（压缩后到下一次回复前）时就显示 null，绝不回退旧值。
+                mutate { it.copy(contextPercent = s.contextPercent) }
                 Outcome.Ok(s)
             }
             is Outcome.Err -> r
@@ -927,6 +1043,225 @@ class PiEngine(
             lastPiState = st
             st.sessionFile?.let { sessionFile = it }
             mutate { reducer.applyPiState(it, st) }
+        }
+    }
+
+    // =================================================================== EngineExtras（feat/engine-rpc，W1）
+
+    /** 确保引擎已启动后发一条命令。 */
+    private suspend fun extra(build: (String) -> RpcCommand): Outcome<RpcResponse> = call(build)
+
+    private inline fun <T> Outcome<RpcResponse>.map(f: (RpcResponse) -> T): Outcome<T> = when (this) {
+        is Outcome.Ok -> Outcome.Ok(f(value))
+        is Outcome.Err -> this
+    }
+
+    /** 会话被替换（fork / clone）后：重建时间线、刷新状态、用量与 entry。 */
+    private suspend fun reloadAfterSwitch() {
+        refreshState()
+        val c = conn ?: return
+        clearPendingCarry()
+        rebuildFromMessages(c, carry = emptyList(), live = false)
+        scope.launch(io) { stats() }
+    }
+
+    /** `get_entries` 全量 → messageMeta 的配对簿记（打开、重建、分叉后）。失败只记日志：此时界面应禁用「从这里分叉」。 */
+    private suspend fun refreshEntries() {
+        val c = conn ?: return
+        if (!c.ready) return
+        when (val r = c.channel.request(RpcCommands.GetEntries(ids.next()), config.timeoutFor("get_entries"))) {
+            is Outcome.Ok -> {
+                val page = ExtraResponses.entries(r.value.data)
+                mutate {
+                    metaTracker.reset(page.entries.map { e -> e.raw }, page.leafId)
+                    it
+                }
+            }
+            is Outcome.Err -> log.w(TAG, "get_entries 失败：${r.message}")
+        }
+    }
+
+    override suspend fun commands(refresh: Boolean): Outcome<List<SlashCommand>> {
+        val cwd = currentCwd
+        if (!refresh) commandCache?.let { (k, v) -> if (k == cwd) return Outcome.Ok(v) }
+        return extra { RpcCommands.GetCommands(it) }.map { r ->
+            ExtraResponses.commands(r.data).map(ContractMapping::command).also { commandCache = cwd to it }
+        }
+    }
+
+    override suspend fun forkMessages(): Outcome<List<ForkPoint>> =
+        extra { RpcCommands.GetForkMessages(it) }.map { r -> ExtraResponses.forkMessages(r.data).map(ContractMapping::forkPoint) }
+
+    override suspend fun fork(entryId: String): Outcome<ForkResult> {
+        val r = extra { RpcCommands.Fork(it, entryId) }.map { ContractMapping.fork(ExtraResponses.fork(it.data)) }
+        if (r is Outcome.Ok && !r.value.cancelled) reloadAfterSwitch()
+        return r
+    }
+
+    override suspend fun clone(): Outcome<Boolean> {
+        val r = extra { RpcCommands.Clone(it) }.map { Responses.cancelled(it.data) }
+        if (r is Outcome.Ok && !r.value) reloadAfterSwitch()
+        return r
+    }
+
+    override suspend fun tree(): Outcome<SessionTree> =
+        extra { RpcCommands.GetTree(it) }.map { ContractMapping.tree(ExtraResponses.tree(it.data)) }
+
+    override suspend fun entries(since: String?): Outcome<EntriesPage> =
+        extra { RpcCommands.GetEntries(it, since) }.map { ContractMapping.entries(ExtraResponses.entries(it.data)) }
+
+    override suspend fun cycleModel(): Outcome<ModelInfo?> = when (val r = cycleModelResult()) {
+        is Outcome.Ok -> Outcome.Ok(r.value?.model)
+        is Outcome.Err -> r
+    }
+
+    override suspend fun cycleModelResult(): Outcome<CycleModelResult?> {
+        val r = extra { RpcCommands.CycleModel(it) }.map { ContractMapping.cycleModel(it.data) }
+        if (r is Outcome.Ok) r.value?.let { cm ->
+            lastPiState = lastPiState.copy(model = cm.model, thinkingLevel = cm.thinkingLevel ?: lastPiState.thinkingLevel)
+            mutate { it.copy(model = cm.model, thinkingLevel = cm.thinkingLevel ?: it.thinkingLevel) }
+        }
+        return r
+    }
+
+    override suspend fun cycleThinking(): Outcome<String?> {
+        val r = extra { RpcCommands.CycleThinkingLevel(it) }.map { ContractMapping.thinkingLevel(it.data) }
+        if (r is Outcome.Ok) r.value?.let { level ->
+            lastPiState = lastPiState.copy(thinkingLevel = level)
+            mutate { it.copy(thinkingLevel = level) }
+        }
+        return r
+    }
+
+    override suspend fun usage(): Outcome<UsageStats> {
+        val r = extra { RpcCommand.GetSessionStats(it) }.map { ContractMapping.usage(ExtraResponses.stats(it.data)) }
+        if (r is Outcome.Ok) {
+            _usage.value = r.value
+            mutate { it.copy(contextPercent = r.value.context?.percent) }
+        }
+        return r
+    }
+
+    override suspend fun compact(customInstructions: String?): Outcome<CompactResult> {
+        val r = extra { RpcCommands.Compact(it, customInstructions?.takeIf { s -> s.isNotBlank() }) }
+        if (r is Outcome.Err) return r
+        val rec = ExtraResponses.compaction((r as Outcome.Ok).value.data)
+            ?: return Outcome.Err(ErrCode.RPC_REJECTED, "压缩没有返回结果")
+        // 事件（compaction_start/end）已归约出压缩卡时，这里只补全；事件丢了就补一张（幂等）。
+        mutate { reducer.applyCompaction(it, rec, manual = true) }
+        scope.launch(io) {
+            stats()
+            refreshEntries()
+        }
+        return Outcome.Ok(ContractMapping.compact(rec))
+    }
+
+    override suspend fun sessionSettings(): Outcome<SessionSettings> {
+        val r = extra { RpcCommand.GetState(it) }
+        if (r is Outcome.Err) return r
+        val retry = autoRetryKnown ?: readRetrySetting()
+        return Outcome.Ok(ContractMapping.settings((r as Outcome.Ok).value.data, retry))
+    }
+
+    /**
+     * pi 1.5.0 的 get_state 不给 autoRetry：读 settings.json 的 `retry.enabled`（项目级 `<cwd>/.pi/settings.json` 覆盖全局级）。
+     * 两处都没写时为 null（界面显示「未知」）。
+     */
+    private suspend fun readRetrySetting(): Boolean? = withContext(io) {
+        fun read(path: String): Boolean? = try {
+            val f = runtime.hostFile(path)
+            if (!f.isFile) null
+            else (RecordCodec.json.parseToJsonElement(f.readText()) as? JsonObject)?.obj("retry")?.bool("enabled")
+        } catch (e: Exception) {
+            null
+        }
+        read(currentCwd.trimEnd('/') + "/.pi/settings.json") ?: read(config.agentDir.trimEnd('/') + "/settings.json")
+    }
+
+    override suspend fun setAutoCompaction(enabled: Boolean): Outcome<Unit> = extra { RpcCommands.SetAutoCompaction(it, enabled) }.unit()
+
+    override suspend fun setAutoRetry(enabled: Boolean): Outcome<Unit> {
+        val r = extra { RpcCommands.SetAutoRetry(it, enabled) }.unit()
+        if (r is Outcome.Ok) autoRetryKnown = enabled
+        return r
+    }
+
+    override suspend fun setSteeringMode(mode: QueueMode): Outcome<Unit> {
+        val r = extra { RpcCommands.SetSteeringMode(it, mode.wire) }.unit()
+        if (r is Outcome.Ok) lastPiState = lastPiState.copy(steeringMode = mode.wire)
+        return r
+    }
+
+    override suspend fun setFollowUpMode(mode: QueueMode): Outcome<Unit> {
+        val r = extra { RpcCommands.SetFollowUpMode(it, mode.wire) }.unit()
+        if (r is Outcome.Ok) lastPiState = lastPiState.copy(followUpMode = mode.wire)
+        return r
+    }
+
+    /**
+     * C6：`bash`。收集时发命令：先在时间线附加一张运行中的 bash 卡（key `bash-<命令 id>`），
+     * `bash_execution_update` 按 id 归到这张卡并作为 [BashEvent.Output] 发出，响应到达后以 [BashEvent.Done] 结束。
+     * 收集方取消（例如离开页面）不会中止命令；要停止请调用 [abortBash]。
+     */
+    override fun bash(command: String, excludeFromContext: Boolean): Flow<BashEvent> = channelFlow {
+        val s = ensureStarted()
+        if (s is Outcome.Err) {
+            send(BashEvent.Failed(s))
+            return@channelFlow
+        }
+        val id = ids.next()
+        mutate { reducer.startBash(it, id, command, excludeFromContext) }
+        val relay = launch(start = CoroutineStart.UNDISPATCHED) {
+            bashDeltas.collect { (deltaId, chunk) -> if (deltaId == null || deltaId == id) send(BashEvent.Output(chunk)) }
+        }
+        val r = withContext(NonCancellable) { callCmd(RpcCommands.Bash(id, command, excludeFromContext)) }
+        relay.cancel()
+        when (r) {
+            is Outcome.Ok -> {
+                val rec = ExtraResponses.bash(r.value.data)
+                mutate { reducer.finishBash(it, id, rec, null) }
+                send(BashEvent.Done(ContractMapping.bash(rec)))
+            }
+            is Outcome.Err -> {
+                mutate { reducer.finishBash(it, id, null, redactor.redact(r.message)) }
+                send(BashEvent.Failed(r))
+            }
+        }
+    }
+
+    override suspend fun abortBash(): Outcome<Unit> {
+        val c = conn
+        if (c == null || !c.ready) return Outcome.Err(ErrCode.ENGINE_EXIT, "引擎未运行")
+        return c.channel.request(RpcCommands.AbortBash(ids.next()), config.defaultTimeoutMs).unit()
+    }
+
+    override suspend fun exportHtml(outputPath: String?): Outcome<String> {
+        val r = extra { RpcCommands.ExportHtml(it, outputPath) }
+        if (r is Outcome.Err) return r
+        val path = ExtraResponses.exportPath((r as Outcome.Ok).value.data) ?: return Outcome.Err(ErrCode.RPC_REJECTED, "导出没有返回文件路径")
+        return Outcome.Ok(path)
+    }
+
+    override suspend fun lastAssistantText(): Outcome<String?> =
+        extra { RpcCommands.GetLastAssistantText(it) }.map { ExtraResponses.lastAssistantText(it.data) }
+
+    /** C12：扩展的非阻塞界面（setStatus / setWidget / setTitle）。 */
+    private fun updateSurface(method: String, o: JsonObject) {
+        when (method) {
+            "setStatus" -> {
+                val key = o.str("statusKey") ?: return
+                val text = o.str("statusText")
+                _surface.value = _surface.value.let { s -> s.copy(statuses = if (text.isNullOrEmpty()) s.statuses - key else s.statuses + (key to text)) }
+            }
+            "setWidget" -> {
+                val key = o.str("widgetKey") ?: return
+                val lines = o.strings("widgetLines")
+                val placement = o.str("widgetPlacement") ?: "aboveEditor"
+                _surface.value = _surface.value.let { s ->
+                    s.copy(widgets = if (o["widgetLines"] == null || o["widgetLines"] is kotlinx.serialization.json.JsonNull) s.widgets - key else s.widgets + (key to (placement to lines)))
+                }
+            }
+            "setTitle" -> _surface.value = _surface.value.copy(title = o.str("title"))
         }
     }
 
