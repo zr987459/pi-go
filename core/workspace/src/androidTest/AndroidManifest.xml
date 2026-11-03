@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 仅仪器测试：一个最小的文档 provider，模拟 SAF / 其他应用给出的 content:// Uri。 -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <provider
+            android:name="io.github.zr987459.pigo.core.workspace.TestDocsProvider"
+            android:authorities="${applicationId}.testdocs"
+            android:exported="false" />
+    </application>
+</manifest>

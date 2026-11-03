@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!-- 分享 / 打开工作区文件、拍照的输出位置（只含应用缓存的 pigo-share/、pigo-camera/）。 -->
+        <provider
+            android:name="io.github.zr987459.pigo.feature.files.platform.PigoFilesProvider"
+            android:authorities="${applicationId}.pigo.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/pigo_files_paths" />
+        </provider>
+
+        <!-- 系统选择器中转（透明、不进最近任务）。 -->
+        <activity
+            android:name="io.github.zr987459.pigo.feature.files.platform.PickerActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <!-- §2.7 系统分享菜单「发给 pi」：接收文本、图片、文件。 -->
+        <activity
+            android:name="io.github.zr987459.pigo.feature.files.share.ShareTargetActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:label="发给 pi"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/*" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="application/*" />
+                <data android:mimeType="audio/*" />
+                <data android:mimeType="video/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

@@ -23,7 +23,14 @@ object KeyRedaction {
     private val patterns = listOf(
         Regex("sk-[A-Za-z0-9_\\-]{6,}"),
         Regex("(?i)bearer\\s+[A-Za-z0-9._\\-]{6,}"),
+        // OAuth / GitHub 令牌形态（W2）：gho_/ghu_/ghp_/ghs_、JWT
+        Regex("gh[opsu]_[A-Za-z0-9]{8,}"),
+        Regex("eyJ[A-Za-z0-9_\\-]{8,}\\.[A-Za-z0-9_\\-]{4,}(\\.[A-Za-z0-9_\\-]+)?"),
+        Regex("(?i)\"(access|refresh)(_token)?\"\\s*:\\s*\"[^\"]{8,}\""),
     )
+
+    /** 去掉代理地址里的用户名密码：`user:pass@` 换成三个星号加 `@`。 */
+    fun redactUrlCredentials(url: String): String = url.replace(Regex("(?<=://)[^/@\\s]+@"), "***@")
 
     fun redact(text: String, knownKeys: Collection<String> = emptyList()): String {
         var out = text

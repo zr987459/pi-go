@@ -4,7 +4,7 @@ import io.github.zr987459.pigo.contract.PresetKind
 import io.github.zr987459.pigo.contract.ProviderPreset
 
 /**
- * DESIGN.md §3.10 的 Provider 预设表（provider id、环境变量名取自 pi 1.5.0 `providers.md`）。
+ * DESIGN.md §3.10 的 Provider 预设表：内置服务商由 pi 模型目录生成（[fromCatalog]），环境变量名见 [ProviderSpecs]。
  * 自定义端点预填的 baseUrl（服务商公开的 OpenAI 兼容地址，联调时以服务商当前文档为准）：
  * - 阿里云百炼 OpenAI 兼容：https://dashscope.aliyuncs.com/compatible-mode/v1
  * - 智谱开放平台：https://open.bigmodel.cn/api/paas/v4
@@ -13,22 +13,45 @@ object ProviderPresets {
     /** 「其他 OpenAI 兼容」的占位 provider：用户自己起 id。 */
     const val OTHER_CUSTOM = "custom"
 
-    val ALL: List<ProviderPreset> = listOf(
-        ProviderPreset("deepseek", "DeepSeek", PresetKind.PAY_AS_YOU_GO, "DEEPSEEK_API_KEY", null, "DeepSeek 开放平台的普通 Key"),
-        ProviderPreset("moonshotai-cn", "Moonshot（中国站）", PresetKind.PAY_AS_YOU_GO, "MOONSHOT_API_KEY", null, "月之暗面开放平台（api.moonshot.cn）的 Key"),
-        ProviderPreset("minimax-cn", "MiniMax（中国）", PresetKind.PAY_AS_YOU_GO, "MINIMAX_CN_API_KEY", null, "MiniMax 中国站的 Key"),
-        ProviderPreset("openrouter", "OpenRouter", PresetKind.PAY_AS_YOU_GO, "OPENROUTER_API_KEY", null, "国内网络可能需要代理"),
-        ProviderPreset("openai", "OpenAI", PresetKind.PAY_AS_YOU_GO, "OPENAI_API_KEY", null, "国内网络可能需要代理"),
-        ProviderPreset("anthropic", "Anthropic", PresetKind.PAY_AS_YOU_GO, "ANTHROPIC_API_KEY", null, "国内网络可能需要代理"),
-        ProviderPreset("zai-coding-cn", "智谱 GLM Coding Plan（中国）", PresetKind.CODING_PLAN, "ZAI_CODING_CN_API_KEY", null, "需要套餐 Key；普通智谱开放平台 Key 请用下方「智谱开放平台」"),
-        ProviderPreset("qwen-token-plan-cn", "通义 Token Plan（中国）", PresetKind.CODING_PLAN, "QWEN_TOKEN_PLAN_CN_API_KEY", null, "需要套餐 Key；普通百炼 Key 请用下方「阿里云百炼」"),
-        ProviderPreset("kimi-coding", "Kimi For Coding", PresetKind.CODING_PLAN, "KIMI_API_KEY", null, "需要套餐 Key；普通 Moonshot Key 请用上方「Moonshot」"),
+    /** 三个自定义 OpenAI 兼容入口（不在 pi 目录里）。 */
+    val CUSTOM: List<ProviderPreset> = listOf(
         ProviderPreset("bailian", "阿里云百炼（按量）", PresetKind.CUSTOM_OPENAI, "PIGO_KEY_BAILIAN", "https://dashscope.aliyuncs.com/compatible-mode/v1", "模型 id 自己填，例如 qwen-plus"),
         ProviderPreset("zhipu", "智谱开放平台（按量）", PresetKind.CUSTOM_OPENAI, "PIGO_KEY_ZHIPU", "https://open.bigmodel.cn/api/paas/v4", "模型 id 自己填，例如 glm-4.6"),
         ProviderPreset(OTHER_CUSTOM, "其他 OpenAI 兼容", PresetKind.CUSTOM_OPENAI, null, null, "接口地址和模型 id 都自己填"),
     )
 
-    val BUILT_IN: List<ProviderPreset> = ALL.filter { it.kind != PresetKind.CUSTOM_OPENAI }
+    /**
+     * 由 pi 模型目录生成（W2 / feature-gap M1）：目录里每个支持 API Key 的服务商一项，顺序按 [ProviderSpecs.ALL]
+     * （国内常用在前），目录里有而表里没登记的排在最后。只能 OAuth 登录的（如 openai-codex）不在这里，见 `:core:catalog`。
+     */
+    fun fromCatalog(snapshot: BuiltinCatalog.Snapshot): List<ProviderPreset> {
+        val order = ProviderSpecs.ALL.withIndex().associate { (i, s) -> s.provider to i }
+        return snapshot.providers
+            .filter { it.apiKeyAuth }
+            .sortedBy { order[it.id] ?: Int.MAX_VALUE }
+            .mapNotNull { p ->
+                val spec = ProviderSpecs.specFor(p.id, p.name, p.apiKeyAuth)
+                val env = spec.keyEnv ?: return@mapNotNull null
+                ProviderPreset(p.id, spec.label, spec.kind, env, null, spec.note)
+            }
+    }
+
+    /** 全量（由目录生成，首次访问会解析约 459 KB 的目录快照，只在 IO 线程用；新页面与 ModelCatalog 用它）。 */
+    val ALL: List<ProviderPreset> by lazy { fromCatalog(BuiltinCatalog.bundled()) + CUSTOM }
+
+    /**
+     * 旧设置页（`ProviderConfigStore.presets()`）用的列表（审查第 1 轮 Important #3）：
+     * 旧页只有一个 Key 输入框，所以**去掉需要额外字段的云平台**（Bedrock、Azure、Cloudflare×2、Vertex）
+     * 和只能登录的服务商，只留「填一个 Key 就能用」的。直接由 [ProviderSpecs] 静态表生成，不解析目录，
+     * 在主线程的组合阶段调用也不卡。多字段服务商在 W2 的新服务商页里配置。
+     */
+    val SINGLE_KEY: List<ProviderPreset> by lazy {
+        ProviderSpecs.ALL
+            .filter { it.keyEnv != null && it.extra.isEmpty() && !it.keyOptional && it.validate == null }
+            .map { ProviderPreset(it.provider, it.label, it.kind, it.keyEnv, null, it.note) } + CUSTOM
+    }
+
+    val BUILT_IN: List<ProviderPreset> by lazy { ALL.filter { it.kind != PresetKind.CUSTOM_OPENAI } }
 
     fun builtInAlias(provider: String) = "key.$provider"
     fun customAlias(id: String) = "key.custom.$id"
