@@ -494,9 +494,22 @@ class PiEngine(
             log.w(TAG, "get_messages 失败：${err.message}")
             // 不悄悄留下一个空的 / 旧的聊天：明确告诉用户历史没加载出来，以及怎么重试。
             // 崩溃前没送达的消息（carry）此时仍以「发送失败」留在时间线上。
-            mutate { reducer.addNotice(it, NoticeKind.ERROR, HISTORY_FAILED) }
+            // 反复重试失败时只留一条提示，不叠加。
+            mutate { reducer.addNotice(withoutHistoryFailed(it), NoticeKind.ERROR, HISTORY_FAILED) }
             err
         }
+    }
+
+    private fun withoutHistoryFailed(s: ChatState): ChatState =
+        s.copy(items = s.items.filterNot { it is ChatItem.Notice && it.text == HISTORY_FAILED })
+
+    /**
+     * 同一会话的重新加载：生成中且历史没有加载失败时什么也不做——时间线本来就是最新的，
+     * 重建会替换掉正在流式输出的消息与乐观气泡。历史加载失败过才重建（fromMessages 在 live 时保留 running 与队列）。
+     */
+    private suspend fun reloadSame(c: Conn): Outcome<Unit> {
+        if (liveRunning && _chat.value.items.none { it is ChatItem.Notice && it.text == HISTORY_FAILED }) return Outcome.Ok(Unit)
+        return rebuildFromMessages(c, carry = snapshotPendingCarry(), live = liveRunning)
     }
 
     /**
@@ -507,7 +520,7 @@ class PiEngine(
         val s = ensureStarted()
         if (s is Outcome.Err) return s
         val c = conn ?: return Outcome.Err(ErrCode.ENGINE_EXIT, "引擎未运行")
-        return rebuildFromMessages(c, carry = snapshotPendingCarry(), live = liveRunning)
+        return reloadSame(c)
     }
 
     /** stdout 记录 → 归约协程；扩展 UI 请求直接分发。 */
@@ -823,7 +836,7 @@ class PiEngine(
             }
         }
         if (reopenSame) {
-            val r = rebuildFromMessages(c, carry = snapshotPendingCarry(), live = liveRunning)
+            val r = reloadSame(c)
             refreshState()
             scope.launch(io) { stats() }
             return r
@@ -837,7 +850,7 @@ class PiEngine(
         if (m is Outcome.Ok) {
             val messages = Responses.messages(m.value.data)
             // fromMessages 会清掉旧会话的队列与上下文占用；占用随后由 stats() 重新取。
-            mutate { reducer.fromMessages(messages, base = it.copy(sessionName = null, statusLine = null), live = liveRunning) }
+            mutate { reducer.fromMessages(messages, base = it.copy(sessionName = null, statusLine = null, running = false), live = liveRunning) }
         } else {
             mutate { reducer.addNotice(reducer.cleared(it), NoticeKind.ERROR, HISTORY_FAILED) }
         }
