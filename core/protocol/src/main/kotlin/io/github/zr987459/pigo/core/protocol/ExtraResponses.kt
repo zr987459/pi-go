@@ -128,30 +128,43 @@ object ExtraResponses {
         return SessionEntriesRecord(arr.mapNotNull { entry(it) }, o?.str("leafId"))
     }
 
-    /** `get_tree` → `data{tree,leafId}`。树很深时用显式栈，避免递归爆栈。 */
+    /**
+     * `get_tree` → `data{tree,leafId}`。用显式栈后序构建，**不设深度上限**、保留每一层的真实父子结构
+     * （长会话一次工具调用就 2+ 条目，深度很容易过 500；拉平会把多个分支交错在一起，审查第 1 轮 Important#4）。
+     * 消费方（[ContractMapping.node]）同样用显式栈，不会递归爆栈。
+     */
     fun tree(data: JsonElement?): SessionTreeRecord {
         val o = data as? JsonObject
         val roots = o?.arr("tree") ?: JsonArray(emptyList())
-        return SessionTreeRecord(roots.mapNotNull { node(it) }, o?.str("leafId"))
+        return SessionTreeRecord(buildForest(roots), o?.str("leafId"))
     }
 
-    private fun node(e: JsonElement, depth: Int = 0): SessionTreeNodeRecord? {
-        val o = e as? JsonObject ?: return null
-        val entry = entry(o["entry"]) ?: return null
-        // 线性会话的树就是一条长链：超过深度上限时把剩余链拉平成兄弟，宁可失去缩进也不栈溢出。
-        val kids = o.arr("children").orEmpty()
-        val children = if (depth < MAX_TREE_DEPTH) kids.mapNotNull { node(it, depth + 1) } else flatten(kids)
-        return SessionTreeNodeRecord(entry, children, o.str("label"))
+    private class Frame(val o: JsonObject, val entry: SessionEntryRecord, val kids: List<JsonElement>) {
+        var next = 0
+        val built = ArrayList<SessionTreeNodeRecord>(kids.size)
     }
 
-    private fun flatten(kids: List<JsonElement>): List<SessionTreeNodeRecord> {
-        val out = ArrayList<SessionTreeNodeRecord>()
-        val stack = ArrayDeque(kids.reversed())
-        while (stack.isNotEmpty()) {
-            val o = stack.removeLast() as? JsonObject ?: continue
-            val entry = entry(o["entry"]) ?: continue
-            out += SessionTreeNodeRecord(entry, emptyList(), o.str("label"))
-            o.arr("children").orEmpty().reversed().forEach { stack.addLast(it) }
+    private fun buildForest(roots: List<JsonElement>): List<SessionTreeNodeRecord> {
+        val out = ArrayList<SessionTreeNodeRecord>(roots.size)
+        val stack = ArrayDeque<Frame>()
+        fun push(e: JsonElement): Boolean {
+            val o = e as? JsonObject ?: return false
+            val entry = entry(o["entry"]) ?: return false // 无效节点连同子树丢弃（与旧实现一致）
+            stack.addLast(Frame(o, entry, o.arr("children").orEmpty()))
+            return true
+        }
+        for (r in roots) {
+            if (!push(r)) continue
+            while (stack.isNotEmpty()) {
+                val top = stack.last()
+                if (top.next < top.kids.size) {
+                    push(top.kids[top.next++])
+                    continue
+                }
+                stack.removeLast()
+                val node = SessionTreeNodeRecord(top.entry, top.built, top.o.str("label"))
+                if (stack.isEmpty()) out += node else stack.last().built += node
+            }
         }
         return out
     }
@@ -209,5 +222,4 @@ object ExtraResponses {
     }
 
     private const val PREVIEW_MAX = 200
-    private const val MAX_TREE_DEPTH = 500
 }

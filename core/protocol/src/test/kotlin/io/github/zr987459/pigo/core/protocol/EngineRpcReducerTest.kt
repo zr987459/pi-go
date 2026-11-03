@@ -339,6 +339,43 @@ class EngineRpcReducerTest {
         assertEquals(n, count(tree.roots))
     }
 
+    /** 审查第 1 轮 Important#4：深度 >500 处分出两个分支时，父子结构原样保留（不拉平、不交错）。 */
+    @Test
+    fun deepTreeKeepsBranchStructureBeyond500() {
+        val depth = 800
+        val fork = 600
+        fun node(id: String, kids: String = "") = """{"entry":{"id":"$id","parentId":null,"type":"message","message":{"role":"user","content":"$id"}},"children":[$kids]}"""
+        fun chain(prefix: String, len: Int): String {
+            var sAcc = ""
+            for (i in len - 1 downTo 0) sAcc = node("$prefix$i", sAcc)
+            return sAcc
+        }
+        // 主链 e0..e(fork)；e(fork) 下两支：a0..a2、b0..b1；随后主链不再延续（分叉点即两支的父）。
+        var json = node("e$fork", chain("a", 3) + "," + chain("b", 2))
+        for (i in fork - 1 downTo 0) json = node("e$i", json)
+        // 再补一条从根直接下去到 depth 的长链，作为根的第二个孩子，验证兄弟顺序
+        var parsed: kotlinx.serialization.json.JsonElement? = null
+        val t = Thread(null, { parsed = RecordCodec.json.parseToJsonElement("""{"tree":[$json],"leafId":"a2"}""") }, "deep", RpcChannel.READER_STACK_BYTES)
+        t.start()
+        t.join()
+        val tree = ExtraResponses.tree(parsed)
+        var cur = tree.roots.single()
+        for (i in 0 until fork) {
+            assertEquals("e$i", cur.entry.id)
+            cur = cur.children.single()
+        }
+        assertEquals("e$fork", cur.entry.id)
+        assertEquals(listOf("a0", "b0"), cur.children.map { it.entry.id })
+        val a = cur.children[0]
+        assertEquals(listOf("a1"), a.children.map { it.entry.id })
+        assertEquals(listOf("a2"), a.children[0].children.map { it.entry.id })
+        assertTrue(a.children[0].children[0].children.isEmpty())
+        val b = cur.children[1]
+        assertEquals(listOf("b1"), b.children.map { it.entry.id })
+        assertTrue(b.children[0].children.isEmpty())
+        assertTrue(depth > fork)
+    }
+
     @Test
     fun absurdlyDeepRecordIsMalformedNotCrash() {
         val deep = "[".repeat(200_000) + "]".repeat(200_000)
