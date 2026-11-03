@@ -116,6 +116,23 @@ class GitDiffRealTest {
         assertEquals("子目录下被忽略文件仍为空", emptyList<Any>(), diff("ignored.log", cwd = sub))
     }
 
+    /**
+     * 审查第 2 轮 Nit：截断按 UTF-8 字节而非 UTF-16 码元判断。
+     * 用中文（每字 3 字节、1 码元）造一个 diff，字节数过阈值但码元数远不到：
+     * 旧逻辑（r.stdout.length）检测不到、照常返回 Ok；修正后按字节判断应报截断。
+     */
+    @Test
+    fun largeMultibyteDiffIsDetectedAsTruncatedByByteSize() {
+        // 每行 12 个中文字（UTF-8 36 字节 / UTF-16 12 码元）。4 万行：字节 ≈ 1.5 MB（过阈值），
+        // 码元 ≈ 56 万（远小于阈值 (1<<20)-4096 ≈ 1.04M）——正是旧逻辑漏判、新逻辑能判的区间。
+        val line = "改动内容测试文本行尾补齐到\n" // 12 个中文字 + 换行
+        val big = line.repeat(40_000)
+        File(repo, "clean.kt").writeText(big) // clean.kt 已跟踪，改成大内容
+        val r = runBlocking { ws.gitDiff("/root/proj", "clean.kt", false) }
+        assertTrue("字节数过阈值的 diff 应判为截断（Err）", r is Outcome.Err)
+        assertTrue("提示里应说明已截断", (r as Outcome.Err).message.contains("截断"))
+    }
+
     @Test
     fun gitEntryPointsDoNotWidenAllowedRoots() = runBlocking {
         assertTrue("未登记的 / 不能 gitStatus", ws.gitStatus("/") is Outcome.Err)

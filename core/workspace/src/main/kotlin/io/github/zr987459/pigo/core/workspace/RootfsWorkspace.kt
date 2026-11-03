@@ -196,10 +196,16 @@ class RootfsWorkspace(
         if (path != null) { args += "--"; args += if (path.startsWith("/")) path else ":(top)$path" }
         val r = git(dir, *args.toTypedArray(), timeoutMs = 30_000)
         if (r.exitCode != 0) throw IOException(gitError(r))
-        // GuestRunner 的 stdout 上限为 1 MB（maxOutputBytes），到顶时最后一个文件可能不全：丢掉它并标记截断。
-        val nearLimit = r.stdout.length >= DIFF_TRUNCATE_THRESHOLD
-        var diffs = GitParse.unifiedDiff(r.stdout).let { if (nearLimit && it.isNotEmpty()) it.dropLast(1) else it }.map(::toContract)
-        if (nearLimit) throw DiffTooLargeException(diffs)
+        // GuestRunner 的 stdout 上限是「字节」(maxOutputBytes = 1 MB)，drain 到顶即切断，最后一个文件可能不全。
+        // 因此按 UTF-8 字节数判断是否贴近上限：r.stdout.length 是 UTF-16 码元数，中文等多字节内容每字约占 3 字节、
+        // 却只算 1 个 length，永远到不了阈值 → 大 diff 检测不到（第 2 轮回归）。改用 stdout 的 UTF-8 字节数。
+        val nearLimit = r.stdout.toByteArray(Charsets.UTF_8).size >= DIFF_TRUNCATE_THRESHOLD
+        if (nearLimit) {
+            val parsed = GitParse.unifiedDiff(r.stdout).map(::toContract)
+            // 多文件时丢掉可能被切断的最后一个；单文件（界面都是按文件查看）就保留它，展示大部分优于什么都不给。
+            throw DiffTooLargeException(if (parsed.size > 1) parsed.dropLast(1) else parsed)
+        }
+        var diffs = GitParse.unifiedDiff(r.stdout).map(::toContract)
         // 未跟踪文件 git diff 不输出：只有确认「未跟踪且未被忽略」时才按「全部新增」生成（参考 Pi-Web createAddedFilePatch）。
         // 干净的已跟踪文件、只有暂存改动的文件、被 .gitignore 忽略的文件都返回空表。
         if (diffs.isEmpty() && path != null && !staged) {
@@ -283,7 +289,7 @@ class RootfsWorkspace(
     companion object {
         const val HOME = "/root"
 
-        /** 略低于 GuestRunner 的 1 MB 输出上限（按字符计，多字节内容会更早到顶，宁可多报截断）。 */
+        /** 略低于 GuestRunner 的 1 MB 输出上限，单位为 UTF-8 字节（与 maxOutputBytes 同一单位）；留 4 KB 余量，宁可多报截断。 */
         internal const val DIFF_TRUNCATE_THRESHOLD = (1 shl 20) - 4096
 
         /**
@@ -388,7 +394,14 @@ class RootfsWorkspace(
     }
 }
 
-/** diff 输出超过 GuestRunner 上限被截断；[partial] 是完整解析出的前几个文件（已丢掉可能不全的最后一个）。 */
-class DiffTooLargeException(val partial: List<FileDiff>) : IOException("diff 过大，已截断（只显示前 ${partial.size} 个文件）；请按文件查看")
+/**
+ * diff 输出超过 GuestRunner 的 1 MB 字节上限被截断。[partial] 是完整解析出的文件：
+ * 多文件时已丢掉可能不全的最后一个，单文件时保留（界面本就按文件查看，展示大部分优于空白）。
+ * 契约 [FileDiff] 没有截断标志（契约冻结），故目前只能经此异常以 [message] 提示；
+ * 让 partial 随 Ok 返回需给契约加截断字段，另开 PR。
+ */
+class DiffTooLargeException(val partial: List<FileDiff>) : IOException(
+    if (partial.size <= 1) "改动过大，已超过 1 MB 显示上限被截断，下面只是其中一部分" else "改动过大，已截断（只显示前 ${partial.size} 个文件）；请按文件查看",
+)
 
 class TooLargeException(val limit: Long) : IOException("文件超过 ${limit / (1024 * 1024)} MB，无法导入")
