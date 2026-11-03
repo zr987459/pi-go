@@ -25,7 +25,7 @@ import kotlinx.coroutines.withContext
  *
  * - 扫描用 [SessionScanner]（增量续读）；索引缓存写到 [cacheFile]，冷启动先载入再增量扫。
  * - 置顶、归档、未读、名字锁定存 [SessionMetaStore]（宿主文件）。
- * - [suggestTitle] 读会话文件当前分支的文字，交给 [TitleGenerator]（容器里 `pi --print`）。
+ * - [suggestTitle] r3 起不再生成标题（自动起名已删除）。
  */
 class PiSessionIndex(
     /** 宿主上的 `~/.pi/agent/sessions` 目录（`runtime.hostFile("/root/.pi/agent/sessions")`）。 */
@@ -33,9 +33,6 @@ class PiSessionIndex(
     private val sessionsGuestDir: String = "/root/.pi/agent/sessions",
     private val metaStore: SessionMetaStore,
     private val cacheFile: File?,
-    private val titles: TitleGenerator?,
-    /** 生成标题用的模型（一般是当前会话的模型）；null 时用 pi 默认模型。 */
-    private val titleModel: () -> ModelInfo? = { null },
     private val io: CoroutineDispatcher = Dispatchers.IO,
 ) : SessionIndex {
     private val scanner = SessionScanner()
@@ -89,13 +86,9 @@ class PiSessionIndex(
     override suspend fun setUnread(guestPath: String, unread: Boolean) = edit { metaStore.setUnread(guestPath, unread) }
     override suspend fun markNameLocked(guestPath: String) = edit { metaStore.lockName(guestPath) }
 
-    override suspend fun suggestTitle(guestPath: String): Outcome<String> {
-        val gen = titles ?: return Outcome.Err(ErrCode.UNKNOWN, "自动命名不可用")
-        val host = hostOf(guestPath) ?: return Outcome.Err(ErrCode.UNKNOWN, "不是会话目录里的文件")
-        val items = withContext(io) { SessionTranscriptReader.read(host) }
-        if (items.isEmpty()) return Outcome.Err(ErrCode.UNKNOWN, "会话没有用户消息")
-        return gen.generate(items, titleModel())
-    }
+    /** r3：自动起名已删除（pi 本身没有，DESIGN-r3 §1.1）；会话名只由用户 `/name` 设置。 */
+    override suspend fun suggestTitle(guestPath: String): Outcome<String> =
+        Outcome.Err(ErrCode.UNKNOWN, "pi 没有自动起名：用 /name 设置会话名")
 
     private suspend fun edit(f: () -> Unit) = withContext(io) {
         f()

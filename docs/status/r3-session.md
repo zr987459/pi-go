@@ -16,3 +16,7 @@
 - 下一步：编译修错 → 写 PiFeatureCoverageTest、FormSwitchContractTest、SessionHostFormSwitchTest、AbortRetryTest、QueueBackToDraftTest、AtFileExpansionSnapshotTest、PiSettingsSnapshotTest、PiSettingsSchemaCoverageTest、LocalBlocksNotPersistedTest。
 - 07:55 `:core:session:testDebugUnitTest` 全绿（18 个测试）：PiFeatureCoverageTest、FormSwitchContractTest、SessionHostFormSwitchTest、AbortRetryTest、QueueBackToDraftTest、AtFileExpansionSnapshotTest、PiSettingsSnapshotTest、PiSettingsSchemaCoverageTest、LocalBlocksNotPersistedTest。
 - 下一步：ChatControllerNoFormParamTest（feature/chat）；git mv LineDiff / SessionTreeRows / Ansi 进 core/session（他人范围的引用先加 typealias 桥接）；删 AutoNamer / AutoTitle / feature/commands/ui；NoRemovedFeaturesTest（@Ignore）；notices；开 PR。
+- 08:00 移动：`LineDiff`、`SessionTreeRows`（feature/usage）与 `Ansi`/`OutputSearch`（feature/files）移进 `core/session/.../text/`，旧位置只剩 `@Deprecated` typealias 转发桥接；`feature/usage/logic/CompactionSummary.kt` 改为指向 `core/protocol/CompactionSummary` 的桥接。范围外最小改动：`feature/usage/build.gradle.kts`、`feature/files/build.gradle.kts` 加依赖；`feature/files/output/OutputViewer.kt` 改两行 import（嵌套类型不能经 typealias 访问）。
+- 删除：`feature/commands/data/AutoNamer.kt`、`AutoTitle.kt` 及其测试；`PiSessionIndex.suggestTitle` 改为返回「pi 没有自动起名」。`feature/commands/ui/**` 仍被 app 引用 → 先 `@Deprecated`，等 r3/app 去引用后删。
+- `NoRemovedFeaturesTest`（@Ignore）、`ChatControllerNoFormParamTest`、`docs/notices/r3-session.md`。core/session、feature/commands、feature/chat 单测绿。
+- 下一步：等 PR #15 合入 main → merge main → 开 PR；期间跑 assembleDebug / 全量 testDebugUnitTest。

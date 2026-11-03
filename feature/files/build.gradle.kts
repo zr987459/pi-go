@@ -31,6 +31,7 @@ kotlin {
 
 dependencies {
     implementation(project(":core:contract"))
+    implementation(project(":core:session"))  // r3/session：Ansi 移到 core/session 的转发桥接
     implementation(project(":core:ui"))
     implementation(libs.coil.compose)
     implementation(libs.androidx.exifinterface)

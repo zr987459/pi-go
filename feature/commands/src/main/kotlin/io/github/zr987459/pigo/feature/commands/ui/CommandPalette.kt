@@ -19,12 +19,14 @@ import androidx.compose.ui.unit.dp
 import io.github.zr987459.pigo.contract.SlashCommand
 
 /** 候选面板的一组（来源 + 标题 + 命令）。由 W5 从 ChatScreenState.slash 映射过来。 */
+@Deprecated("r3: feature/commands/ui 由 r3/session 删除；UI 形态的 / 面板与技能页由 r3/calm 重画（CalmSheet）。r3/app 去掉 app 里的引用后删除本文件")
 data class PaletteGroup(val title: String, val commands: List<SlashCommand>)
 
 /**
  * 斜杠命令候选面板（C3），挂在输入框上方。分组显示扩展命令、技能、提示模板，每项带描述；
  * 点选即 [onPick]（ChatController.pickCommand 会把草稿补成 `/name `）。
  */
+@Deprecated("r3: feature/commands/ui 由 r3/session 删除；UI 形态的 / 面板与技能页由 r3/calm 重画（CalmSheet）。r3/app 去掉 app 里的引用后删除本文件")
 @Composable
 fun CommandPalette(
     groups: List<PaletteGroup>,
