@@ -171,4 +171,95 @@ class ChatReducerTest {
         s = r.reduce(s, ev("""{"type":"compaction_end","aborted":false,"willRetry":false}"""), 0)
         assertEquals(before, s)
     }
+
+    private fun arr(vararg json: String) = kotlinx.serialization.json.JsonArray(json.map { RecordCodec.json.parseToJsonElement(it) })
+
+    @Test
+    fun interruptWithdrawsQueuedAndUnconfirmedMessagesAndRebuildKeepsThem() {
+        // 审查 #2：崩溃 / 强制重启时排队中的消息不能悄悄消失。
+        var s = r.addPendingUser(ChatState(), "local-0", "第一条")
+        s = r.reduce(s, ev("""{"type":"agent_start"}"""), 0)
+        s = r.reduce(s, userStart("第一条"), 0)
+        s = r.addPendingUser(s, "local-1", "排队")
+        s = r.setDelivery(s, "local-1", Delivery.QUEUED)
+        s = r.addPendingUser(s, "local-2", "发送中")
+        s = r.reduce(s, ev("""{"type":"queue_update","steering":["扩展插的"],"followUp":["排队"]}"""), 0)
+        val res = r.interruptWithdrawing(s, NoticeKind.INTERRUPTED, "引擎意外退出")
+        assertEquals(listOf("排队", "发送中", "扩展插的"), res.withdrawn.map { it.text })
+        val users = res.state.items.filterIsInstance<ChatItem.User>()
+        assertEquals(listOf(Delivery.SENT, Delivery.FAILED, Delivery.FAILED, Delivery.FAILED), users.map { it.delivery })
+        assertTrue(res.state.queue.isEmpty)
+        assertTrue(res.state.items.any { it is ChatItem.Notice && it.text.startsWith("3 条消息未发出") })
+        // 重建：历史里只有第一条；撤回的消息以「发送失败」接在后面（不自动重发）
+        val rebuilt = r.fromMessages(arr("""{"role":"user","content":"第一条"}"""), base = res.state, carry = res.withdrawn)
+        assertEquals(listOf("第一条", "排队", "发送中", "扩展插的"), rebuilt.items.filterIsInstance<ChatItem.User>().map { it.text })
+        assertEquals(Delivery.FAILED, rebuilt.items.filterIsInstance<ChatItem.User>().last().delivery)
+        assertTrue(rebuilt.items.last().let { it is ChatItem.Notice && it.text == ChatReducer.withdrawnText(3) })
+        // 失败气泡已不在待确认集合：之后同文本的 user 消息不会把它「确认」
+        val later = r.reduce(rebuilt, userStart("排队"), 0)
+        assertEquals(Delivery.FAILED, (later.items.first { it.key == "local-1" } as ChatItem.User).delivery)
+    }
+
+    @Test
+    fun sentButUnconfirmedMessageAlreadyInHistoryIsNotDuplicated() {
+        var s = r.addPendingUser(ChatState(), "local-0", "刚发的")
+        s = r.setDelivery(s, "local-0", Delivery.SENT)
+        val res = r.interruptWithdrawing(s, NoticeKind.STOPPED, "已强制停止")
+        assertEquals(1, res.withdrawn.size)
+        val rebuilt = r.fromMessages(arr("""{"role":"user","content":"刚发的"}"""), base = res.state, carry = res.withdrawn)
+        assertEquals(1, rebuilt.items.count { it is ChatItem.User })
+        assertEquals(Delivery.SENT, (rebuilt.items.single() as ChatItem.User).delivery)
+    }
+
+    @Test
+    fun timedOutPromptStaysConfirmableAndIsNotDuplicated() {
+        // 审查 Nit #6：prompt 应答超时只是「不确定」，之后的 message_start(user) 确认这条气泡而不是追加一条。
+        var s = r.addPendingUser(ChatState(), "local-0", "慢慢来")
+        s = r.setDelivery(s, "local-0", Delivery.FAILED, uncertain = true)
+        assertEquals(Delivery.FAILED, (s.items.single() as ChatItem.User).delivery)
+        s = r.reduce(s, ev("""{"type":"agent_start"}"""), 0)
+        s = r.reduce(s, userStart("慢慢来"), 0)
+        val u = s.items.single() as ChatItem.User
+        assertEquals("local-0", u.key)
+        assertEquals(Delivery.SENT, u.delivery)
+        // 被拒绝（确定失败）的则不再等待确认
+        var t = r.addPendingUser(ChatState(), "local-1", "被拒")
+        t = r.setDelivery(t, "local-1", Delivery.FAILED)
+        t = r.reduce(t, userStart("被拒"), 0)
+        assertEquals(2, t.items.size)
+    }
+
+    @Test
+    fun toolCardsOfNonToolUseMessagesAreNotExecuted() {
+        var s = r.reduce(ChatState(), ev("""{"type":"agent_start"}"""), 0)
+        s = r.reduce(s, ev("""{"type":"message_end","message":{"role":"assistant","content":[{"type":"toolCall","id":"e1","name":"bash","arguments":{}}],"stopReason":"error","errorMessage":"boom"}}"""), 0)
+        s = r.reduce(s, ev("""{"type":"message_end","message":{"role":"assistant","content":[{"type":"toolCall","id":"l1","name":"bash","arguments":{}}],"stopReason":"length"}}"""), 0)
+        val tools = s.items.filterIsInstance<ChatItem.Tool>()
+        assertEquals(listOf(ToolStatus.ERROR, ToolStatus.ERROR), tools.map { it.status })
+        assertTrue(tools.all { it.result.toString().contains(ChatReducer.NOT_EXECUTED) })
+        // toolUse：正常 PENDING，settled 时没开始执行的落为「未执行」
+        s = r.reduce(s, ev("""{"type":"message_end","message":{"role":"assistant","content":[{"type":"toolCall","id":"t1","name":"bash","arguments":{}}],"stopReason":"toolUse"}}"""), 0)
+        assertEquals(ToolStatus.PENDING, (s.items.first { it.key == "tool-t1" } as ChatItem.Tool).status)
+        s = r.reduce(s, ev("""{"type":"agent_settled","aborted":true}"""), 0)
+        assertEquals(ToolStatus.ERROR, (s.items.first { it.key == "tool-t1" } as ChatItem.Tool).status)
+        // interrupt 同样关闭 PENDING
+        var u = r.reduce(ChatState(), ev("""{"type":"message_end","message":{"role":"assistant","content":[{"type":"toolCall","id":"t2","name":"bash","arguments":{}}],"stopReason":"toolUse"}}"""), 0)
+        u = r.interrupt(u, NoticeKind.INTERRUPTED, "x")
+        assertEquals(ToolStatus.ERROR, (u.items.first { it.key == "tool-t2" } as ChatItem.Tool).status)
+    }
+
+    @Test
+    fun rebuildClosesPendingToolsUnlessLiveAndResetsQueueAndContext() {
+        val msgs = arr(
+            """{"role":"user","content":"跑"}""",
+            """{"role":"assistant","content":[{"type":"toolCall","id":"p1","name":"bash","arguments":{}}],"stopReason":"toolUse"}""",
+        )
+        val base = ChatState(queue = QueueSnapshot(listOf("a"), listOf("b")), contextPercent = 40.0)
+        val idle = r.fromMessages(msgs, base = base)
+        assertEquals(ToolStatus.ERROR, idle.items.filterIsInstance<ChatItem.Tool>().single().status)
+        assertTrue(idle.queue.isEmpty)
+        assertNull(idle.contextPercent)
+        val live = r.fromMessages(msgs, base = base, live = true)
+        assertEquals(ToolStatus.PENDING, live.items.filterIsInstance<ChatItem.Tool>().single().status)
+    }
 }

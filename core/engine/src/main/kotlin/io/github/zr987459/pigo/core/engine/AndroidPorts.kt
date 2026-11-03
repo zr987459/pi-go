@@ -63,21 +63,30 @@ class SharedPrefsRunMarker(context: Context) : RunMarkerStore {
     }
 }
 
-/** 引擎进程存在时启动前台服务 [EngineService]，进程结束时停止。 */
-class ServiceForegroundPort(context: Context) : ForegroundPort {
+/**
+ * 引擎「希望运行」期间保持前台服务 [EngineService]（由 PiEngine 在首次启动时打开、close / 放弃恢复时关闭，
+ * 崩溃恢复中的多次 boot 不会反复启停）。经 [ForegroundGate] 保证服务进入前台之前不会被 stopService。
+ */
+class ServiceForegroundPort(context: Context, private val gate: ForegroundGate = EngineService.gate) : ForegroundPort {
     private val app = context.applicationContext
 
-    @Volatile private var active = false
-
     override fun onEngineActive(active: Boolean) {
-        if (this.active == active) return
-        this.active = active
-        try {
-            val intent = Intent(app, EngineService::class.java)
-            if (active) ContextCompat.startForegroundService(app, intent) else app.stopService(intent)
-        } catch (e: Exception) {
-            // Android 12+ 后台启动前台服务受限：引擎照常运行，只是不在前台（见「需真机验证」）。
-            Log.w("PiGoEngine", "前台服务启停失败：${e.message}")
+        val intent = Intent(app, EngineService::class.java)
+        when (gate.request(active)) {
+            ForegroundGate.Action.START -> try {
+                ContextCompat.startForegroundService(app, intent)
+            } catch (e: Exception) {
+                // Android 12+ 后台启动前台服务受限：引擎照常运行，只是不在前台（见「需真机验证」）。
+                gate.onStartFailed()
+                Log.w("PiGoEngine", "前台服务启动失败：${e.message}")
+            }
+            ForegroundGate.Action.STOP -> try {
+                app.stopService(intent)
+            } catch (e: Exception) {
+                Log.w("PiGoEngine", "前台服务停止失败：${e.message}")
+            }
+            // 服务还没 startForeground：它进入前台后会看到「不再需要」并 stopSelf。
+            ForegroundGate.Action.NONE -> Unit
         }
     }
 }

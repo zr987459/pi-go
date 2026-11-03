@@ -79,6 +79,8 @@ class ChatReducer {
                 item is ChatItem.Assistant && item.streaming -> item.copy(streaming = false, stopReason = item.stopReason ?: if (aborted) "aborted" else null)
                 // 本轮已结束但工具没有结束事件：只可能是被中止或进程侧异常，标为失败。
                 item is ChatItem.Tool && item.status == ToolStatus.RUNNING -> item.copy(status = ToolStatus.ERROR)
+                // 本轮已结束仍未开始执行的工具：pi 不会再执行它，不能一直转圈。
+                item is ChatItem.Tool && item.status == ToolStatus.PENDING -> item.notExecuted()
                 else -> item
             }
         }
@@ -291,9 +293,15 @@ class ChatReducer {
      * 用 `get_messages` 的结果重建时间线（DESIGN.md §3.8）。保留 [base] 里的会话元信息（模型、标题、队列等），
      * 清空条目与内部簿记；assistant 的 toolCall 与后续 `toolResult` 按 `toolCallId` 合并成一张卡。
      */
-    fun fromMessages(messages: JsonArray, base: ChatState = ChatState()): ChatState {
+    fun fromMessages(
+        messages: JsonArray,
+        base: ChatState = ChatState(),
+        carry: List<ChatItem.User> = emptyList(),
+        live: Boolean = false,
+    ): ChatState {
         reset()
-        var s = base.copy(items = emptyList(), running = false, retry = null)
+        // 队列与上下文占用属于进程 / 旧会话：重建后以新的 queue_update、get_session_stats 为准。
+        var s = base.copy(items = emptyList(), running = false, retry = null, queue = QueueSnapshot.EMPTY, contextPercent = null)
         for (m in messages) {
             val o = m as? JsonObject ?: continue
             s = when (val role = o.str("role")) {
@@ -308,6 +316,15 @@ class ChatReducer {
                 "system" -> s
                 else -> appendAux(s, role, o)
             }
+        }
+        // 没有 toolResult 的工具调用：会话不在运行中时 pi 不会再执行它们，标「未执行」，不留转圈的卡片。
+        if (!live) s = s.copy(items = s.items.map { if (it is ChatItem.Tool && it.status == ToolStatus.PENDING) it.notExecuted() else it })
+        // 进程崩溃 / 强制重启时没能送达的消息（排队中、发送中），以「发送失败」气泡接在历史后面，由用户点「重试」，不自动重发。
+        if (carry.isNotEmpty()) {
+            val tail = s.items.filterIsInstance<ChatItem.User>().map { it.text }.takeLast(carry.size)
+            // 「已发送」但没等到 message_start 的消息可能其实已写进会话：已出现在历史末尾的不再重复。
+            val kept = carry.filterNot { c -> c.delivery == Delivery.SENT && c.text in tail }
+            if (kept.isNotEmpty()) s = s.copy(items = s.items + kept.map { it.copy(delivery = Delivery.FAILED) }).withNotice(NoticeKind.INFO, withdrawnText(kept.size))
         }
         return s
     }
@@ -324,9 +341,17 @@ class ChatReducer {
      * 收到 `prompt` 的 response 后更新气泡：started → 已发送，queued → 已排队，失败 → 标红。
      * 已被 `message_start` 确认（SENT）的气泡不会被降级为 QUEUED；`handled` 不会有 message_start，直接确认。
      */
-    fun setDelivery(state: ChatState, key: String, delivery: Delivery, confirmed: Boolean = false): ChatState {
+    fun setDelivery(
+        state: ChatState,
+        key: String,
+        delivery: Delivery,
+        confirmed: Boolean = false,
+        uncertain: Boolean = false,
+    ): ChatState {
         val wasConfirmed = key !in unconfirmed
-        if (confirmed || delivery == Delivery.FAILED) unconfirmed.remove(key)
+        // uncertain：prompt 应答超时，pi 可能已经收下。气泡先标红，但仍留在待确认集合里，
+        // 之后若收到同文本的 message_start(user)，就把这条气泡确认为「已发送」，而不是再追加一条。
+        if (confirmed || (delivery == Delivery.FAILED && !uncertain)) unconfirmed.remove(key)
         return state.updateItem(key) {
             val u = it as? ChatItem.User ?: return@updateItem it
             if (u.delivery == Delivery.SENT && wasConfirmed && delivery != Delivery.FAILED) u else u.copy(delivery = delivery)
@@ -353,23 +378,56 @@ class ChatReducer {
      * 进程被强杀或异常退出：结束一切流式状态，未结束的工具标失败，追加一条提示。
      * 队列清空（进程里的队列随进程一起没了，以重启后的 `queue_update` 为准）。
      */
-    fun interrupt(state: ChatState, kind: NoticeKind, text: String): ChatState {
+    fun interrupt(state: ChatState, kind: NoticeKind, text: String): ChatState = interruptWithdrawing(state, kind, text).state
+
+    /** [interrupt] 的结果，加上随进程一起丢掉、需要用户决定是否重发的消息（按时间线顺序）。 */
+    data class Interrupted(val state: ChatState, val withdrawn: List<ChatItem.User>)
+
+    /**
+     * 同 [interrupt]，并把没能送达的消息标为「发送失败」（可重试、不会自动重发）：
+     * - 「已排队」的气泡：pi 的队列只在进程内存里，进程没了它们一定没发出；
+     * - 「发送中」或「已发送」但还没等到 `message_start(user)` 确认的气泡；
+     * - `queue_update` 里有、但时间线上没有对应气泡的文本（例如扩展排进去的），补一条失败气泡，文本不丢。
+     * 返回的 [Interrupted.withdrawn] 由调用方在重建（[fromMessages] 的 `carry`）后接回时间线。
+     */
+    fun interruptWithdrawing(state: ChatState, kind: NoticeKind, text: String): Interrupted {
         streamingKey = null
         thinkingStartedAt.clear()
+        val queued = (state.queue.steering + state.queue.followUp).toMutableList()
+        val withdrawn = ArrayList<ChatItem.User>()
         val items = state.items.map { item ->
             when {
                 item is ChatItem.Assistant && item.streaming -> item.copy(streaming = false, stopReason = item.stopReason ?: "aborted")
                 item is ChatItem.Tool && (item.status == ToolStatus.RUNNING) -> item.copy(status = ToolStatus.ERROR)
+                item is ChatItem.Tool && item.status == ToolStatus.PENDING -> item.notExecuted()
+                item is ChatItem.User && (
+                    item.delivery == Delivery.QUEUED || item.delivery == Delivery.SENDING ||
+                        (item.key in unconfirmed && item.delivery != Delivery.FAILED)
+                    ) -> {
+                    queued.remove(item.text)
+                    withdrawn += item
+                    unconfirmed.remove(item.key)
+                    item.copy(delivery = Delivery.FAILED)
+                }
                 else -> item
             }
         }
-        return state.copy(
-            items = items + ChatItem.Notice(nextKey("n"), kind, text),
+        val orphans = queued.map { ChatItem.User(nextKey("u"), it, Delivery.FAILED) }
+        withdrawn += orphans
+        val notices = buildList {
+            if (withdrawn.isNotEmpty()) {
+                add(ChatItem.Notice(nextKey("n"), NoticeKind.INFO, withdrawnText(withdrawn.size)))
+            }
+            add(ChatItem.Notice(nextKey("n"), kind, text))
+        }
+        val next = state.copy(
+            items = items + orphans + notices,
             running = false,
             queue = QueueSnapshot.EMPTY,
             retry = null,
             statusLine = if (state.statusLine == COMPACTING) null else state.statusLine,
         )
+        return Interrupted(next, withdrawn)
     }
 
     /** 新会话：清空时间线与簿记，保留模型与思考级别。 */
@@ -390,15 +448,21 @@ class ChatReducer {
 
     private fun ChatState.withNotice(kind: NoticeKind, text: String) = copy(items = items + ChatItem.Notice(nextKey("n"), kind, text))
 
-    /** assistant 消息里的每个 toolCall 先放一张 PENDING 卡（紧跟在该消息后），实时与重建两条路径顺序一致。 */
+    /**
+     * assistant 消息里的每个 toolCall 先放一张 PENDING 卡（紧跟在该消息后），实时与重建两条路径顺序一致。
+     * 只有 `stopReason == "toolUse"` 时 pi 才会执行这些工具；中止 / 出错 / 截断的消息里的 toolCall 不会执行，
+     * 直接放「未执行」的失败卡，不让它一直转圈。
+     */
     private fun ChatState.withToolPlaceholders(a: ChatItem.Assistant): ChatState {
+        val willRun = a.stopReason == null || a.stopReason == "toolUse"
         val calls = a.blocks.filterIsInstance<ContentBlock.ToolCall>().filter { it.id.isNotEmpty() }
         if (calls.isEmpty()) return this
         val missing = calls.filter { c -> items.none { it.key == toolKey(c.id) } }
         if (missing.isEmpty()) return this
         val idx = items.indexOfFirst { it.key == a.key }
         val cards = missing.map { c ->
-            ChatItem.Tool(toolKey(c.id), c.id, c.name, args = Messages.parseArgs(c.argsJson), status = ToolStatus.PENDING)
+            val card = ChatItem.Tool(toolKey(c.id), c.id, c.name, args = Messages.parseArgs(c.argsJson), status = ToolStatus.PENDING)
+            if (willRun) card else card.notExecuted()
         }
         val list = items.toMutableList()
         list.addAll(if (idx < 0) list.size else idx + 1, cards)
@@ -415,6 +479,18 @@ class ChatReducer {
         const val COMPACTING = "正在压缩上下文…"
 
         fun toolKey(toolCallId: String) = "tool-$toolCallId"
+
+        const val NOT_EXECUTED = "未执行（本轮已中止）"
+
+        fun withdrawnText(n: Int) = "$n 条消息未发出，已标为发送失败，可点「重试」重新发送"
+
+        /** 不会再执行的工具卡：标失败，结果写明「未执行」（已有结果的保留）。 */
+        internal fun ChatItem.Tool.notExecuted(): ChatItem.Tool = copy(
+            status = ToolStatus.ERROR,
+            result = result ?: buildJsonObject {
+                put("content", JsonArray(listOf(buildJsonObject { put("type", JsonPrimitive("text")); put("text", JsonPrimitive(NOT_EXECUTED)) })))
+            },
+        )
     }
 }
 

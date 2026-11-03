@@ -210,4 +210,29 @@ class ChatReducerFixtureTest {
         assertFalse(tools.containsKey("ghost"))
         assertNull(st.statusLine)
     }
+
+    @Test
+    fun abortDuringToolcallLeavesNoSpinningCards() {
+        // 审查 #3：中止 / 出错 / 截断的消息里的 toolCall 不会被执行，卡片不能一直 PENDING。
+        val st = snapshot("handwritten/abort-during-toolcall")
+        assertFalse(st.running)
+        val tools = st.all<ChatItem.Tool>()
+        assertEquals(listOf("call_abort_1", "call_abort_2"), tools.map { it.toolCallId })
+        assertTrue(tools.all { it.status == ToolStatus.ERROR })
+        // 重建路径一致：没有 toolResult 的 toolCall 也落为「未执行」
+        val messages = kotlinx.serialization.json.JsonArray(
+            listOf(
+                RecordCodec.json.parseToJsonElement("""{"role":"user","content":"列一下文件"}"""),
+                RecordCodec.json.parseToJsonElement("""{"role":"assistant","content":[{"type":"toolCall","id":"call_abort_1","name":"bash","arguments":{}}],"stopReason":"aborted"}"""),
+                RecordCodec.json.parseToJsonElement("""{"role":"user","content":"再试一次"}"""),
+                RecordCodec.json.parseToJsonElement("""{"role":"assistant","content":[{"type":"toolCall","id":"call_abort_2","name":"read","arguments":{"path":"README.md"}}],"stopReason":"toolUse"}"""),
+            ),
+        )
+        val rebuilt = ChatReducer().fromMessages(messages)
+        assertTrue(rebuilt.all<ChatItem.Tool>().all { it.status == ToolStatus.ERROR })
+        assertEquals(
+            st.items.map { Fixtures.renderItem(it, withKeys = false) }.filterNot { it.startsWith("NOTICE") },
+            rebuilt.items.map { Fixtures.renderItem(it, withKeys = false) }.filterNot { it.startsWith("NOTICE") },
+        )
+    }
 }

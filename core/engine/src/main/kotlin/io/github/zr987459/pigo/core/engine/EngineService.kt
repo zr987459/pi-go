@@ -23,22 +23,36 @@ import kotlinx.coroutines.launch
  */
 class EngineService : LifecycleService() {
 
+    private var lastText = "pi 引擎已启动"
+
     override fun onCreate() {
         super.onCreate()
         ensureChannel()
-        startForeground(NOTIFICATION_ID, build("pi 引擎已启动"))
+        startForeground(NOTIFICATION_ID, build(lastText))
         val engine = boundEngine ?: return
         lifecycleScope.launch {
             combine(engine.status, engine.chat.map { it.running }.distinctUntilChanged()) { st, running -> text(st, running) }
                 .distinctUntilChanged()
-                .collect { t -> notify(t) }
+                .collect { t ->
+                    lastText = t
+                    notify(t)
+                }
         }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
+        // 每次 startForegroundService 都要求服务调用 startForeground；先进入前台，再看引擎是否已经不需要服务了
+        // （引擎在服务进入前台前就要求关闭时，ServiceForegroundPort 不会 stopService，而由这里 stopSelf，见 ForegroundGate）。
+        startForeground(NOTIFICATION_ID, build(lastText))
+        if (gate.onForegroundStarted()) stopSelf()
         // 被系统杀掉后不自动拉起：冷启动时由 App 按运行标记恢复会话（§3.9）。
         return START_NOT_STICKY
+    }
+
+    override fun onDestroy() {
+        gate.onServiceDestroyed()
+        super.onDestroy()
     }
 
     private fun text(st: EngineStatus, running: Boolean): String = when {
@@ -87,5 +101,8 @@ class EngineService : LifecycleService() {
         /** 由装配层（EngineBindings.real）设置，供通知显示状态。 */
         @Volatile
         var boundEngine: EngineClient? = null
+
+        /** 引擎侧（ServiceForegroundPort）与服务侧共享的启停协调。 */
+        val gate = ForegroundGate()
     }
 }

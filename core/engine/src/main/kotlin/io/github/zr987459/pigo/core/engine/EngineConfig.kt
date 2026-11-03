@@ -27,6 +27,11 @@ data class EngineConfig(
     val stableResetMs: Long = 60_000,
     /** 正常停止进程时关 stdin 后等待退出的时间（§4.5）。 */
     val stopGraceMs: Long = 5_000,
+    /**
+     * 对话类扩展 UI 请求（select/confirm/input/editor）暂时没有界面订阅时，等待订阅者出现的时间；
+     * 超时仍无人处理才回 cancelled（§3.6：pi 不能永久挂起）。
+     */
+    val uiRequestGraceMs: Long = 3_000,
     /** 额外环境变量（测试用：例如桌面上覆盖 HOME）。 */
     val extraEnv: Map<String, String> = emptyMap(),
 ) {

@@ -35,6 +35,7 @@ import io.github.zr987459.pigo.core.protocol.StderrClassifier
 import io.github.zr987459.pigo.core.protocol.long
 import io.github.zr987459.pigo.core.protocol.str
 import io.github.zr987459.pigo.core.protocol.strings
+import io.github.zr987459.pigo.core.protocol.RecordCodec
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CompletableDeferred
@@ -45,6 +46,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -56,6 +58,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.JsonObject
 
 /**
  * 真实引擎：管理一个常驻 `pi --mode rpc` 进程，实现 [EngineClient]（DESIGN.md §3）。
@@ -70,7 +73,10 @@ import kotlinx.coroutines.withTimeoutOrNull
  * - `running` 只由 `agent_start` / `agent_settled`（或进程消失）改变；
  * - 唤醒锁只在「本轮运行中且进程活着」时持有（N1，见 [WakeLockGuard]）；
  * - 停止 = `clear_queue` → `abort`；`abort` 20 s 不应答 → 只结束本进程树 → 以 `--session` 重启并重建（Q5）；
- * - 异常退出 → 退避 1/3/10 s 自动重启最多 3 次，回到上次的会话文件（N2）。
+ * - 异常退出 → 退避 1/3/10 s 自动重启最多 3 次，回到上次的会话文件（N2）；
+ * - 前台服务跟随「希望引擎在运行」而不是每次 boot：首次启动时打开，[close]、非恢复中的启动失败、
+ *   自动恢复放弃时才关闭；崩溃恢复期间不反复启停（见 [ForegroundGate]）；
+ * - 冷启动检查「上一轮被系统中断」只在本实例第一次成功启动时做一次（强制重启、崩溃恢复不做）。
  */
 class PiEngine(
     private val runtime: RuntimeManager,
@@ -122,8 +128,11 @@ class PiEngine(
     @Volatile private var closed = false
     @Volatile private var crashCount = 0
     @Volatile private var recoveryJob: Job? = null
-    /** 冷启动后第一次重建会话时检查「上一轮被系统中断」。 */
+    /** 本实例还没成功启动过：第一次成功启动时检查「上一轮被系统中断」（§3.9），之后不再检查。 */
     @Volatile private var coldStartCheck = true
+
+    /** 对话类扩展 UI 请求按到达顺序逐个投递（无人订阅时等一个短窗口，见 [deliverUi]）。 */
+    private val uiQueue = Channel<Pair<Conn, ExtUiRequest>>(Channel.UNLIMITED)
 
     /** 最近一次连接的 stderr 尾部（诊断页用，已脱敏）。 */
     @Volatile var lastStderr: LineRing = LineRing(500)
@@ -143,6 +152,7 @@ class PiEngine(
 
     init {
         scope.launch(compute) { actorLoop() }
+        scope.launch(compute) { for ((c, req) in uiQueue) deliverUi(c, req) }
     }
 
     // =================================================================== 归约协程
@@ -236,19 +246,60 @@ class PiEngine(
         if (conn?.ready == true) return Outcome.Ok(Unit)
         return lifecycle.withLock {
             if (conn?.ready == true) Outcome.Ok(Unit)
-            else boot(sessionFile, currentCwd, rebuild = sessionFile != null, reason = "按需启动")
+            else boot(sessionFile, currentCwd, rebuild = sessionFile != null, reason = "按需启动", allowResume = true)
         }
     }
 
-    /** 只在 [lifecycle] 锁内调用。 */
+    /**
+     * 只在 [lifecycle] 锁内调用。
+     * @param carry 崩溃 / 强制重启时没送达的消息，重建后以「发送失败」气泡接回（不自动重发）
+     * @param allowResume 本实例首次启动且调用方没指定会话时，可回到运行标记里那个被系统中断的会话
+     * @param inRecovery 崩溃自动恢复中的一次尝试：失败时不关前台服务（由恢复循环决定）
+     */
     private suspend fun boot(
         session: String?,
         cwd: String,
         rebuild: Boolean,
         reason: String,
         trailingNotice: Pair<NoticeKind, String>? = null,
+        carry: List<ChatItem.User> = emptyList(),
+        allowResume: Boolean = false,
+        inRecovery: Boolean = false,
     ): Outcome<Unit> {
         conn?.let { old -> stopConn(old, graceMs = config.stopGraceMs) }
+        // 冷启动检查（§3.9）：在启动进程、任何 runMarker.set/clear 之前读出上一次留下的运行标记。
+        val cold = coldStartCheck
+        val coldMarker = if (cold) readMarker() else null
+        var bootSession = session
+        var bootCwd = cwd
+        var bootRebuild = rebuild
+        var resumed = false
+        if (cold && allowResume && bootSession == null) {
+            resumeTarget(coldMarker)?.let { (file, headerCwd) ->
+                log.i(TAG, "上一轮被系统中断，回到该会话")
+                bootSession = file
+                bootCwd = headerCwd ?: cwd
+                bootRebuild = true
+                resumed = true
+            }
+        }
+        val r = bootInner(bootSession, bootCwd, bootRebuild, reason, trailingNotice, carry, inRecovery, cold, coldMarker)
+        // 回到被中断的会话却启动失败（会话文件损坏等）：清掉标记，下次按需启动走普通流程，不会一直卡在这个会话上。
+        if (r is Outcome.Err && resumed) withContext(io) { runCatching { runMarker.clear() } }
+        return r
+    }
+
+    private suspend fun bootInner(
+        session: String?,
+        cwd: String,
+        rebuild: Boolean,
+        reason: String,
+        trailingNotice: Pair<NoticeKind, String>?,
+        carry: List<ChatItem.User>,
+        inRecovery: Boolean,
+        cold: Boolean,
+        coldMarker: String?,
+    ): Outcome<Unit> {
         val gen = gens.incrementAndGet()
         _status.value = EngineStatus.Starting
         val keyEnv = try {
@@ -262,6 +313,9 @@ class PiEngine(
         val spec = config.spec(session, cwd, keyEnv)
         // 只记 argv 与 cwd，环境变量里有 Key，不写日志。
         log.i(TAG, "启动 pi（$reason）：argv=${spec.argv.joinToString(" ")} cwd=${spec.cwd}")
+        // 希望引擎运行：前台服务保持开启（幂等）。不在每次 boot / 进程退出时启停，避免 startForegroundService
+        // 之后几十毫秒就 stopService、服务还没来得及 startForeground 的崩溃（Android 8+）。
+        setForeground(true)
         val process = try {
             withContext(io) { runtime.start(spec) }
         } catch (e: Exception) {
@@ -269,6 +323,7 @@ class PiEngine(
             val msg = e.message?.let(redactor::redact)
             val d = StderrClassifier.classify(listOfNotNull(msg), null, beforeReady = true)
             _status.value = EngineStatus.Crashed(null, d.kind, d.hint, listOfNotNull(msg), null)
+            if (!inRecovery) setForeground(false)
             return Outcome.Err(d.kind, d.hint, e)
         }
         val ring = LineRing(500)
@@ -286,7 +341,6 @@ class PiEngine(
         )
         val c = Conn(gen, process, channel, cwd, clock())
         conn = c
-        foreground.onEngineActive(true)
         channel.start()
         scope.launch(compute) { pump(c) }
         scope.launch(io) { watch(c) }
@@ -294,14 +348,16 @@ class PiEngine(
         val r = channel.request(RpcCommand.GetState("boot-$gen"), config.bootTimeoutMs)
         if (r is Outcome.Err) {
             c.intentional = true
-            if (r.code == ErrCode.RPC_TIMEOUT) withContext(io + NonCancellable) { safeStop(process, 0) }
+            // 任何握手失败（超时、success:false、进程已退出）都结束这个进程：否则 conn 置空而进程还活着，
+            // 下次按需启动会出现两个 pi。对已退出的进程 stop 是无害的。
+            withContext(io + NonCancellable) { safeStop(process, 0) }
             val exit = withTimeoutOrNull(3_000) { process.awaitExit() }
             delay(50) // 让 stderr 线程把最后几行排空
             val tail = ring.tail(50)
             val d = StderrClassifier.classify(tail, exit, beforeReady = true)
             log.w(TAG, "pi 启动失败（${r.message}）：${d.hint}")
             if (conn === c) conn = null
-            foreground.onEngineActive(false)
+            if (!inRecovery) setForeground(false)
             _status.value = EngineStatus.Crashed(exit, d.kind, d.hint, tail, null)
             mutate { it } // 让 afterPublish 同步唤醒锁
             return Outcome.Err(d.kind, d.hint)
@@ -312,34 +368,97 @@ class PiEngine(
         currentCwd = cwd
         c.ready = true
         mutate { reducer.applyPiState(it, st) }
-        if (rebuild) rebuildFromMessages(c)
+        if (rebuild) rebuildFromMessages(c, carry, live = st.isStreaming)
+        if (cold) {
+            coldStartCheck = false
+            applyColdStart(coldMarker, rebuilt = rebuild)
+        }
         if (trailingNotice != null) mutate { reducer.addNotice(it, trailingNotice.first, trailingNotice.second) }
         // 聊天记录恢复完、提示加上之后才发布就绪状态：观察者不会看到「空闲」而聊天还是半恢复的样子。
         // 恢复期间 afterPublish 不改 Starting；这里按聊天里的 running（含恢复期间到达的事件）定状态。
         _status.value = if (st.isStreaming || _chat.value.running) EngineStatus.Running(lastPiState.copy(isStreaming = true))
         else EngineStatus.Idle(lastPiState.copy(isStreaming = false))
         log.i(TAG, "pi 就绪：session=${st.sessionFile} model=${st.model?.provider}/${st.model?.id}")
+        if (rebuild) scope.launch(io) { stats() } // 重建后上下文占用已清空，重新取
         return Outcome.Ok(Unit)
     }
 
-    private suspend fun rebuildFromMessages(c: Conn) {
-        val r = c.channel.request(RpcCommand.GetMessages(ids.next()), config.getMessagesTimeoutMs)
-        if (r is Outcome.Ok) {
-            val messages = Responses.messages(r.value.data)
-            mutate { reducer.fromMessages(messages, base = it) }
-        } else {
-            log.w(TAG, "get_messages 失败：${(r as Outcome.Err).message}")
+    private val foregroundWanted = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /** 前台服务只在「希望运行」状态变化时通知一次（崩溃恢复中的多次 boot 不重复调用）。 */
+    private fun setForeground(on: Boolean) {
+        if (foregroundWanted.getAndSet(on) != on) foreground.onEngineActive(on)
+    }
+
+    private suspend fun readMarker(): String? = withContext(io) {
+        try {
+            runMarker.get()
+        } catch (e: Exception) {
+            log.w(TAG, "读取运行标记失败", e)
+            null
         }
-        if (coldStartCheck) {
-            coldStartCheck = false
-            val marker = runMarker.get()
-            val sameSession = marker != null && (marker.isEmpty() || marker == sessionFile)
-            val lastIsUnanswered = _chat.value.items.lastOrNull { it !is ChatItem.Notice } is ChatItem.User
-            if (sameSession || lastIsUnanswered) {
-                mutate { reducer.addNotice(it, NoticeKind.INTERRUPTED, "上一轮被系统中断") }
+    }
+
+    /** 运行标记里的会话文件仍在 → (容器内路径, 会话头里的 cwd)；否则 null。 */
+    private suspend fun resumeTarget(marker: String?): Pair<String, String?>? {
+        if (marker.isNullOrEmpty()) return null
+        return withContext(io) {
+            try {
+                val f = runtime.hostFile(marker)
+                if (!f.isFile) return@withContext null
+                val header = f.bufferedReader().use { it.readLine() }
+                val cwd = header?.let { (RecordCodec.json.parseToJsonElement(it) as? JsonObject)?.str("cwd") }
+                marker to cwd?.takeIf { it.isNotBlank() }
+            } catch (e: Exception) {
+                log.w(TAG, "读取被中断会话的信息失败", e)
+                null
             }
-            runMarker.clear()
         }
+    }
+
+    /** §3.9「App 被系统杀」：标记仍在（同一会话）或最后一条是没有回复的用户消息 → 顶部提示。 */
+    private suspend fun applyColdStart(marker: String?, rebuilt: Boolean) {
+        val sameSession = marker != null && (marker.isEmpty() || marker == sessionFile)
+        val lastIsUnanswered = rebuilt && _chat.value.items.lastOrNull { it !is ChatItem.Notice } is ChatItem.User
+        if (sameSession || lastIsUnanswered) {
+            mutate { reducer.addNotice(it, NoticeKind.INTERRUPTED, "上一轮被系统中断") }
+        }
+        if (marker != null && !liveRunning) {
+            withContext(io) {
+                try {
+                    runMarker.clear()
+                } catch (e: Exception) {
+                    log.w(TAG, "清除运行标记失败", e)
+                }
+            }
+        }
+    }
+
+    private suspend fun rebuildFromMessages(c: Conn, carry: List<ChatItem.User> = emptyList(), live: Boolean = false): Outcome<Unit> {
+        val r = c.channel.request(RpcCommand.GetMessages(ids.next()), config.getMessagesTimeoutMs)
+        return if (r is Outcome.Ok) {
+            val messages = Responses.messages(r.value.data)
+            mutate { reducer.fromMessages(messages, base = it, carry = carry, live = live) }
+            Outcome.Ok(Unit)
+        } else {
+            val err = r as Outcome.Err
+            log.w(TAG, "get_messages 失败：${err.message}")
+            // 不悄悄留下一个空的 / 旧的聊天：明确告诉用户历史没加载出来，以及怎么重试。
+            // 崩溃前没送达的消息（carry）此时仍以「发送失败」留在时间线上。
+            mutate { reducer.addNotice(it, NoticeKind.ERROR, HISTORY_FAILED) }
+            err
+        }
+    }
+
+    /**
+     * 重新加载当前会话的历史（「历史加载失败」提示的重试入口）。EngineClient 接口里还没有这个方法，见 PR 说明；
+     * 在接口加上之前，界面可用 `openSession(当前会话文件, 当前 cwd)` 达到同样效果。
+     */
+    suspend fun reloadHistory(): Outcome<Unit> {
+        val s = ensureStarted()
+        if (s is Outcome.Err) return s
+        val c = conn ?: return Outcome.Err(ErrCode.ENGINE_EXIT, "引擎未运行")
+        return rebuildFromMessages(c, live = liveRunning)
     }
 
     /** stdout 记录 → 归约协程；扩展 UI 请求直接分发。 */
@@ -360,7 +479,7 @@ class PiEngine(
         }
     }
 
-    private suspend fun onUiRequest(c: Conn, r: ExtUiRequestRecord) {
+    private fun onUiRequest(c: Conn, r: ExtUiRequestRecord) {
         val o = r.raw
         val req = ExtUiRequest(
             id = r.id,
@@ -375,13 +494,29 @@ class PiEngine(
         )
         if (r.method == "setStatus") {
             val text = o.str("statusText")
-            mutate { it.copy(statusLine = text) }
+            inputs.trySend(Input.Mut({ it.copy(statusLine = text) }, null))
         }
-        // 对话类请求会阻塞 pi：没有界面在听（或缓冲已满）时立即回 cancelled，保证 pi 不会永久挂起（§3.6）。
-        val delivered = _uiRequests.subscriptionCount.value > 0 && _uiRequests.tryEmit(req)
-        if (!delivered && req.needsResponse) {
-            log.w(TAG, "扩展对话框 ${r.method} 无人处理，自动取消")
-            c.channel.send(RpcCommand.ExtensionUiResponse(r.id, cancelled = true))
+        if (!req.needsResponse) {
+            if (_uiRequests.subscriptionCount.value > 0) _uiRequests.tryEmit(req)
+            return
+        }
+        // 对话类请求交给单独的协程按顺序投递：不阻塞 stdout 事件的转发。
+        uiQueue.trySend(c to req)
+    }
+
+    /**
+     * 对话类请求会阻塞 pi（§3.6）：有界面在听就交给它；暂时没人听（例如正在切页、Activity 重建）时
+     * 等 [EngineConfig.uiRequestGraceMs] 的短窗口；仍无人处理才回 cancelled，保证 pi 不会永久挂起。
+     */
+    private suspend fun deliverUi(c: Conn, req: ExtUiRequest) {
+        if (c.exited || conn !== c) return
+        val delivered = withTimeoutOrNull(config.uiRequestGraceMs.coerceAtLeast(1)) {
+            _uiRequests.subscriptionCount.first { it > 0 }
+            _uiRequests.tryEmit(req)
+        } ?: false
+        if (!delivered && !c.exited) {
+            log.w(TAG, "扩展对话框 ${req.method} 无人处理，自动取消")
+            c.channel.send(RpcCommand.ExtensionUiResponse(req.id, cancelled = true))
         }
     }
 
@@ -411,7 +546,6 @@ class PiEngine(
             if (!mine) return@launch
             recoveryJob?.cancel()
             recoveryJob = coroutineContext[Job]
-            foreground.onEngineActive(false)
             runMarker.clear()
             delay(100) // 等 stderr 线程把最后几行排空
             var lastCode = code
@@ -420,13 +554,15 @@ class PiEngine(
             var kind = diag.kind
             var hint = diag.hint
             log.w(TAG, "pi 异常退出：$hint")
-            mutate { reducer.interrupt(it, NoticeKind.INTERRUPTED, "引擎意外退出：$hint") }
+            // 进程里的队列随进程一起没了：排队 / 发送中的消息标为「发送失败」，重建后接回时间线，由用户决定是否重发。
+            val carry = interruptCarrying(NoticeKind.INTERRUPTED, "引擎意外退出：$hint")
             if (clock() - c.bootedAt >= config.stableResetMs) crashCount = 0
             while (!closed) {
                 crashCount++
                 if (crashCount > config.restartBackoffMs.size) {
                     // 3 次仍失败：停在诊断页（stderr 尾部、复制诊断、修复运行环境）。
                     _status.value = EngineStatus.Crashed(lastCode, kind, hint, tail, null)
+                    setForeground(false)
                     return@launch
                 }
                 val wait = config.restartBackoffMs[crashCount - 1]
@@ -437,6 +573,8 @@ class PiEngine(
                     boot(
                         sessionFile, c.cwd, rebuild = true, reason = "崩溃后自动恢复（第 $crashCount 次）",
                         trailingNotice = NoticeKind.INTERRUPTED to "引擎意外退出（$hint），已自动恢复",
+                        carry = carry,
+                        inRecovery = true,
                     )
                 }
                 if (r is Outcome.Ok) return@launch
@@ -457,7 +595,17 @@ class PiEngine(
             c.channel.closeStdin()
             safeStop(c.process, graceMs)
         }
-        foreground.onEngineActive(false)
+    }
+
+    /** 进程被强杀或意外退出：结束流式状态，返回没送达、需要接回时间线的消息。 */
+    private suspend fun interruptCarrying(kind: NoticeKind, text: String): List<ChatItem.User> {
+        var carry: List<ChatItem.User> = emptyList()
+        mutate { st ->
+            val r = reducer.interruptWithdrawing(st, kind, text)
+            carry = r.withdrawn
+            r.state
+        }
+        return carry
     }
 
     private suspend fun safeStop(p: GuestProcess, graceMs: Long) {
@@ -476,8 +624,8 @@ class PiEngine(
             c.intentional = true
             conn = null
             withContext(io + NonCancellable) { safeStop(c.process, 0) }
-            mutate { reducer.interrupt(it, notice.first, notice.second) }
-            boot(sessionFile, c.cwd, rebuild = true, reason = reason, trailingNotice = notice)
+            val carry = interruptCarrying(notice.first, notice.second)
+            boot(sessionFile, c.cwd, rebuild = true, reason = reason, trailingNotice = notice, carry = carry)
         }
 
     /** App 退出 / 服务销毁：结束进程、释放唤醒锁。之后本实例不可再用。 */
@@ -485,7 +633,9 @@ class PiEngine(
         closed = true
         recoveryJob?.cancel()
         lifecycle.withLock { conn?.let { stopConn(it, config.stopGraceMs) } }
+        setForeground(false)
         guard.releaseNow()
+        uiQueue.close()
         _status.value = EngineStatus.Stopped
         inputs.close()
     }
@@ -535,7 +685,9 @@ class PiEngine(
             }
             is Outcome.Err -> {
                 // 失败标红，不自动重发（防止重复）；文本由界面放回输入框（§3.7、§3.9）。
-                mutate { reducer.setDelivery(it, key, Delivery.FAILED) }
+                // 应答超时 ≠ 没收到：pi 可能已经收下这条。气泡仍等 message_start(user) 确认，确认了就变回「已发送」，不会重复出现。
+                val uncertain = r.code == ErrCode.RPC_TIMEOUT
+                mutate { reducer.setDelivery(it, key, Delivery.FAILED, uncertain = uncertain) }
                 if (r.code == ErrCode.RPC_REJECTED) {
                     val hint = ProviderErrors.hint(r.message)
                     Outcome.Err(if (hint.kind == ErrCode.NO_MODEL) ErrCode.NO_MODEL else ErrCode.RPC_REJECTED, r.message)
@@ -619,9 +771,13 @@ class PiEngine(
         val m = call { RpcCommand.GetMessages(it) }
         if (m is Outcome.Ok) {
             val messages = Responses.messages(m.value.data)
-            mutate { reducer.fromMessages(messages, base = it.copy(sessionName = null)) }
+            // fromMessages 会清掉旧会话的队列与上下文占用；占用随后由 stats() 重新取。
+            mutate { reducer.fromMessages(messages, base = it.copy(sessionName = null, statusLine = null), live = liveRunning) }
+        } else {
+            mutate { reducer.addNotice(reducer.cleared(it), NoticeKind.ERROR, HISTORY_FAILED) }
         }
         refreshState()
+        scope.launch(io) { stats() }
         return if (m is Outcome.Err) m else Outcome.Ok(Unit)
     }
 
@@ -681,7 +837,7 @@ class PiEngine(
 
     override suspend fun restart(reason: String): Outcome<Unit> = lifecycle.withLock {
         crashCount = 0
-        boot(sessionFile, currentCwd, rebuild = sessionFile != null, reason = "重启：$reason")
+        boot(sessionFile, currentCwd, rebuild = sessionFile != null, reason = "重启：$reason", allowResume = true)
     }
 
     private suspend fun refreshState() {
@@ -710,5 +866,6 @@ class PiEngine(
     companion object {
         private const val TAG = "PiEngine"
         const val STOPPING = "正在停止…"
+        const val HISTORY_FAILED = "历史记录加载失败，可在会话列表里重新打开本会话重试"
     }
 }

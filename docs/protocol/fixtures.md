@@ -59,6 +59,7 @@ pi 升级（§4.6 兼容范围 `>=1.5.0 <2.0.0`）时应重新录制并比对快
 |---|---|
 | `unknown-event-role.jsonl` | 未知事件类型、未知 `role`（渲染为可展开的原始 JSON）、未知内容块、`custom`（`display:false` 不显示）、`entry_appended`、`bash_execution_update`、`extension_error`、不带 `name` 的 `session_info_changed`；以及一份含 `toolResult`/`bashExecution`/`branchSummary`/`compactionSummary`/未知 role/坏元素的 `get_messages` 结果 |
 | `edge-cases.jsonl` | 没有 `message_start` 的 `message_update`；`text_end` / `thinking_end` / `message_end` 的权威内容覆盖拼接结果；`toolcall_delta` 拼接；`toolResult` 消息不覆盖 `tool_execution_end` 的结果；缺 `tool_execution_start` 的工具；压缩取消/失败；重试最终失败；本轮结束时仍在运行的工具 |
+| `abort-during-toolcall.jsonl` | 工具调用参数流式输出中途停止（`stopReason:"aborted"` 的 `message_end` 带半截 `toolCall`）；`stopReason:"toolUse"` 之后、工具开始执行之前被中止。两种情况 pi 都不会执行工具，卡片落为「未执行」（ERROR），不会一直转圈 |
 
 ## 桌面真 pi 集成测试
 

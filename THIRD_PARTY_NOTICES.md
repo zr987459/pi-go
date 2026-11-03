@@ -15,6 +15,8 @@ pi-go 自身许可证：**Apache-2.0**（见根目录 `LICENSE`，Copyright 2026
   - `PiMetService.java` → `core/engine/EngineService.kt`
   - `PiMetConfig.java`（pi 配置写入部分）→ `core/store`
   - 状态：计划引入（mvp/runtime、mvp/engine、mvp/sessions-settings 引入时在此补全「原路径 → 新路径」）
+- 已引入的映射（原路径 → 新路径）：
+  - mvp/engine：`zr987459/pimet@a80222c2dda4a4c8a936258b96597bc7ea7d4102:app/src/main/java/com/xm486/pimet/PiMetService.java` → `core/engine/src/main/kotlin/io/github/zr987459/pigo/core/engine/EngineService.kt`（前台服务 + 常驻通知的结构，Kotlin 改写）
 - **不使用（派生自 GPL-3.0 的 IPF-Sinon/DSH-Folk，重写或弃用）**：
   - `proot/TarGzipExtractor.java`：与 DSH-Folk `app/src/main/java/me/bmax/apatch/dsh/TarGzipExtractor.java` 447/453 行相同 → 基于 Apache Commons Compress 净室重写
   - `ProotManager` 中注明参考 DSH-Folk / DSHA 的部分（`ensureRuntimeFiles`、DNS 修复）及 `ensureContainerGroups` → 按公开文档重新编写
