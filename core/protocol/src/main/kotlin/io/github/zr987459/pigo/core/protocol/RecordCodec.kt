@@ -2,6 +2,7 @@ package io.github.zr987459.pigo.core.protocol
 
 import io.github.zr987459.pigo.contract.rpc.AssistantMessageEvent
 import io.github.zr987459.pigo.contract.rpc.EngineEvent
+import io.github.zr987459.pigo.contract.rpc.EngineEvents
 import io.github.zr987459.pigo.contract.rpc.ExtUiRequestRecord
 import io.github.zr987459.pigo.contract.rpc.RpcCommand
 import io.github.zr987459.pigo.contract.rpc.RpcRecord
@@ -43,6 +44,9 @@ object RecordCodec {
             json.parseToJsonElement(line)
         } catch (e: Exception) {
             return Decoded.Malformed(line, e.message ?: e.javaClass.simpleName)
+        } catch (e: StackOverflowError) {
+            // 嵌套过深（超大的 get_tree）：当作坏记录丢弃，不能让读线程死掉、整条连接被当成退出。
+            return Decoded.Malformed(line.take(200), "JSON 嵌套过深")
         }
         val obj = element as? JsonObject ?: return Decoded.Malformed(line, "not a JSON object")
         return Decoded.Record(decodeObject(obj))
@@ -128,6 +132,18 @@ object RecordCodec {
         "session_info_changed" -> EngineEvent.SessionInfoChanged(o.str("name"), o)
         "thinking_level_changed" -> o.str("level")?.let { EngineEvent.ThinkingLevelChanged(it, o) } ?: EngineEvent.Unknown(type, o)
         "extension_error" -> EngineEvent.ExtensionError(o.str("extensionPath"), o.str("event"), o.str("error"), o)
+        // ---- pi 1.5.0 其余事件（feat/engine-rpc） ----
+        "bash_execution_update" -> EngineEvents.BashExecutionUpdate(o.str("id"), o.str("delta") ?: "", o)
+        "entry_appended" -> EngineEvents.EntryAppended(o.obj("entry"), o)
+        "summarization_retry_scheduled" -> EngineEvents.SummarizationRetryScheduled(
+            attempt = o.long("attempt")?.toInt() ?: 0,
+            maxAttempts = o.long("maxAttempts")?.toInt() ?: 0,
+            delayMs = o.long("delayMs") ?: 0,
+            errorMessage = o.str("errorMessage"),
+            raw = o,
+        )
+        "summarization_retry_attempt_start" -> EngineEvents.SummarizationRetryAttemptStart(o.str("source"), o.str("reason"), o)
+        "summarization_retry_finished" -> EngineEvents.SummarizationRetryFinished(o)
         else -> EngineEvent.Unknown(type, o)
     }
 

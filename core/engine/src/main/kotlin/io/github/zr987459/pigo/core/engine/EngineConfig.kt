@@ -35,10 +35,14 @@ data class EngineConfig(
     /** 额外环境变量（测试用：例如桌面上覆盖 HOME）。 */
     val extraEnv: Map<String, String> = emptyMap(),
 ) {
+    /**
+     * 命令超时：abort、get_messages 可配置；compact（10 分钟）、bash（2 小时）、export_html/fork/clone/get_tree/get_entries（60 秒）
+     * 用 [RpcTimeouts.forCommand] 的长超时（不随测试缩短的 [defaultTimeoutMs] 变短）；其余用 [defaultTimeoutMs]。
+     */
     fun timeoutFor(type: String): Long = when (type) {
         "abort" -> abortTimeoutMs
         "get_messages" -> getMessagesTimeoutMs
-        else -> defaultTimeoutMs
+        else -> RpcTimeouts.forCommand(type).let { if (it == RpcTimeouts.DEFAULT_MS) defaultTimeoutMs else it }
     }
 
     /** §3.2 的启动参数：`pi --mode rpc [--session <file>]`，cwd 为会话 cwd，环境 = Key + 固定项。 */

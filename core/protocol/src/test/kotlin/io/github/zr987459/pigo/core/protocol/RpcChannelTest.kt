@@ -16,6 +16,8 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -133,6 +135,21 @@ class RpcChannelTest {
         assertTrue(errors.any { it is RpcChannel.ProtocolError.Orphan && it.response.command == "weird" })
     }
 
+    /** 审查第 1 轮 Nit：等待中的请求，其 response 因嵌套过深解析失败时立即以 RPC_REJECTED 结束，不空等超时。 */
+    @Test
+    fun malformedResponseFailsItsRequestImmediately() = runBlocking {
+        val pending = async { channel.request(RpcCommand.GetState("c-7"), timeoutMs = 30_000) }
+        nextCommand()
+        val deep = "[".repeat(3_000_000) + "]".repeat(3_000_000)
+        val started = System.currentTimeMillis()
+        piWrites("""{"id":"c-7","type":"response","command":"get_tree","success":true,"data":{"tree":$deep}}""")
+        val r = pending.await()
+        assertTrue(r is Outcome.Err)
+        assertEquals(ErrCode.RPC_REJECTED, (r as Outcome.Err).code)
+        assertTrue(r.message.contains("会话太大"))
+        assertTrue("不应等到超时", System.currentTimeMillis() - started < 10_000)
+    }
+
     @Test
     fun eofFailsAllPendingRequestsImmediately() = runBlocking {
         val a = async { channel.request(RpcCommand.GetState("c-1"), timeoutMs = 30_000) }
@@ -200,6 +217,34 @@ class RpcChannelTest {
             withTimeout(5_000) { small.closed.await() }
         }
         assertTrue(errors.any { it is RpcChannel.ProtocolError.Oversized && it.bytes == 100L })
+    }
+
+    /** 审查第 2 轮 Nit：超长（> maxLineBytes）的 response 按行首 id 立即以 RPC_REJECTED 结束，不等满超时。 */
+    @Test
+    fun oversizedResponseFailsItsRequestImmediately() = runBlocking {
+        val out = PipedOutputStream()
+        val inp = PipedInputStream(out, 1 shl 16)
+        val ch = RpcChannel(
+            stdout = inp,
+            stdin = OutputStream.nullOutputStream(),
+            framer = JsonlFramer(maxLineBytes = 4_096),
+            onProtocolError = { errors += it },
+        )
+        ch.start()
+        val pending = async { ch.request(io.github.zr987459.pigo.contract.rpc.RpcCommands.GetEntries("c-9", null), timeoutMs = 30_000) }
+        delay(100)
+        val started = System.currentTimeMillis()
+        val big = "x".repeat(20_000)
+        launch(Dispatchers.IO) {
+            out.write("""{"id":"c-9","type":"response","command":"get_entries","success":true,"data":{"entries":[{"type":"message","id":"e1","pad":"$big"}],"leafId":"e1"}}""".toByteArray() + "\n".toByteArray())
+            out.flush()
+        }
+        val r = pending.await()
+        assertTrue(r is Outcome.Err)
+        assertEquals(ErrCode.RPC_REJECTED, (r as Outcome.Err).code)
+        assertTrue("不应等到超时", System.currentTimeMillis() - started < 10_000)
+        assertTrue(errors.any { it is RpcChannel.ProtocolError.Oversized })
+        out.close()
     }
 
     @Test

@@ -60,9 +60,19 @@ object RpcTimeouts {
     const val GET_MESSAGES_MS = 30_000L
     const val DEFAULT_MS = 15_000L
 
+    /** `compact` 要等模型生成摘要（含自动重试），给 10 分钟。 */
+    const val COMPACT_MS = 10 * 60_000L
+    /** `bash` 的响应要等命令结束：给 2 小时，中途可用 `abort_bash` 停止。 */
+    const val BASH_MS = 2 * 60 * 60_000L
+    /** `export_html`、`fork`/`clone`（要写新会话文件、重新绑定扩展）、`get_tree`/`get_entries`（长会话）。 */
+    const val SLOW_MS = 60_000L
+
     fun forCommand(type: String): Long = when (type) {
         "abort" -> ABORT_MS
         "get_messages" -> GET_MESSAGES_MS
+        "compact" -> COMPACT_MS
+        "bash" -> BASH_MS
+        "export_html", "fork", "clone", "get_tree", "get_entries" -> SLOW_MS
         else -> DEFAULT_MS
     }
 }
