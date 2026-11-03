@@ -7,6 +7,7 @@ import io.github.zr987459.pigo.contract.RuntimeManager
 import io.github.zr987459.pigo.contract.SessionExporter
 import io.github.zr987459.pigo.contract.WorkspaceFs
 import io.github.zr987459.pigo.contract.fake.FakeAttachmentProcessor
+import io.github.zr987459.pigo.contract.fake.FakeEngineExtras
 import io.github.zr987459.pigo.contract.fake.FakeSessionExporter
 import io.github.zr987459.pigo.contract.fake.FakeWorkspaceFs
 import io.github.zr987459.pigo.core.workspace.WorkspaceServices
@@ -16,7 +17,8 @@ import io.github.zr987459.pigo.feature.files.FilesRuntime
 /**
  * 文件浏览/预览、附件处理、导出分享（W3 feat/files，契约 `Workspace.kt`）。
  * 真实实现是 `:core:workspace` 的 [WorkspaceServices]（W3 PR #9 已合入 main）。
- * HTML 导出：当前会话走 W1 的 `EngineExtras.exportHtml`（W1 合入前 extras 是 Fake，传 null，统一走容器内 `pi --export`）。
+ * HTML 导出：当前会话走 W1 的 `EngineExtras.exportHtml`（`export_html`，W1 PR #13 已合入）；其他会话走容器内 `pi --export`。
+ * extras 是 Fake（引擎为 FAKE 的本地调试）时不传，统一走 `pi --export`。
  */
 object WorkspaceBindings {
     class Workspace(val fs: WorkspaceFs, val attachments: AttachmentProcessor, val exporter: SessionExporter) {
@@ -39,7 +41,7 @@ object WorkspaceBindings {
         val svc = WorkspaceServices(
             runtime,
             ctx.appContext.cacheDir,
-            exportHtml = if (BindingMode.extras == Mode.REAL) { out -> extras.exportHtml(out) } else null,
+            exportHtml = if (extras is FakeEngineExtras) null else { out -> extras.exportHtml(out) },
             currentSessionPath = { engine.chat.value.sessionFile },
         )
         return Workspace(svc.fs, svc.attachments, svc.exporter)

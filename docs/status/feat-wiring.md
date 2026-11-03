@@ -1,5 +1,12 @@
 # feat/wiring（W5）状态
 
+> **已合入 W1 并切换 extras 真实实现**（2026-11-04 00:5x CST）：
+> - merge origin/main（e21eb46，含 W1 PR #13 feat/engine-rpc）→ `a4132ec`，无冲突（`EngineBindings.kt` 只有 main 一侧改动，W1 的 `extras(engine)` 与任务通知接入原样保留）。
+> - `ExtrasBindings.real()` 返回 W1 的 `EngineBindings.extras(engine)`（PiEngine 本身实现 EngineExtras），并套上与 `GatedEngineClient` 同一个冷启动预热闸门（新文件 `di/GatedEngineExtras.kt`；`GatedEngineClient.gate` 改为公开）：extras 的命令也经 `ensureStarted` 按需启动引擎，不挡会抢在「回到上次会话」之前。`ExtrasBindings.fake()` 保留给单测。
+> - `BindingMode.extras = REAL`：时间线附加项、长按分叉、上下文小环、抽屉「会话树 / 技能与模板 / 用量」、设置「会话默认」进入生产路径；WiringSmokeTest ②–⑤ 不再因 FAKE 跳过（仍需真机与模型 Key）。
+> - `WorkspaceBindings`：当前会话 HTML 导出走 `extras.exportHtml`（`export_html`），其他会话走 `pi --export`；extras 为 Fake（本地 FAKE 引擎）时不传。
+> - 新增单测 `app/.../di/GatedEngineExtrasTest`（预热前不转发、放行后全部转发、运行环境未就绪时直接放行）。
+
 > **审查第 1 轮修复完成**（2026-11-03 17:42 CST，接手续做）：
 > - 17:58 修复1 ✅：`AppGraph.liveExtras`（仅 REAL 时非 null）传给 ChatController；时间线附加项、长按分叉、上下文小环、抽屉「会话树 / 技能与模板 / 用量」只在 REAL 时出现，直达路由显示「需要新版引擎」。
 > - 17:58 修复2 ✅：长按菜单用 rememberUpdatedState 读最新 text / entryId；新增 feature/chat `LongPressMenuTest`（仪器）。
@@ -8,9 +15,9 @@
 > - 18:08 Nit：抽屉高亮去掉查询参数；缩略图在 IO 线程按 96dp 采样解码；「去配置」返回时清空 PendingModel、只在真正已配置时回聊天；真机清单标题注明「待真机填写」。
 > - 18:10 本地：app 10/10、feature:chat 92/92、models 8/8、settings 15/15、sessions 16/16 单测通过；assembleDebug 与三个 assembleDebugAndroidTest 通过。PR 描述已追加修复表与测试结果。W1（PR #13）仍未合入，extras 保持 FAKE（生产路径不使用）。
 
-> **等待 W1**（2026-11-03 17:3x CST）：PR #13 feat/engine-rpc 仍未合入 main（main@f9097eb）。合入后：merge origin/main → `ExtrasBindings.real()` 返回 W1 的 `EngineBindings.extras(engine)`（PiEngine 本身实现 EngineExtras）→ `BindingMode.extras = REAL` → `WorkspaceBindings` 当前会话 HTML 导出改走 `extras.exportHtml` → 「从这里分叉」随 messageMeta 可用 → 全量单测。
+> ~~**等待 W1**~~（已完成，见顶部）。原计划：merge origin/main → `ExtrasBindings.real()` 返回 W1 的 `EngineBindings.extras(engine)`（PiEngine 本身实现 EngineExtras）→ `BindingMode.extras = REAL` → `WorkspaceBindings` 当前会话 HTML 导出改走 `extras.exportHtml` → 「从这里分叉」随 messageMeta 可用 → 全量单测。
 
-**状态：W2/W3/W4/UI 接线完成，会话面板已接 W4 SessionIndex；CI 绿（run 41610482453，2401c0e，含 `:app:assembleDebugAndroidTest`）；等 W1（PR #13）合入后切 extras 真实实现**（2026-11-03 17:3x CST，从 main@b54a507 切出）
+**状态：W2/W3/W4/UI 接线完成，会话面板已接 W4 SessionIndex；CI 绿（run 41610482453，2401c0e，含 `:app:assembleDebugAndroidTest`）；W1（PR #13）已合入，extras 已切真实实现（2026-11-04）**（2026-11-03 17:3x CST，从 main@b54a507 切出）
 
 ## 计划（按 docs/feature-gap.md §3.2 W5）
 1. 读 §3.2 W5 条目、各模块入口，确定接线点。

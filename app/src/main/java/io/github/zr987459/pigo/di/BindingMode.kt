@@ -17,9 +17,10 @@ object BindingMode {
     val models: Mode = Mode.REAL
     /**
      * W1 的 [io.github.zr987459.pigo.contract.EngineExtras]（图片、斜杠命令、bash、分叉、用量、压缩…）。
-     * feat/engine-rpc（PR #13）合入 main 前用 Fake；合入后切 REAL（ExtrasBindings.real）。
+     * feat/engine-rpc（PR #13）已合入 main：REAL 为 [io.github.zr987459.pigo.core.engine.PiEngine] 本身（ExtrasBindings.real）；
+     * 单测与界面开发仍可用 ExtrasBindings.fake()。
      */
-    val extras: Mode = Mode.FAKE
+    val extras: Mode = Mode.REAL
     /** W3 的 Workspace（文件、附件、导出），feat/files（PR #9）已合入 main。 */
     val workspace: Mode = Mode.REAL
     /** W4 会话索引、草稿、自动命名、技能与模板（feature/commands，已在 main）。 */

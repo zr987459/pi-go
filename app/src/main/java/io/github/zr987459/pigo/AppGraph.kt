@@ -48,7 +48,7 @@ class AppGraph(context: Context) {
     // 引擎（W2）
     val engine: EngineClient by lazy { EngineBindings.engine(BindingMode.engine, ctx, runtime, launchEnv, log) }
 
-    // pi 其余 RPC（W1，合入前 Fake）
+    // pi 其余 RPC（W1，PR #13 已合入：PiEngine 本身，套同一个预热闸门）
     val extras: EngineExtras by lazy { ExtrasBindings.extras(BindingMode.extras, ctx, engine) }
 
     /**

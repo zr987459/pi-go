@@ -41,7 +41,7 @@ import org.junit.runner.RunWith
  * 需要外部条件的用例用 [Assume] 跳过而不是失败：
  * - ①④⑤ 需要真实模型 Key：`-Pandroid.testInstrumentationRunnerArguments.pigoProvider=deepseek
  *   -Pandroid.testInstrumentationRunnerArguments.pigoKey=sk-...`（不写进仓库）。
- * - ②③④⑤ 需要 W1（feat/engine-rpc）的真实 EngineExtras，合入前 BindingMode.extras 为 FAKE，自动跳过。⑥ 用 W3 真实文件页。
+ * - ②③④⑤ 用 W1（feat/engine-rpc，已合入）的真实 EngineExtras（BindingMode.extras = REAL）；本地改回 FAKE 时自动跳过。⑥ 用 W3 真实文件页。
  */
 @RunWith(AndroidJUnit4::class)
 class WiringSmokeTest {

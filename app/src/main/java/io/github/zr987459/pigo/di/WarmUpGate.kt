@@ -54,7 +54,8 @@ class WarmUpGate(private val bypass: () -> Boolean = { false }) {
  */
 class GatedEngineClient(
     val inner: EngineClient,
-    private val gate: WarmUpGate,
+    /** 同一个闸门也挡住真实 [io.github.zr987459.pigo.contract.EngineExtras] 的调用（见 [GatedEngineExtras]）。 */
+    val gate: WarmUpGate,
     runtimeReady: StateFlow<Boolean>,
     scope: CoroutineScope,
 ) : EngineClient by inner {
