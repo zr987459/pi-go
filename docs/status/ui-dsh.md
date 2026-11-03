@@ -1,6 +1,6 @@
 # ui/dsh-style 状态（工作者 A：主题 + 聊天主页）
 
-> **修复1 进行中**（2026-11-03 16:0x CST，PR #11 审查第 1 轮，基于 5c3edeb）。已完成 1–8（9c68530 起），等待 CI。计划：
+> **修复1 已完成**（2026-11-03 CST，PR #11 审查第 1 轮）：merge main@f1f0e02 → 9c68530 / 5d5fe9b / e667da4，CI 绿。真机待验：抽屉返回键、44dp 圆钮、空会话胶囊点击、三键导航下引导页按钮、AppSmokeTest（connectedDebugAndroidTest）。原计划：
 > 1. merge origin/main（f1f0e02，W0 契约 PR#8）；
 > 2. 抽屉返回键关闭（BackHandler）；
 > 3. 恢复入口：抽屉加「聊天」、设置页/引导页左上角 44dp 返回圆钮、点当前会话只关抽屉；
