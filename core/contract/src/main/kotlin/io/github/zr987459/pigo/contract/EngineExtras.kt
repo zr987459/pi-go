@@ -1,6 +1,7 @@
 package io.github.zr987459.pigo.contract
 
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.json.JsonObject
@@ -163,7 +164,12 @@ enum class QueueMode(val wire: String) {
     }
 }
 
-/** 当前会话的运行设置（来自 `get_state`）。未知时为 null。 */
+/**
+ * 当前会话的运行设置。未知时为 null。
+ * - [autoCompaction]、[steeringMode]、[followUpMode] 来自 `get_state`；
+ * - [autoRetry]：pi 1.5.0 的 `get_state` **没有**这个字段，只能读 settings.json（`retry.enabled`，项目级覆盖全局级）
+ *   或记住最近一次 `set_auto_retry` 的值；两者都取不到时为 null，界面显示“未知”，不要当成 false 或 true。
+ */
 data class SessionSettings(
     val autoCompaction: Boolean? = null,
     val autoRetry: Boolean? = null,
@@ -203,6 +209,8 @@ data class RunOutcome(
     /** 最后一条助手文本的开头（用于通知正文），已脱敏，≤200 字。 */
     val lastTextPreview: String? = null,
     val atMillis: Long = 0,
+    /** 会话的工作目录（容器内路径），点通知回到会话时直接传给 `openSession(sessionFile, cwd)`；未知时为 null。 */
+    val cwd: String? = null,
 )
 
 // ---------------- 时间线附加项 ----------------
@@ -226,6 +234,10 @@ sealed interface TimelineExtra {
         /** 是否用户手动触发（`compact`），否则为自动压缩。 */
         val manual: Boolean = false,
         val running: Boolean = false,
+        /** `compaction_end.errorMessage`：压缩失败的原因（已脱敏）；成功或中止时为 null。 */
+        val error: String? = null,
+        /** `compaction_end.aborted`：被用户或新输入中止。此时 [summary]、[estimatedTokensAfter] 通常为 null。 */
+        val aborted: Boolean = false,
     ) : TimelineExtra
 
     /** 用户 `!命令` 的终端卡（C6）。 */
@@ -260,6 +272,39 @@ sealed interface TimelineExtra {
     ) : TimelineExtra
 }
 
+// ---------------- 时间线消息元数据（S1、U1） ----------------
+
+/**
+ * 时间线上一条消息（以 [ChatItem.key] 为键）对应的 pi 会话 entry 信息。
+ * [ChatItem.key] 是归约器生成的本地编号，不是 pi 的 entryId；分叉（`fork` 只接受**用户消息**的 entryId）、
+ * 单条用量（[ChatItem.Assistant] 没有 usage 字段，`Chat.kt` 已冻结）都要经这里查。
+ */
+data class MessageMeta(
+    /** pi 会话文件里的 entry id（`get_entries` / `entry_appended` 的 `id`）。 */
+    val entryId: String,
+    /** `message.role`：`user` / `assistant` / `toolResult` 等，原样保留；只有 `user` 可以 [EngineExtras.fork]。 */
+    val role: String? = null,
+    /** 助手消息的 `usage`；用户消息或未知时为 null。 */
+    val usage: TokenUsage? = null,
+    /** 助手消息的 `usage.cost.total`（美元）；未知时为 null。 */
+    val costUsd: Double? = null,
+    /** 生成该助手消息的模型（`message.provider` / `message.model`）；用户消息为 null。 */
+    val model: ModelRef? = null,
+) {
+    val forkable: Boolean get() = role == "user"
+}
+
+/** `cycle_model` 的完整响应：`{model, thinkingLevel, isScoped}`。 */
+data class CycleModelResult(
+    val model: ModelInfo,
+    /** 切换后的思考级别；模型不支持思考时为 null。 */
+    val thinkingLevel: String?,
+    /** true 表示在 `--models`/settings 的作用域列表内循环，false 表示在全部可用模型中循环。 */
+    val isScoped: Boolean,
+)
+
+private val NO_MESSAGE_META: StateFlow<Map<String, MessageMeta>> = MutableStateFlow(emptyMap())
+
 /** 扩展的非阻塞 UI（C12）：`setStatus`、`setWidget`、`setTitle`。 */
 data class ExtensionSurface(
     val statuses: Map<String, String> = emptyMap(),
@@ -285,7 +330,13 @@ interface EngineExtras {
 
     // --- 会话树 ---
 
+    /** `get_fork_messages`：会话里全部**用户消息**（含其他分支），按会话文件顺序。 */
     suspend fun forkMessages(): Outcome<List<ForkPoint>>
+
+    /**
+     * `fork`：只接受**用户消息**的 entryId（pi 1.5.0 对其他 entry 抛 "Invalid entry ID for forking"），
+     * 其余返回 `Err(RPC_REJECTED)`。时间线消息的 entryId 经 [messageMeta] 查。
+     */
     suspend fun fork(entryId: String): Outcome<ForkResult>
 
     /** `clone`：返回 true 表示被扩展取消。 */
@@ -297,8 +348,18 @@ interface EngineExtras {
 
     // --- 模型快捷切换 ---
 
-    /** `cycle_model`：返回切换后的模型；没有可切换的返回 null。 */
+    /** `cycle_model`：返回切换后的模型；没有可切换的返回 null。需要思考级别与 isScoped 时用 [cycleModelResult]。 */
     suspend fun cycleModel(): Outcome<ModelInfo?>
+
+    /**
+     * `cycle_model` 的完整响应（审查第 1 轮追加）；没有可切换的返回 null。
+     * 默认实现只包装 [cycleModel]（thinkingLevel = null、isScoped = false），W1 应覆盖为直接解析 RPC 响应。
+     * 新代码优先调用本方法；两者每次调用都会真的切换一次，不要先后各调一次。
+     */
+    suspend fun cycleModelResult(): Outcome<CycleModelResult?> = when (val r = cycleModel()) {
+        is Outcome.Ok -> Outcome.Ok(r.value?.let { CycleModelResult(it, thinkingLevel = null, isScoped = false) })
+        is Outcome.Err -> r
+    }
 
     /** `cycle_thinking_level`：返回新级别；模型不支持思考时返回 null。 */
     suspend fun cycleThinking(): Outcome<String?>
@@ -342,6 +403,13 @@ interface EngineExtras {
     val usageState: StateFlow<UsageStats?>
 
     val extensionSurface: StateFlow<ExtensionSurface>
+
+    /**
+     * [ChatItem.key] → [MessageMeta]（审查第 1 轮追加）。随会话切换整体替换；尚未写入会话文件的乐观气泡没有条目。
+     * W1 用 `get_entries`（打开 / 重建时全量）和 `entry_appended`（增量）维护，按时间线顺序与 message 类 entry 配对。
+     * 默认实现恒为空表，**W1 必须覆盖**；界面拿不到 entryId 时应禁用“从这里分叉”，不得按文本匹配。
+     */
+    val messageMeta: StateFlow<Map<String, MessageMeta>> get() = NO_MESSAGE_META
 }
 
 // ---------------- 会话数据增强（W4：S3、S4、S5、S7） ----------------
