@@ -661,5 +661,204 @@ pi 设置（settings.json） ›         ← 二级：schema 编辑器
 - 费用一律按 pi 给的美元显示，订阅账号显示 `(sub)`。不做人民币换算，因为 pi 没有这个功能。
 
 ---
+## 7. 模块拆分与并行工作流
 
-> （§7–§8 正在写）
+### 7.1 新的模块划分
+
+| 模块 | 内容 | 状态 |
+|---|---|---|
+| `core/picmd`（新） | `PiCommandRegistry`、`PiAction`、每条 pi 内置命令的本地实现（读写 `settings.json`、`mcp.json`、上下文文件，包管理 CLI，会话导入、分享、信任），以及 `PiSettingsSchema` | 新增 |
+| `core/engine/src/main/assets/pigo-bridge/` | 桥接扩展 `pigo-bridge.ts`（`/pigo-tree-nav`、`/pigo-label`、`/pigo-reload`、`/pigo-import`、`/pigo-ephemeral`） | 新增 |
+| `feature/term`（新） | `PiTerm` 渲染器、`PiColors`（读取 pi 主题 JSON）、`PiSelector`、按键条、页脚、等宽排版 | 新增 |
+| `feature/chat` | 逻辑层（共享）+ `ui/` 改写为 `PiPlain` 对话页 | 改造 |
+| `feature/models`、`feature/sessions`、`feature/usage` | UI 形态的模型面板与服务商页、侧边栏、会话信息页与分支树 | 改造 |
+| `feature/settings` | 设置首页（模型）、schema 编辑器、关于与外观 | 重写 |
+| `feature/files`、`feature/commands` 的部分界面 | 删除（见 §1） | 删除 |
+| `app` | `FormHost`、导航、`AppGraph` 装配 | 改造 |
+
+### 7.2 工作流（4 条并行 + 前置 + 收尾）
+
+```
+R0 r3/base ──┬─> R1 r3/core   ──┐
+             ├─> R2 r3/term   ──┼─> R5 r3/prune-wire（删除旧代码 + 接线 + 验收）
+             ├─> R3 r3/plain  ──┤
+             └─> R4 r3/panels ──┘
+```
+
+#### R0 `r3/base`（前置，只加文件，必须最先合入）
+
+- **范围**：
+  - `settings.gradle.kts`：加入 `:core:picmd`、`:feature:term`；
+  - 新模块的 `build.gradle.kts` 和空的 `Placeholder.kt`；
+  - `gradle/libs.versions.toml`：加入 JetBrains Mono 字体资源（OFL，放 `core/ui/src/main/res/font/`）；
+  - `core/contract/**` **只新增文件**：`PiAction.kt`（`PiAction`、`PanelRequest`、`PiActionId` 枚举，覆盖清单所有条目的 id）、`FormMode.kt`、`PiSettings.kt`（schema 类型）、`fake/FakePiCommands.kt`；
+  - `core/ui/**` **只新增** `PlainTheme.kt`、`PiTypography.kt`；
+  - `docs/notices/r3-base.md`；
+  - 机读覆盖清单 `docs/pi-features.index.json`：从清单 §1–§11 抽出每行的「条目 id → 名称」，作为覆盖率测试的数据源。
+- **验收**：
+  - `./gradlew assembleDebug testDebugUnitTest` 通过；
+  - `git diff main --stat` 只有新增文件，加上 `settings.gradle.kts` 和 `libs.versions.toml` 两处修改；
+  - `PiActionId` 的数量等于 `pi-features.index.json` 的条目数（单测）。
+
+#### R1 `r3/core`：共享逻辑（引擎、桥接、pi 命令实现、controller）
+
+- **范围**：
+  - `core/engine/**`（含 `pigo-bridge` 资源、启动参数 `-e`）、`core/protocol/**`、`core/picmd/**`；
+  - `core/store/**`（`ModelPrefsStore` 去掉汇率、`FileSessionRepository` 改为 5 秒撤销）；
+  - `core/catalog/**`（非 UI 部分）、`core/workspace/**`（`@` 检索、Git 只读分支名）；
+  - `feature/chat/src/main/**` 的**非 ui** 部分（`ChatController`、`logic/**`：`TextFieldValue` 草稿、历史、`@` 展开、`!` 模式、`cycleModel`、`dequeue`、`abortRetry`、`UiSession`、`ToolPresenter`）；
+  - `feature/chat/src/test/**`；
+  - `feature/commands` 的数据层（`SessionScanner`、`PiSessionIndex`、`DraftStore`）；
+  - `docs/protocol/**`。
+- **验收**：
+  - **JVM 单测**：
+    1. 每个 `PiActionId` 在 `PiCommandRegistry` 里都有实现，或者明确标注「由 RPC 直接实现」；
+    2. 每条本地命令的文件读写，用夹具前后快照对比（`settings.json` 只改目标键、保留未知键）；
+    3. `PiSettingsSchema` 覆盖清单 §8 的全部键；
+    4. `@` 展开结果的快照，格式与 pi 1.5.0 TUI 一致；
+    5. `abortRetry` 只发 `abort_retry`，不发 `clear_queue`；
+    6. 切换会话或重启引擎时，排队中或发送中的消息文字回到输入框（第 2 轮审查遗留的 Important）。
+  - **真 pi 1.5.0 桌面集成**（`realpi/`）：
+    - `pigo-bridge` 加载成功；
+    - `/pigo-tree-nav` 之后 `get_state.leafId` 改变，`sessionFile` 不变；
+    - `/pigo-label` 之后 `get_tree` 能看到标签；
+    - `/pigo-reload` 之后新放入的模板出现在 `get_commands` 里；
+    - 生成中发送 `/pigo-label` 能立即执行，不打断生成。
+- **依赖**：只依赖 R0。
+
+#### R2 `r3/term`：终端形态
+
+- **范围**：只有 `feature/term/**`（含 `assets/pi-theme/`、`androidTest`），以及 `docs/notices/r3-term.md`。
+- **只读依赖**：`ChatScreenState`、`PiActions`、`PiCommandRegistry`。开发期间用 R0 提供的 Fake。
+- **验收**：
+  - **单测**：
+    - `dark.json`、`light.json` 解析出全部 56 个 token，值与 pi 的计算结果一致（夹具取自在 node 里运行 pi 主题模块的输出）；
+    - 东亚宽度计算正确；
+    - 页脚排版的快照与 pi `footer.js` 的输出一致（用同一组输入）；
+    - 按键映射表覆盖清单 §9 的每个动作 id。
+  - **Compose 测试**：
+    - 1000 条流式 delta 下慢帧低于 5%；
+    - 按键条的每个键都触发对应的 `PiAction`；
+    - `/` 补全浮层最多显示 `autocompleteMaxVisible` 条；
+    - 工具块三种背景色正确。
+  - **覆盖**：`TermCoverageTest` 遍历 `PiActionId`，断言每个 id 在终端形态都有入口（按键、命令或页脚段）。
+
+#### R3 `r3/plain`：UI 形态对话页
+
+- **范围**：`feature/chat/src/main/**/ui/**`（整体改写为 `PiPlain` 对话页、⌘ 面板、输入框、过程行、压缩卡显示、扩展对话框、队列条、胶囊与上下文环）、`feature/chat/src/androidTest/**`、`docs/notices/r3-plain.md`。
+- **验收**：
+  - **Compose 测试**：
+    - 生成中有草稿时发送键显示「引导」，长按出现「停止」；
+    - `!` 模式切换为等宽字体；
+    - `@` 弹出检索；
+    - ⌘ 面板的搜索能定位任意命令；
+    - 1000 条 delta 下慢帧低于 5%。
+  - **覆盖**：`PlainCoverageTest` 遍历 `PiActionId`，对每个 id 从对话页出发，按注册的入口路径（例如 ⌘ › 分支树）走到目标面板，断言目标面板出现。**少一个就失败。**
+
+#### R4 `r3/panels`：UI 形态的面板与二级页
+
+- **范围**：
+  - `feature/models/**`：模型面板、服务商列表与详情、自定义服务商、常用模型；
+  - `feature/sessions/**`：侧边栏与 `/resume`；
+  - `feature/usage/**`：会话信息页、分支树（切换、标签、筛选、分支摘要）、压缩详情；删除 `TurnSummary*`；
+  - `feature/settings/**`：重写设置首页、schema 编辑器、关于与外观，删除 `DshComponents`、`SettingsScreen` 旧实现；
+  - `feature/onboarding/**`：只改视觉；
+  - `feature/commands/**/ui/**`：技能与模板管理改为面板；
+  - `docs/notices/r3-panels.md`。
+- **验收**：
+  - **Compose 测试**：
+    - 服务商搜索「qw」只剩 qwen 相关的项；
+    - 选中未配置的模型会进入配置页，配好后返回并自动选中；
+    - 树切换节点时弹出「摘要离开的分支？」；
+    - schema 编辑器修改一个开关后，`FakePiCommands` 收到写入该键的调用；
+    - 侧边栏左滑删除后 5 秒内可以撤销。
+  - **覆盖**：`PlainCoverageTest` 中属于面板的部分也由 R4 补齐路径。
+
+#### R5 `r3/prune-wire`：删除旧代码、接线、总验收（R1–R4 全部合入后开始）
+
+- **范围**：
+  - `app/**`（`FormHost`、导航简化成「对话 + 二级页」、`AppGraph` 装配、`BindingMode`）；
+  - `core/ui/**`（删除 `Dsh*`、`Components`、`ThemePreviews`）；
+  - `feature/files/**`（删除浏览器、预览、Git、Share Target；保留附件和导出）；
+  - `feature/commands`（删除 `AutoNamer`、`AutoTitle`）；
+  - `core/catalog/RealAppSettingsStore`（删除汇率字段）；
+  - `THIRD_PARTY_NOTICES.md`（合并各分支的 `docs/notices/r3-*.md`）；
+  - `docs/testing/r3-acceptance.md`。
+- **验收**：见 7.4，以及 CI 绿。
+
+### 7.3 如何安全地删除代码
+
+1. **R1–R4 期间只增不删**，唯一的例外是自己独占目录里的旧文件。例如 R4 可以删 `feature/usage/TurnSummary*`，因为 `feature/usage` 归 R4。共享模块里要删的东西，比如 `core/ui` 的 dsh 组件、`feature/files` 浏览器、`AutoNamer`，**一律由 R5 删**。这样不会出现「A 删了 B 还在用的文件」。
+2. 被删的类，在 R1–R4 期间先加 `@Deprecated("r3: R5 删除")` 注解。这一步由各自目录的所有者做，不属于自己目录的就不加。新代码不允许引用这些类，用 `detekt` 或 `grep` 检查，在 R5 的 PR 里列出结果。
+3. R5 删除时，每删一个模块就跑一次 `./gradlew assembleDebug testDebugUnitTest`，按模块分成多个提交。任何一步出红，就回到上一个提交，不强推。
+4. 涉及用户数据的删除要先迁移：
+   - 回收站里还有会话时，R5 加一个一次性迁移，把它们移回 `sessions/`，并提示用户「回收站已取消，已恢复 N 个会话」。
+   - 汇率设置直接丢弃。
+5. 删除清单（每一个文件路径）写进 R5 的 PR 描述，审查时逐项核对。
+
+### 7.4 总验收（两条硬性要求必须逐项满足）
+
+**硬性要求一：UI 形态覆盖清单的全部功能**
+
+- 数据源：`docs/pi-features.index.json`（R0 生成，每个条目 id 对应清单的一行）。
+- `PlainCoverageTest`（仪器测试，用 FakeEngine）：对每个 id 执行它在 UI 形态注册的入口路径，断言到达目标视图，或触发了对应的 `PiAction`。输出一张「id → 通过 / 失败」表，作为 `docs/testing/r3-acceptance.md` 的附件。**必须全部通过。**
+- `TermCoverageTest`：同样遍历全部 id，用于终端形态。
+- 人工抽查：在真机上，从清单每节随机抽 3 项，用 UI 形态走一遍，记录截图。
+
+**硬性要求二：生成中切换形态不中断、不重启引擎、上下文与草稿保留**
+
+- **JVM 测试** `FormSwitchContractTest`：`ChatController` 的公开 API 里没有任何形态参数（用反射断言）；`FormHost` 切换时 `PiActions` 不被调用。
+- **仪器测试** `FormSwitchDuringStreamingTest`（FakeEngine，可在 CI 模拟器或本地运行）。步骤：
+  1. 启动后，Fake 开始以每 20ms 一条的速度推送 500 条 `message_update`；
+  2. 在输入框输入「草稿abc」，把光标放到第 2 个字，并添加 1 张图片；
+  3. 打开一个扩展 `confirm` 对话框，此时不回答；
+  4. 每 300ms 切换一次形态，共切 10 次；
+  5. 断言：
+     - Fake 的 `startCount == 1`；
+     - 命令日志里没有 `abort`、`new_session`、`switch_session`，也没有对话框的 cancelled 回复；
+     - 最终消息文本等于 500 条 delta 的拼接；
+     - 草稿文字、光标位置、图片数量与切换前一致；
+     - 对话框在最后的形态里仍然显示，回答后 Fake 收到同一个 id 的回复；
+     - 列表仍停在底部，跟随输出。
+- **真机测试** `docs/testing/r3-acceptance.md` 的手工步骤（用真 pi）：
+  1. 发一个会运行 30 秒以上的任务，例如 `!for i in $(seq 30); do echo $i; sleep 1; done`，或让模型写一个长文件；
+  2. 生成过程中切换 6 次；
+  3. 在终端形态里执行 `!echo $PPID` 和 `/session`，记录 pi 的 PID 和 `sessionFile`，切换前后各记一次；
+  4. 通过标准：PID 不变，`sessionFile` 不变，输出连续没有缺行，草稿还在，`get_state.isStreaming` 一直为 true，直到任务自然结束。
+
+---
+
+## 8. 复用、风险与取舍
+
+### 8.1 复用
+
+| 现有成果 | 用途 |
+|---|---|
+| `core/runtime`、`core/protocol`、`core/engine`（PR #13）全部 | 两种形态共用的底座，直接复用 |
+| `ChatController` 及其逻辑（`Outbox`、`ComposerLogic`、`SlashCompletion`、`ExtUi`、`ErrorText`、`PhaseLabel`、`MarkdownSegments`、`ChatRows`） | 共享层。已经是应用级单例（`AppGraph.chatDeps`），天然支持切换形态 |
+| W2 的 42 个服务商目录、OAuth、PKCE、自定义服务商、测试连接、获取模型列表、PendingModel | 模型配置，只重画界面 |
+| W3 的 `ImagePrep`、`AttachmentController`、`Pickers`、导出 | 图片输入、`/export` |
+| W4 的 `SessionScanner`、`PiSessionIndex`、`DraftStore`、`SkillTemplateManager`、`CommandPalette` 的数据部分 | `/resume`、草稿、技能与模板 |
+| `Ansi.kt`、`LineDiff`、`DiffView`、`CompactionSummary` | 终端渲染、diff、压缩卡 |
+| chat-ui 的测试（`StreamingJankTest` 等） | 两种形态的性能门槛 |
+
+### 8.2 风险
+
+| 风险 | 影响 | 对策 |
+|---|---|---|
+| `pigo-bridge` 依赖的扩展 API（`navigateTree`、`setLabel`、`reload`）在 RPC 模式下的行为没有实测 | 树切换、标签、热重载做不了 | R1 第一件事就是用真 pi 1.5.0 做最小验证。如果某项不可行，就改为「`fork` 代替切换」或「重启引擎代替 reload」，并在 PR 里写明 |
+| `@文件` 的展开格式需要对齐 pi TUI | 与 pi 的行为不一致 | 读 1.5.0 `interactive-mode` 源码后做快照测试 |
+| 项目信任（`/trust`）在 RPC 模式下怎么处理需要确认 | 项目 `.pi/` 下的资源可能加载不了 | R1 先实测。必要时启动参数加 `-a`，或者由 App 写入信任文件 |
+| `--no-session` 在运行中无法切换 | 临时会话只能近似实现 | 由 bridge 标记，结束时删除会话文件；界面上写明「临时会话结束后删除」 |
+| 等宽排版遇到中文 | 宽度错位 | 按 East Asian Width 处理，边框用绘制而不是字符；加单测 |
+| 终端形态的长会话性能 | 卡顿 | `LazyColumn` + 每个组件独立重组 + 只重组正在流式的最后一项；套用慢帧低于 5% 的门槛 |
+| 同时写 `settings.json`（pi 自己也会写，例如保存默认模型） | 互相覆盖 | 读-改-写都在 `AuthJsonLock` 同款的文件锁里完成，只改目标键；写完调 `/pigo-reload` |
+| 人民币换算被删除 | 与 2026-11-03 调度方的决策 3（「可选显示人民币，汇率默认 7.1」）冲突 | **需要所有者确认**。用户最新的话是「删掉无用功能」，而 pi 没有汇率换算，所以本方案建议删除。如果要保留，只在「会话信息」页加一行「约合 ¥」，由 R4 负责 |
+| R5 的删除量大 | 合并冲突 | 按 7.3 的规则：R1–R4 只增不删，所有删除集中在 R5，按模块分成多个提交 |
+
+### 8.3 取舍
+
+- **终端形态不用真终端（PTY + 交互式 pi）**：这样做像素级最像，但是两个进程，切换必然丢失状态，违背 06:09 的硬性要求。所以选择「Compose 重画加 pi 的 token」。代价是 pi TUI 以后的视觉更新需要手动跟进。
+- **UI 形态的「全覆盖」靠 ⌘ 面板来保证**，而不是给每个功能都做一个显眼入口。这样既满足「一项不少」，又能保持极简。代价是部分功能要多点一次。
+- **设置首页只有模型**，其余 pi 设置用 schema 自动生成，不再逐页手写。代价是那些项的界面不够精致，但它们本来就很少用。
+- 不做的：彩蛋（`/arminsayshi` 等）、`powershell` 工具、挂起（Ctrl+Z）、`--tui-mode` 的普通模式。理由已在 §2 中逐项写明，这些都是手机上不存在或没有意义的东西。
