@@ -1,6 +1,13 @@
 # ui/dsh-panels 状态（工作者 B：抽屉内容 + 设置 + 安装引导）
 
-**状态：已开始 · 阶段 1 通读 dsh-Go 完成**（2026-11-03 14:45 CST）
+**状态：阶段 2 代码已推，等 CI**（2026-11-03 15:20 CST）
+
+## 进度
+- [x] 14:40 已开始；14:45 通读 dsh-Go 完成
+- [x] 已普通 merge ui/dsh-style（含 A 的 `theme:` 6395c89）→ 9427e8e
+- [x] 抽屉会话面板（9eb55db）、设置 + 后台引导 + 安装引导（1827177）按 dsh-Go 改版，均用 A 的 `DshTheme`/`AppIcon`/`GlassSurface`/`AppShape`/`AppMotion`
+- [ ] CI 绿：**当前被 ui/dsh-style 自身的编译错误挡住**——`core/ui/.../AppIcons.kt:164`、`:450-451` 用了关键字 `package` 作属性名（需加反引号），`:core:ui:compileDebugKotlin` 失败，B 的模块还没编到。core/ui 归 A，B 不改；A 修好后 B 立刻再 merge。
+- [ ] 再次 merge ui/dsh-style → CI 绿 → 合回 ui/dsh-style
 
 ## 用户变更（14:40 生效）
 1. **不要吉祥物**：不移植、不显示像素吉祥物（本分支未引入任何吉祥物资源）。
