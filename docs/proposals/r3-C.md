@@ -417,3 +417,156 @@ pi 的设置本来就是一个斜杠命令而不是 App 设置，所以这样放
 3. **可测的不中断判据**，见 §7.4。
 
 ---
+
+## 3. 终端形态（`feature/term`，`TermSurface`）
+
+### 3.1 渲染方式：用 Compose 画字符网格，不跑第二个 pi
+
+- **不嵌真终端、不开第二个 `pi`。** 原因是两个进程意味着两份状态，与「无缝切换」矛盾（清单 §0.1）。
+- **按列宽排版的 Compose 文本。**
+  - 全局等宽字体 JetBrains Mono（OFL，仓库里已有，`core/ui/res/font`），开启 `fontFeatureSettings="calt 0"` 关掉连字，保证一字一格。
+  - 启动时用 `TextMeasurer` 量出单个字符宽度，算出 `cols = floor(可用宽度 / 字符宽度)`。所有边框（`─ │ ╭ ╮`）、页脚左右对齐、补全浮层宽度都按 `cols` 计算，效果与 pi 在 `cols` 列终端里一样。
+  - CJK 字符按东亚宽度占两列，用 `wcwidth` 表。表从 pi 依赖的 `string-width` 规则移植，记入 NOTICE。
+- **结构。** 一个 `LazyColumn` 加三个固定区：
+  ```
+  ┌ 页眉（可滚走，含 pi 版本、按键提示、已加载上下文/技能/扩展/模型范围）
+  │ 消息区：TermBlock 列表（User / Assistant / Thinking / Tool / Bash / Summary / Custom / Error）
+  ├ 状态行：loader ⠋ + 计时 / 重试倒计时 / setStatus
+  ├ 队列列表 + setWidget
+  ├ 编辑器（带边框，多行，边框色 = 思考档位；bash 模式变 bashMode 色）
+  ├ 补全浮层（编辑器上方，最多 autocompleteMaxVisible 行）
+  ├ 页脚（两行）：~/proj (main) • 会话名      ↑12k ↓3.4k R80k W2k CH71% $0.042  38%/200k  (anthropic) claude-sonnet-4.5 • high
+  └ 触屏按键条（可隐藏；外接键盘时自动隐藏）
+  ```
+- **每个块是一个 `AnnotatedString`。** 由 `TermFormatter`（纯函数，可单测）把 `ChatRow` 转成「若干行，每行是带 token 样式的片段」。Markdown 走 pi 的风格：标题 `mdHeading` 加粗，代码块缩进 `codeBlockIndent`，列表符号 `mdListBullet`，链接下划线。语法高亮用现有的高亮器，改为输出 `syntax*` token。
+- **ANSI。** bash 输出用 `Ansi.kt`（迁移到共享层）解析成片段。
+- **选中与复制。** `SelectionContainer` 包住消息区；`fullscreenCopyOnSelect=true` 时选中即复制（与 pi 一致）。
+
+### 3.2 配色
+
+- 把 pi 的 `theme/dark.json`、`light.json` **原样**放进 `feature/term/src/main/assets/pi-theme/`。
+- `PiThemeLoader` 解析 `vars` 加 56 个 `colors`，把 okhsl 换算成 sRGB，得到 `PiTokens`（data class，56 个 `Color`）。
+- 主题跟随 `/settings › theme`：system 对应安卓深浅色，也支持 dark、light，以及用户装在 `~/.pi/agent/themes/` 下的 JSON。
+- 页面背景用终端默认背景：dark 为 `#1e1e2e` 一类，以 token 值为准。
+
+### 3.3 编辑器与补全
+
+- 编辑器是 `BasicTextField`，绑定 `SessionHost.draft`。边框用 `drawBehind` 画 pi 的圆角框，左上角显示 `thinkingXxx` 色的档位文字。
+- 首字符是 `/` 时，按 `SlashCompletion` 弹补全，候选来自 `PiActions` 的斜杠别名加 `get_commands`。
+- `@` 弹文件模糊搜索；`!`/`!!` 时边框变色。
+- 补全浮层的选中行用 `selectedBg`。上下键或点击选择，Tab 补全。
+- 历史：编辑器为空时，键条 ↑↓ 翻 `SessionHost.promptHistory`（本会话的用户消息，加上全局最近 100 条）。
+
+### 3.4 快捷键 → 触屏映射（键条与手势）
+
+键条一行，可横滑，按钮为等宽字样。顺序：
+
+`Esc  Tab  ⇣排队  ↑队  ^C  ⌃O  ⌕  ⇞  ⇟  ⤢  /  @  !  📎  ⌂UI`
+
+| pi 键 | 触屏 |
+|---|---|
+| Esc / 双击 Esc | Esc 键 / 连点两下 |
+| Enter / Alt+Enter | 键条右端 ⏎ / ⇣ |
+| Alt+↑ | ↑队 |
+| Ctrl+C | ^C |
+| Ctrl+O | 点工具块（单个）；⌃O（全部） |
+| Ctrl+T | 点思考块 |
+| Shift+Tab | 点编辑器边框 |
+| Ctrl+L / Ctrl+P | 点页脚模型段 / 在页脚模型段左右滑 |
+| Ctrl+G | ⤢ |
+| Ctrl+V（图片） | 📎，或长按编辑器 › 粘贴图片 |
+| Ctrl+X | 长按助手块 › 复制 |
+| Ctrl+Shift+F | ⌕ |
+| Ctrl+Shift+↑/↓ | ⇞ / ⇟ |
+| 选择器内 Ctrl+S/N/R/D/P 等 | 选择器底部提示行变成可点的「键帽」（pi 的提示行本来就列出这些键，直接让它们可点） |
+
+**外接键盘**：`onPreviewKeyEvent` 读取 `~/.pi/agent/keybindings.json`（缺省用 pi 默认表），完全照 pi 的键位处理。
+
+### 3.5 工具调用与思考块
+
+- **工具块**：pending、success、error 三种底色（`toolPendingBg/SuccessBg/ErrorBg`），标题用 `toolTitle`（如 `read src/a.kt:1-80`），输出用 `toolOutput`。默认折叠到前 N 行加「… 12 more lines (ctrl+o)」，与 pi 的文案一致（翻成中文时保留键名）。
+- **`edit`**：显示 diff，用 `toolDiffAdded/Removed/Context` 三色。
+- **思考块**：`thinkingText` 色，斜体；`hideThinkingBlock` 时只显示一行「Thinking…」。
+- **选择器弹层**：统一做一个 `TermSelectList` 组件（顶部搜索、列表、底部键帽提示行），模型、思考、作用域模型、会话、树、分叉、设置、主题、OAuth、信任、扩展 UI 的 select 全部复用它。
+
+---
+
+## 4. UI 形态（`CalmSurface`）：极简
+
+### 4.1 原则
+
+- **一页为主。** 聊天页就是全部；其余功能在三个面板里：☰ 会话列表、⌘ 命令中心、模型面板。
+- **无玻璃、无渐变、无吉祥物。** 大面积留白，正文主导，只有一个强调色。
+- **信息按需出现。** 统计、路径、已加载资源都收在上下文环和会话信息页，不常驻。
+
+### 4.2 配色与字体
+
+| 用途 | 浅色 | 深色 |
+|---|---|---|
+| 背景 | `#FAFAF8` | `#111111` |
+| 表面（输入框、面板） | `#FFFFFF`，加 1dp 描边 `#E8E8E4` | `#1A1A1A`，描边 `#2A2A2A` |
+| 正文 | `#1A1A1A` | `#ECECEC` |
+| 次要 | `#6B6B6B` | `#9A9A9A` |
+| 强调（唯一） | pi 的 accent（violet）偏中性版本 `#6D5BD0` | `#9C8CFF` |
+| 状态 | 成功 `#2F9E6B` / 错误 `#D0453B` / 进行中 = 强调色 | 同色系提亮 |
+
+- **字体**：正文用系统 Sans（中文跟随系统），16sp，行高 1.55；代码与命令用 JetBrains Mono 14sp。
+- **形状**：圆角 12dp（输入框 20dp）。
+
+### 4.3 页面结构（线框）
+
+```
+┌──────────────────────────────────────┐
+│ ☰   重构登录流程 ▾            ⌘  ⇄   │  ← 标题可点改名；⇄ = 切到终端形态
+│     ~/proj · 生成中 0:12             │  ← 副标题：目录 / 状态 / setStatus
+├──────────────────────────────────────┤
+│                    帮我把 auth 拆出来 │  ← 用户消息（右，浅色块）
+│                                      │
+│ ▸ 思考了 6 秒                        │
+│ ● 读取 src/auth/Login.kt      0.2s   │  ← 过程行（点开看内容）
+│ ● 编辑 Login.kt  +24 −9       0.1s   │
+│ ◌ 运行 ./gradlew test               │  ← 进行中
+│ 我把 Auth 拆成了三个文件……           │  ← 助手正文，流式
+│                                      │
+│ ┌ 已压缩 150k → 32k ─────────── ▸ ┐  │
+├──────────────────────────────────────┤
+│ 排队 1 条：再跑一次 lint      撤回   │  ← 队列条（有才出现）
+│ ┌──────────────────────────────────┐ │
+│ │ 输入消息，/ 命令，@ 文件，! 运行  │ │
+│ │ [img]                            │ │
+│ │ ＋   ◐ high   sonnet-4.5 ◯38%  ■ │ │  ← ＋附件 · 思考胶囊 · 模型胶囊 · 上下文环 · 发送/停止
+│ └──────────────────────────────────┘ │
+└──────────────────────────────────────┘
+```
+
+**⌘ 命令中心**（底部面板，全高）：
+
+```
+┌ ⌘ 搜索 pi 功能…                  ┐
+│ 会话   新建 · 恢复 · 分叉 · 复制 · 分支树 · 压缩 · 导出 · 分享 · 导入 · 改名 · 会话信息 · 临时会话
+│ 模型   选择模型 · 下一个 · 常用模型 · 思考强度 · 设为默认 · 刷新目录 · 登录 · 退出登录
+│ pi 设置 显示 · 队列 · 编辑器 · 会话树 · 工具 · 压缩 · 重试 · 网络 · 图片 · Shell · 安全 · 隐私
+│ 资源   技能 · 提示模板 · 扩展与包 · MCP · 上下文文件 · 系统提示 · 项目信任 · 重新加载
+│ 扩展命令（get_commands 动态）
+│ 帮助   快捷键与手势 · 更新日志 · 报告问题 · 诊断 · 关于 · 停止引擎 · 说明类条目
+└────────────────────────────────────┘
+```
+
+- 每一项都是一条 `PiAction`，`testTag("action:<id>")`。
+- 在输入框里敲 `/` 时，同一个列表变成内联补全面板，只按斜杠别名过滤。
+
+### 4.4 关键组件
+
+- `CalmComposer`（共享草稿）、`ProcessRow`（工具、思考、bash 共用一行骨架）、`SummaryCard`（压缩、分支摘要）、`CalmSheetList`（全部选择器的统一底部面板）、`ContextRing`、`ModelPill`、`ThinkingPill`、`QueueBar`、`ExtUiSheet`（扩展对话框）。
+- 长按消息菜单：复制、复制 Markdown、从这里分叉（用户消息）、在分支树中定位。
+
+### 4.5 动效原则
+
+- 只做三类动效，统一 180ms、`FastOutSlowIn`：
+  1. 新块淡入加 4dp 上移；
+  2. 面板滑入；
+  3. 发送键与停止键的形变。
+- 流式文字不做逐字动画，直接追加，避免掉帧。
+- 切换形态时做 120ms 交叉淡化。**只淡化渲染层，不重建状态**（§5）。
+
+---
