@@ -1,5 +1,6 @@
 # r3 融合定稿 docs/DESIGN-r3.md 状态
 
-- 状态：**进行中**（2026-11-04 06:47 CST）
-- 已读完：pi-features.md、r3-C（底稿）、三份评审、r3-A 的 §2.1/§2.12/§4.3/§5/§7/§8；核对了 main 上的事实（.github/workflows/android.yml、ProcessTree.kt、dsh_icons.ttf、两份 CompactionSummary、realpi/ 测试目录、Share Target 文件）。
-- 正在写：功能保留/删除清单、两种形态、无缝切换架构、模型配置、6 条工作流与派发表、覆盖核对表。
+- 状态：**已完成**（2026-11-04 07:05 CST）
+- 产出：`docs/DESIGN-r3.md`（以 r3-C 为底稿，融合 A/B 优点、三份评审的修正项与遗漏表、调度者拍板的 D1–D4），末尾附工作流派发表。
+- 工作流（6 条）：r3/core → r3/session ∥ r3/models ∥ r3/calm ∥ r3/term → r3/app（先交付 UI 形态，两形态都过验收后对外发布）。
+- 自检：用脚本把 pi-features.md §1–§11 每张表的行首单元格与定稿逐条比对，全部有落点（§9 快捷键按中文动作名落在 §2.11）。
