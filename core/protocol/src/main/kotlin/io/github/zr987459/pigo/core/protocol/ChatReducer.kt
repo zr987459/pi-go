@@ -35,6 +35,8 @@ class ChatReducer {
     private var streamingKey: String? = null
     /** 发出后尚未被 pi 的 `message_start(user)` 确认的乐观气泡，按发送顺序。 */
     private val unconfirmed = LinkedHashSet<String>()
+    /** 被扩展命令消费（`disposition:"handled"`）的用户气泡：标「已发送」，但不会写入会话文件。 */
+    private val notPersisted = HashSet<String>()
     /** (助手条目 key, contentIndex) → 思考块开始时间。 */
     private val thinkingStartedAt = HashMap<Pair<String, Int>, Long>()
 
@@ -299,6 +301,8 @@ class ChatReducer {
         carry: List<ChatItem.User> = emptyList(),
         live: Boolean = false,
     ): ChatState {
+        // 时间线里已写入会话的用户消息数（排除 handled 气泡），必须在 reset() 清掉簿记之前算出。
+        val confirmedCount = base.items.count { it is ChatItem.User && it.delivery == Delivery.SENT && it.key !in notPersisted }
         reset()
         // 队列与上下文占用属于进程 / 旧会话：重建后以新的 queue_update、get_session_stats 为准。
         var s = base.copy(items = emptyList(), running = false, retry = null, queue = QueueSnapshot.EMPTY, contextPercent = null)
@@ -321,9 +325,11 @@ class ChatReducer {
         if (!live) s = s.copy(items = s.items.map { if (it is ChatItem.Tool && it.status == ToolStatus.PENDING) it.notExecuted() else it })
         // 进程崩溃 / 强制重启时没能送达的消息（排队中、发送中），以「发送失败」气泡接在历史后面，由用户点「重试」，不自动重发。
         if (carry.isNotEmpty()) {
-            val confirmedCount = base.items.filterIsInstance<ChatItem.User>().count { it.delivery == Delivery.SENT }
             val historyUserTexts = s.items.filterIsInstance<ChatItem.User>().map { it.text }
-            val newTexts = historyUserTexts.drop(confirmedCount).toMutableList()
+            // 只在历史尾部找：新增条数 = 历史条数 − 已确认条数，且不超过 carry 里 SENT 项的条数。
+            // 已确认条数大于历史条数（压缩过）时 n = 0，宁可保留为「发送失败」也不悄悄丢掉。
+            val n = (historyUserTexts.size - confirmedCount).coerceIn(0, carry.count { it.delivery == Delivery.SENT })
+            val newTexts = historyUserTexts.takeLast(n).toMutableList()
             val kept = ArrayList<ChatItem.User>()
             for (c in carry) {
                 // 「已发送」但没等到 message_start 的消息可能其实已写进会话：只有 SENT 项且能在 newTexts 中按多重集消费到时才视为已写入并丢掉。
@@ -363,6 +369,7 @@ class ChatReducer {
         // uncertain：prompt 应答超时，pi 可能已经收下。气泡先标红，但仍留在待确认集合里，
         // 之后若收到同文本的 message_start(user)，就把这条气泡确认为「已发送」，而不是再追加一条。
         if (confirmed || (delivery == Delivery.FAILED && !uncertain)) unconfirmed.remove(key)
+        if (confirmed && delivery == Delivery.SENT) notPersisted += key
         return state.updateItem(key) {
             val u = it as? ChatItem.User ?: return@updateItem it
             if (u.delivery == Delivery.SENT && wasConfirmed && delivery != Delivery.FAILED) u else u.copy(delivery = delivery)
@@ -372,6 +379,7 @@ class ChatReducer {
     /** 失败气泡用户点「重试」或撤回时移除。 */
     fun removeItem(state: ChatState, key: String): ChatState {
         unconfirmed.remove(key)
+        notPersisted.remove(key)
         return state.copy(items = state.items.filterNot { it.key == key })
     }
 
@@ -450,6 +458,7 @@ class ChatReducer {
     private fun reset() {
         streamingKey = null
         unconfirmed.clear()
+        notPersisted.clear()
         thinkingStartedAt.clear()
     }
 

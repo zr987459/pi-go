@@ -299,4 +299,50 @@ class ChatReducerTest {
         val live = r.fromMessages(msgs, base = base, live = true)
         assertEquals(ToolStatus.PENDING, live.items.filterIsInstance<ChatItem.Tool>().single().status)
     }
+
+    @Test
+    fun handledBubbleDoesNotShiftCarryMatching() {
+        // 审查 R3 Nit：扩展命令消费（handled）的气泡不写入会话，不能算进「已确认」条数，否则已写入的消息会重复成「发送失败」。
+        var s = r.addPendingUser(ChatState(), "local-0", "/扩展命令")
+        s = r.setDelivery(s, "local-0", Delivery.SENT, confirmed = true)
+        s = r.addPendingUser(s, "local-1", "刚发的")
+        s = r.setDelivery(s, "local-1", Delivery.SENT)
+        val res = r.interruptWithdrawing(s, NoticeKind.STOPPED, "已强制停止")
+        assertEquals(listOf("local-1"), res.withdrawn.map { it.key })
+        val rebuilt = r.fromMessages(arr("""{"role":"user","content":"刚发的"}"""), base = res.state, carry = res.withdrawn)
+        val users = rebuilt.items.filterIsInstance<ChatItem.User>()
+        assertEquals(listOf("刚发的"), users.map { it.text })
+        assertEquals(Delivery.SENT, users.single().delivery)
+    }
+
+    @Test
+    fun compactedHistoryKeepsCarryInsteadOfDropping() {
+        // 已确认条数多于历史条数（压缩后历史只剩近期）：宁可保留为「发送失败」，不丢弃。
+        val base = ChatState(
+            items = listOf(
+                ChatItem.User("u-a", "一", Delivery.SENT),
+                ChatItem.User("u-b", "二", Delivery.SENT),
+                ChatItem.User("u-c", "继续", Delivery.SENT),
+            ),
+        )
+        val carry = listOf(ChatItem.User("local-9", "继续", Delivery.SENT))
+        val rebuilt = r.fromMessages(arr("""{"role":"user","content":"继续"}"""), base = base, carry = carry)
+        val users = rebuilt.items.filterIsInstance<ChatItem.User>()
+        assertEquals(listOf("继续", "继续"), users.map { it.text })
+        assertEquals(Delivery.FAILED, users.last().delivery)
+    }
+
+    @Test
+    fun incompleteBaseTimelineOnlyMatchesHistoryTail() {
+        // 此前历史没加载出来（base 里没有已确认消息）：只在历史尾部匹配，旧的同文本短句不会把 carry 抵消掉。
+        val carry = listOf(ChatItem.User("local-9", "继续", Delivery.SENT))
+        val rebuilt = r.fromMessages(
+            arr("""{"role":"user","content":"继续"}""", """{"role":"user","content":"别的"}"""),
+            base = ChatState(),
+            carry = carry,
+        )
+        val users = rebuilt.items.filterIsInstance<ChatItem.User>()
+        assertEquals(listOf("继续", "别的", "继续"), users.map { it.text })
+        assertEquals(Delivery.FAILED, users.last().delivery)
+    }
 }
