@@ -4,6 +4,7 @@ import androidx.compose.runtime.Immutable
 import io.github.zr987459.pigo.contract.ChatItem
 import io.github.zr987459.pigo.contract.ContentBlock
 import io.github.zr987459.pigo.contract.Delivery
+import io.github.zr987459.pigo.contract.ImageInput
 import io.github.zr987459.pigo.contract.ToolStatus
 
 /**
@@ -25,6 +26,8 @@ sealed interface ChatRow {
         val error: String? = null,
         /** 失败原因是没配模型 / Key 错误 / 连不上模型服务：气泡上给「去设置模型」。 */
         val needsSettings: Boolean = false,
+        /** 本地气泡附带的图片（乐观显示缩略图用；引擎确认后的图片由 TimelineExtra.UserImages 提供）。 */
+        val images: List<ImageInput> = emptyList(),
     ) : ChatRow
 
     /**
@@ -129,6 +132,8 @@ data class LocalSend(
     val sawRunning: Boolean = false,
     /** 失败原因与模型配置有关（没配模型、Key 错误、连不上模型服务）。 */
     val needsSettings: Boolean = false,
+    /** 随这条消息发出的图片（C1）；失败重试时原样带上。 */
+    val images: List<ImageInput> = emptyList(),
 )
 
 fun formatSeconds(ms: Long): String {
@@ -159,7 +164,7 @@ object ChatRows {
         }
         // 乐观气泡总在最后：它们是引擎还没确认的发送。
         local.forEach { l ->
-            out += ChatRow.User("local-${l.id}", l.text, l.status, localId = l.id, error = l.error, needsSettings = l.needsSettings)
+            out += ChatRow.User("local-${l.id}", l.text, l.status, localId = l.id, error = l.error, needsSettings = l.needsSettings, images = l.images)
         }
         return out
     }
