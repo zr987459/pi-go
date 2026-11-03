@@ -9,12 +9,15 @@ SessionHostImpl 本体按 §8.1 归 r3/session（core/session），本线只提�
 
 ## 已完成
 - 07:12 从 r3/core-base@9de6c2a 建分支
-- pigo-bridge.ts 写好；§5.7 三件事已用真 pi 1.5.0 实测，结论见 docs/protocol/r3-measurements.md（桥接四项全部可行；trust 需写 trust.json 或 -a；--no-session 用临时会话近似）
+- §5.7 三件事真 pi 1.5.0 实测完成：docs/protocol/r3-measurements.md（+ docs/protocol/r3-measure/*.mjs）
+- pigo-bridge.ts；contract/bridge/PiBridge.kt + fake/FakePiBridge.kt（只新增）
+- PiEngine 实现 PiBridge（tree-nav/label/reload/switch + 退路）、-e/-a、过滤 pigo: 命令、debugEnginePid；ProjectTrustFile；ProcessTree.enginePid；app EngineBindings 一行接线（范围外最小改动）
+- 单测：PiEngineBridgeTest、PigoBridgeTest、ProjectTrustFileTest、ProcessTreeEnginePidTest；RealPiBridgeIntegrationTest + .github/workflows/realpi.yml
 
 ## 下一步
-- Kotlin：EngineConfig -e/-a、PigoBridge 安装与协议解析、PiEngine 桥接调用+退路、过滤 pigo: 命令、ProjectTrustFile、debugEnginePid
-- RealPiBridgeIntegrationTest + CI 步骤（npm i pi 后跑）
-- workspace：@ 搜索、branchName、listDirs；删 GitParse
+- 看 CI（android.yml + realpi.yml）结果并修
+- workspace：新契约 contract/workspace/WorkspaceSearch.kt；RootfsWorkspace 加 @ 模糊搜索（照 pi-tui autocomplete 打分）、branchName()、listDirectories；删 GitParse.kt/GitParseTest/GitDiffRealTest，git API 改为 @Deprecated 存根
+- 开 PR（base r3/core-base）
 
 ## 接手须知
 - 本地工作副本：/workspace/work/r3core/src（tarball 解包，非 git）；真 pi 1.5.0：/workspace/work/r3core/pi/node_modules/.bin/pi
