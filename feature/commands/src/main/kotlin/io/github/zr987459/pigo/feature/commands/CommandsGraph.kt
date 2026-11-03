@@ -3,6 +3,8 @@ package io.github.zr987459.pigo.feature.commands
 import io.github.zr987459.pigo.contract.DraftStore
 import io.github.zr987459.pigo.contract.EngineClient
 import io.github.zr987459.pigo.contract.EngineExtras
+import io.github.zr987459.pigo.contract.ExecResult
+import io.github.zr987459.pigo.contract.LaunchEnvProvider
 import io.github.zr987459.pigo.contract.RuntimeManager
 import io.github.zr987459.pigo.contract.SessionIndex
 import io.github.zr987459.pigo.contract.fake.FakeDraftStore
@@ -36,6 +38,7 @@ class CommandsGraph private constructor(
         /**
          * 真实实现。[filesDir] 为 App 私有目录（`context.filesDir`），索引缓存、置顶归档、草稿都写在 `commands/` 下，
          * 不进容器、不改 pi 文件。
+         * [launchEnv] 与引擎启动用的是同一个：自动命名的 `pi --print` 要从进程环境拿 Key（DESIGN §3.10，Key 不写进容器文件）。
          */
         fun real(
             filesDir: File,
@@ -43,10 +46,11 @@ class CommandsGraph private constructor(
             runtime: RuntimeManager,
             engine: EngineClient,
             extras: EngineExtras,
+            launchEnv: LaunchEnvProvider,
         ): CommandsGraph {
             val dir = File(filesDir, "commands").apply { mkdirs() }
             val titles = TitleGenerator(
-                exec = { argv -> runtime.exec(argv, timeoutMs = TITLE_TIMEOUT_MS) },
+                exec = titleExec(runtime, launchEnv),
                 writePrompt = { text ->
                     val guest = "/tmp/pigo-title-${UUID.randomUUID()}.txt"
                     val host = runtime.hostFile(guest)
@@ -66,6 +70,13 @@ class CommandsGraph private constructor(
             val namer = AutoNamer(engine, extras, index, titles, scope).also { it.start() }
             return CommandsGraph(index, FileDraftStore(File(dir, "drafts.json")), SkillTemplateManager(runtime::hostFile), namer)
         }
+
+        /**
+         * 自动命名用的 exec：每次都重新读 [LaunchEnvProvider.env]（Key 可能刚在设置里改过），
+         * Key 只经环境变量传入，不出现在 argv 里（审查第 1 轮 Important 2）。
+         */
+        internal fun titleExec(runtime: RuntimeManager, launchEnv: LaunchEnvProvider): suspend (List<String>) -> ExecResult =
+            { argv -> runtime.exec(argv, env = launchEnv.env(), timeoutMs = TITLE_TIMEOUT_MS) }
 
         const val SESSIONS_GUEST_DIR = "/root/.pi/agent/sessions"
 
