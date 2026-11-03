@@ -8,8 +8,6 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.semantics.SemanticsProperties
-import androidx.compose.ui.test.assertDoesNotExist
-import androidx.compose.ui.test.assertExists
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.github.zr987459.pigo.contract.ModelRef
 import io.github.zr987459.pigo.contract.fake.FakeAppSettingsStore
@@ -27,7 +25,7 @@ class ModelPickerUiTest {
     @get:Rule val rule = createComposeRule()
 
     private fun rowTags(): List<String> = rule.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsProperties.TestTag))
-        .fetchSemanticsNodes().mapNotNull { it.config.getOrNull(SemanticsProperties.TestTag) }
+        .fetchSemanticsNodes().mapNotNull { node -> node.config.getOrElseNullable(SemanticsProperties.TestTag) { null } }
         .filter { it.startsWith(ModelTags.ROW_PREFIX) }
 
     private fun show(current: ModelRef?, onConfigure: (String) -> Unit = {}, onSelect: (ModelRef) -> Unit = {}) = rule.setContent {
