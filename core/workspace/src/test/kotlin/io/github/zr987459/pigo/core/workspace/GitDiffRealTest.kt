@@ -52,6 +52,7 @@ class GitDiffRealTest {
         File(repo, "sub/mod.kt").writeText("1\n2\n")
         File(repo, "ignored.log").writeText("secret\n")
         File(repo, "new.kt").writeText("n1\nn2\n")
+        File(repo, "sub/newsub.kt").writeText("s1\ns2\n")
         File(repo, "empty.txt").writeText("")
 
         val root = rootfs.path
@@ -70,8 +71,8 @@ class GitDiffRealTest {
     @After
     fun tearDown() { if (::rootfs.isInitialized) rootfs.deleteRecursively() }
 
-    private fun diff(path: String, staged: Boolean = false) = runBlocking {
-        when (val r = ws.gitDiff("/root/proj", path, staged)) {
+    private fun diff(path: String, staged: Boolean = false, cwd: String = "/root/proj") = runBlocking {
+        when (val r = ws.gitDiff(cwd, path, staged)) {
             is Outcome.Ok -> r.value
             is Outcome.Err -> throw AssertionError("gitDiff($path) 失败：${r.message}", r.cause)
         }
@@ -96,6 +97,23 @@ class GitDiffRealTest {
         val e = diff("empty.txt").single()
         assertEquals("空文件不生成 hunk", 0, e.hunks.size)
         assertEquals(0, e.added)
+    }
+
+    /** 审查第 2 轮回归：cwd 为仓库子目录时，未跟踪文件（在 cwd 内外）都要生成「全部新增」，头路径仍相对仓库根。 */
+    @Test
+    fun untrackedFileDiffWhenCwdIsRepoSubdirectory() {
+        val sub = "/root/proj/sub"
+        val outside = diff("new.kt", cwd = sub).single()
+        assertEquals("cwd 之外（仓库根下）的未跟踪文件", "new.kt", outside.path)
+        assertEquals(2, outside.added)
+        assertEquals("new.kt", diff("/root/proj/new.kt", cwd = sub).single().path)
+        val inside = diff("sub/newsub.kt", cwd = sub).single()
+        assertEquals("cwd 之内的未跟踪文件", "sub/newsub.kt", inside.path)
+        assertEquals(2, inside.added)
+        assertEquals("sub/newsub.kt", diff("/root/proj/sub/newsub.kt", cwd = sub).single().path)
+        assertEquals("已跟踪改动不受影响", "sub/mod.kt", diff("sub/mod.kt", cwd = sub).single().path)
+        assertEquals("子目录下干净文件仍为空", emptyList<Any>(), diff("clean.kt", cwd = sub))
+        assertEquals("子目录下被忽略文件仍为空", emptyList<Any>(), diff("ignored.log", cwd = sub))
     }
 
     @Test

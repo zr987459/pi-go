@@ -205,7 +205,9 @@ class RootfsWorkspace(
         if (diffs.isEmpty() && path != null && !staged) {
             val top = gitRoot(cwd) ?: return@guarded diffs
             val rel = repoRelative(top, path) ?: return@guarded diffs
-            val untracked = git(dir, "ls-files", "--others", "--exclude-standard", "-z", "--", ":(top,literal)$rel")
+            // --full-name：无论 cwd 在仓库哪个子目录，ls-files 都输出相对仓库根的路径，才能和 rel 比对
+            // （否则 cwd 为子目录时输出相对 cwd 的 ../new.kt、n2.kt，永远匹配不上，回归为 diff 全空）。
+            val untracked = git(dir, "ls-files", "--others", "--exclude-standard", "--full-name", "-z", "--", ":(top,literal)$rel")
             if (untracked.exitCode != 0 || untracked.stdout.split('\u0000').none { it == rel }) return@guarded diffs
             val f = runCatching { paths().hostFile(GuestPaths.child(top, rel)) }.getOrNull()
             if (f != null && f.isFile && f.length() <= WorkspaceFs.DEFAULT_MAX_TEXT_BYTES && !looksBinary(f)) {
