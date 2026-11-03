@@ -1,6 +1,6 @@
 # feat/engine-rpc（W1）状态
 
-> **修复1 进行中**（2026-11-03 16:48 CST）：PR #13 审查第 1 轮，Important 4 条 + Nit 4 条；先 merge origin/main（cfa3725）。
+> **修复1 已完成**（2026-11-03 17:10 CST）：PR #13 审查第 1 轮 Important 4 条、Nit 4 条已修，明细与测试结果见下文与 PR 描述。
 
 
 - 2026-11-03 15:47 CST：**续做已开始**（接手上一位 W1 工作者；其本地未推送的 15 个文件已丢失，按交接说明重做）。
@@ -24,3 +24,25 @@
 - 17:10 已开 PR #13 到 main；`1e043c8` 的 push run 41603561762、PR run 41603630161 均为 success。
 
 ## 状态：**已完成，待审查**（遗留见 PR #13 描述）
+
+## 审查第 1 轮修复（修复1，2026-11-03）
+
+基线：先 `merge origin/main`（cfa3725，含 PR#11 UI 改版、PR#10 W4 命令面板）→ 3bffa68，无冲突；W4 改过的 `ChatController` 原样保留，`feature/chat` 单测 92/92 通过。未改 app、build.gradle、.github、契约。
+
+| 条目 | 修法（文件:行号，按最终提交） |
+|---|---|
+| Important#1 messageMeta 按 pi 1.5.0 真实序列 | `MessageMetaTracker.kt`：数据源只用 `get_entries`（全量 `reset` / `since=lastId` 增量 `merge` :54），不再靠 `entry_appended` 拼接；每份快照带 covered（请求前已收到 message_end 的 key），`compute` :93 只用 covered 里的气泡从末尾配对，尾部未写盘的新气泡不参与；`context_edit(replacement=null)` 的目标从投影排除 :95，时间线上已重试的失败助手消息不配对 `retriedFailures` :128；链断只用叶子一侧。`PiEngine.kt`：`onMessageEnded` :350（user/assistant/toolResult 的 message_end 与 entry_appended 都触发增量拉取），`refreshEntriesOnce` :1134 由单协程串行处理，请求期间又有 message_end 则丢弃快照重拉。 |
+| Important#2 会话替换/失败/乱序 | `PiEngine.kt` `resetMeta` :361：在**同一次归约**里作废旧簿记（epoch++）再换时间线（:647 rebuild、:1027 切会话、`clearedAll`、boot）；fork 后 reloadAfterSwitch 走 rebuild 同样作废；响应 epoch 不符即丢弃（不会用旧会话的 entry 配对、不会覆盖更新状态）；get_entries 失败（超时 / >32 MB）清空并发布空表（界面按契约禁用分叉），since 找不到时改全量；长会话走 since 增量。 |
+| Important#3 通知前台判定 | `AndroidTaskNotifications.kt` `ForegroundDecider` :24：Activity 计数 > 0 **或** `ActivityManager.getMyMemoryState` 重要性 = FOREGROUND(100)；迟注册（AppGraph by lazy）不再恒判后台，后台只剩前台服务时为 125 不误判。未用 ProcessLifecycleOwner：core/engine 未声明 lifecycle-process，按 §3.3 不改 build.gradle.kts；未改 app。测试：JVM `TaskNotifierTest`（迟注册、started 不发、stopped 后发一条、aborted 不发）；仪器 `core/engine/src/androidTest/.../AndroidTaskNotificationsTest.kt`（pigo-tasks 通道已建、Android 13 未授权不崩）。Robolectric 需维护者在 core/engine 加 `testImplementation("org.robolectric:robolectric")` 后才能补。 |
+| Important#4 get_tree 深度 | `ExtraResponses.kt` `buildForest` :147：显式栈后序构建，去掉 500 层上限与拉平，保留真实父子结构；新增 `EngineRpcReducerTest.deepTreeKeepsBranchStructureBeyond500`（第 600 层两分支逐层断言）。 |
+| Nit 解析失败空等 | `RpcChannel.kt` `failMalformedResponse` :172：行首抽 id，立即以 RPC_REJECTED「会话太大，无法读取」结束；Oversized 帧拿不到行内容，仍按超时处理。 |
+| Nit stderr 栈 | `RpcChannel.kt:79` stderr 线程用默认栈，只给 stdout 读线程 64 MB。 |
+| Nit TurnStats | `ChatReducer.kt:91,475` + `TurnStats.kt`：传 cwd；以 agent_start 时的最后一条为本轮起点，steer 前写的文件不漏。 |
+| Nit bash 丢块 | `PiEngine.kt:1300` 每个 bash 一条无界 Channel，响应后先归约完已入队增量再关闭。 |
+
+### 本地测试（沙箱 JDK17 + Android SDK + 真 pi 1.5.0）
+- `:core:protocol:test` 105/105 通过（新增：MessageMetaTracker 未写盘尾部气泡 / context_edit+重试 / 链断 / since 增量，深树结构，解析失败立即结束请求，TurnFiles）。
+- `:core:engine:testDebugUnitTest` 75 个，0 失败，1 跳过（RecordFixturesTest，需录制）；含 `PIGO_PI_BIN=pi 1.5.0` 的真 pi 集成 RealPiIntegrationTest 8/8、RealPiExtrasIntegrationTest 8/8（新增 `messageMetaNeverPairsNewBubbleWithPreviousEntryMidTurn`：第二轮全程监听，新气泡从未配到第一条 entry，轮末配到内容为「第二句」的 user entry）。
+- 脚本 pi 测试 `messageMetaFollowsReal150SequenceWithAutoRetry` 按真实序列：普通消息不发 entry_appended、message_end 后才写盘、一次自动重试（失败助手 + context_edit + 重试成功），全程断言无错配。
+- `:feature:chat:testDebugUnitTest` 92/92。
+- 未运行：androidTest（本机 AAPT2 不可用，未编译）；`:app` 单测。CI 只跑 assembleDebug。
