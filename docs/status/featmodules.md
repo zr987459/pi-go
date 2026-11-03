@@ -1,6 +1,10 @@
 # feat/modules 状态（W0 前置）
 
-**状态：完成，PR #8 已开到 main**（2026-11-03 15:08 CST）
+**状态：审查第 1 轮修复 1 进行中**（2026-11-03 15:15 CST 接手）
+
+> 修复1 进行中：PR #8 审查第 1 轮 Important 3 条 + Nit 8 条。
+
+（上一状态：完成，PR #8 已开到 main，2026-11-03 15:08 CST）
 
 ## 已完成
 - 新模块骨架：core/catalog、core/workspace、feature/models、feature/files、feature/commands、feature/usage。
