@@ -72,7 +72,7 @@ class KeystoreSecretStoreJvmTest {
         assertEquals("sk-test-0123456789ABCD", store.get("key.deepseek"))
         assertEquals("ABCD", store.last4("key.deepseek"))
         assertTrue(cipher.threads.isNotEmpty())
-        assertTrue("加解密应在 IO 线程：${cipher.threads}", cipher.threads.all { it == "fake-io" })
+        assertTrue("加解密应在 IO 线程：${cipher.threads}", cipher.threads.all { it.substringBefore(" @coroutine") == "fake-io" })
         assertFalse(cipher.threads.contains(caller))
     }
 

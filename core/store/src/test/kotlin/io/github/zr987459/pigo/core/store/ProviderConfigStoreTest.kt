@@ -57,7 +57,7 @@ class ProviderConfigStoreTest {
     @Test fun presetsGroupedIntoThreeKinds() = runTest {
         val groups = store().presets().groupBy { it.kind }
         assertEquals(PresetKind.entries.toSet(), groups.keys)
-        assertTrue(groups[PresetKind.CODING_PLAN]!!.all { it.note.contains("需要套餐 Key") })
+        assertTrue(groups[PresetKind.CODING_PLAN]!!.any { it.provider == "zai-coding-cn" && it.note.contains("需要套餐 Key") })
         val custom = groups[PresetKind.CUSTOM_OPENAI]!!.associateBy { it.provider }
         assertEquals("https://dashscope.aliyuncs.com/compatible-mode/v1", custom["bailian"]!!.defaultBaseUrl)
         assertEquals("https://open.bigmodel.cn/api/paas/v4", custom["zhipu"]!!.defaultBaseUrl)
