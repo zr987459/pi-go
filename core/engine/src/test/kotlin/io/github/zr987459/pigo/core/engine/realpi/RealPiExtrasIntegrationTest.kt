@@ -172,6 +172,33 @@ class RealPiExtrasIntegrationTest {
         assertTrue("新助手应配到「你好，世界」：${a3Entry.preview}", a3Entry.preview.contains("你好"))
     }
 
+    /**
+     * 审查第 3 轮 Important：真 pi 1.5.0 截断恢复。stopReason=length 且输出低于 maxTokens 的回复被 context_edit 排除，
+     * 时间线上截断气泡（stopReason=length）不得拿到上一条助手的条目，上一条助手仍配自己的，之后几轮不错位、不重复配对。
+     */
+    @Test
+    fun lengthRecoveryKeepsMetaAligned() = runBlocking {
+        engine.start()
+        turn("第一句 #text")
+        until { engine.messageMeta.value.size >= 2 }
+        val a1 = engine.chat.value.items.last { it is ChatItem.Assistant }
+        val a1Entry = engine.messageMeta.value.getValue(a1.key).entryId
+        turn("第二句 #length")
+        val cut = engine.chat.value.items.filterIsInstance<ChatItem.Assistant>().first { it.stopReason == "length" }
+        // 等 pi 把 context_edit 写盘、增量 get_entries 拉到它
+        until { (engine.entries(null) as Outcome.Ok).value.entries.any { it.type == "context_edit" } }
+        turn("第三句 #text")
+        val a3 = engine.chat.value.items.last { it is ChatItem.Assistant }
+        until { engine.messageMeta.value[a3.key] != null }
+        val meta = engine.messageMeta.value
+        assertNull("截断气泡不应有 meta：${meta[cut.key]}", meta[cut.key])
+        assertEquals("上一条助手仍配自己的条目", a1Entry, meta[a1.key]?.entryId)
+        val ids = meta.values.map { it.entryId }
+        assertEquals("meta 不得重复配同一条目：$meta", ids.size, ids.toSet().size)
+        val entries = (engine.entries(null) as Outcome.Ok).value.entries
+        assertTrue("新助手应配到「你好，世界」", entries.single { it.id == meta.getValue(a3.key).entryId }.preview.contains("你好"))
+    }
+
     @Test
     fun stopDuringRetryBackoffKeepsMetaAligned() = stopOrAbortDuringRetryKeepsMetaAligned { assertTrue(engine.stop() is Outcome.Ok) }
 

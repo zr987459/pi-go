@@ -210,6 +210,12 @@ class MockOpenAiServer : AutoCloseable {
             lastUser.contains("#retry") && counters.getOrPut(lastUser) { AtomicInteger() }.getAndIncrement() == 0 ->
                 respondJson(ex, 503, """{"error":{"message":"The server is overloaded, please retry","type":"overloaded"}}""")
             // 流出半截正文后掐断连接：pi 得到带部分内容的 stopReason=error（errorMessage 如 "terminated"），按可重试错误进入自动重试。
+            // 首次回复 finish_reason=length 且输出远低于 maxTokens：pi 1.5.0 视为可恢复截断（isRecoverableLength），
+            // 用 context_edit(replacement=null) 排除它（_omitRecoveryAttempt）后压缩重试；之后正常回复。
+            lastUser.contains("#length") && !isSummary && counters.getOrPut(lastUser) { AtomicInteger() }.getAndIncrement() == 0 -> sse(ex) {
+                text("截断的回")
+                finish = "length"
+            }
             lastUser.contains("#halfdrop") -> sse(ex) {
                 text("半截")
                 Thread.sleep(50)

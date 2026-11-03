@@ -39,8 +39,12 @@ W0 契约冻结 `Chat.kt`，不新增 `ChatItem` 子类。时间线本身与 mai
 请求期间又有 `message_end` 就丢弃快照重拉，会话被替换（epoch 变化）就丢弃迟到响应；`get_entries` 失败（超时、>32 MB）清空簿记并发布空表。
 从 leafId 沿 parentId 取**当前分支**（链断时只用叶子一侧）；`toolResult` 按 `toolCallId` 对到 `tool-<id>`；user / assistant 各自**从尾部**配对，只用 covered 里的气泡
 （压缩后时间线头部对不齐；未写盘的尾部气泡不会配到上一条）。
-失败助手消息由 tracker 对齐：被 `context_edit`（replacement=null）排除的条目、或 `stopReason=error` 的条目，与 `stopReason=error` 的气泡都不发 meta——
-两边都是失败一起跳过，只有一边是失败只跳那一边（自动重试成功、重试中停止、`abort_retry` 放弃重试、重建后失败消息已不在时间线，都不会让后面整体错位）。
+被 pi 排除的助手消息由 tracker 对齐：条目被 `context_edit`（replacement=null）排除时——自动重试 / 重试中停止 / `abort_retry` 的 `error`，
+截断恢复（`_omitRecoveryAttempt`：`stopReason=length` 且输出低于 maxTokens）的 `length`——若气泡的 stopReason 与条目相同且属于 {error, length}，两边一起跳过、不发 meta；
+否则（空失败消息已被时间线删掉、重建后不在时间线）只跳条目。这一轮还在进行时，最后一条 error/length 条目可能马上被排除，暂不配对。
+其余照常配对：不会重试的错误（401、重试次数用尽）和普通截断留在上下文里，两边都是 error/length 时正常给 meta；气泡是 error 而条目不是时只跳气泡。
+全量 `get_entries` 因会话太大（超长 / 解析失败，立即以「会话太大，无法读取」结束）失败时记下当前 epoch：同一会话内不再自动全量重拉，
+换会话（epoch 变化）或手动 `entries(null)` 成功后解除。
 fork / clone 成功但随后 `get_messages` 失败时，时间线清空并重置簿记（与 openSession 失败一致），不再按旧 entryId 允许「从这里分叉」。
 乐观气泡、发送失败、扩展消费（handled）、流式中的助手消息不参与。不按文本匹配。
 

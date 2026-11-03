@@ -180,7 +180,7 @@ class MessageMetaTrackerTest {
         assertEquals("e2", m3.getValue("a-1").entryId)
     }
 
-    /** 有失败条目但 context_edit 还没写盘（扩展 turn_end/agent_end 异步 await 的瞬时窗口）：失败条目与失败气泡都不配，也不错位。 */
+    /** 有失败条目但 context_edit 还没写盘、这一轮还在进行（扩展 turn_end/agent_end 异步 await、auto_retry_start 之前的瞬时窗口）：暂不配，也不错位。 */
     @Test
     fun failedEntryBeforeContextEditIsSkippedNotShifted() {
         val t = MessageMetaTracker()
@@ -190,12 +190,69 @@ class MessageMetaTrackerTest {
             ChatItem.User("u-0", "a", Delivery.SENT), ChatItem.Assistant("a-1", emptyList(), false, "stop"),
             ChatItem.User("u-2", "b", Delivery.SENT), ChatItem.Assistant("a-3", emptyList(), false, "error", "overloaded"),
         )
-        val m = t.compute(withBubble)
+        val m = t.compute(withBubble, running = true)
         assertNull(m["a-3"])
         assertEquals("e2", m.getValue("a-1").entryId)
         // 空失败消息已被 onRetryStart 从时间线删掉：只跳条目
-        val m2 = t.compute(withBubble.take(3), retrying = true)
+        val m2 = t.compute(withBubble.take(3), retrying = true, running = true)
         assertEquals("e2", m2.getValue("a-1").entryId)
+    }
+
+    /** 审查第 3 轮 Nit 1：不会重试的错误（401、重试次数用尽）留在上下文里、未被排除；轮已结束时两边都是 error 照常配对。 */
+    @Test
+    fun nonRetriedErrorStaysInContextAndPairs() {
+        val t = MessageMetaTracker()
+        val failed = o("""{"type":"message","id":"e4","parentId":"e3","message":{"role":"assistant","provider":"fake","model":"m","content":[],"stopReason":"error","errorMessage":"401 Incorrect API key","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"total":0}}}}""")
+        t.reset(listOf(user("e1", null, "a"), asst("e2", "e1", 5), user("e3", "e2", "b"), failed, user("e5", "e4", "c"), asst("e6", "e5", 7)), leafId = "e6",
+            covered = setOf("u-0", "a-1", "u-2", "a-3", "u-4", "a-5"))
+        val items = listOf(
+            ChatItem.User("u-0", "a", Delivery.SENT), ChatItem.Assistant("a-1", emptyList(), false, "stop"),
+            ChatItem.User("u-2", "b", Delivery.SENT), ChatItem.Assistant("a-3", emptyList(), false, "error", "401 Incorrect API key"),
+            ChatItem.User("u-4", "c", Delivery.SENT), ChatItem.Assistant("a-5", emptyList(), false, "stop"),
+        )
+        val m = t.compute(items)
+        assertEquals("e4", m.getValue("a-3").entryId)
+        assertEquals("e2", m.getValue("a-1").entryId)
+        assertEquals("e6", m.getValue("a-5").entryId)
+        // 刚结束、它是最后一条时也照常配对
+        t.reset(listOf(user("e1", null, "a"), asst("e2", "e1", 5), user("e3", "e2", "b"), failed), leafId = "e4", covered = setOf("u-0", "a-1", "u-2", "a-3"))
+        val m2 = t.compute(items.take(4))
+        assertEquals("e4", m2.getValue("a-3").entryId)
+        assertEquals("e2", m2.getValue("a-1").entryId)
+    }
+
+    /**
+     * 审查第 3 轮 Important：截断恢复（pi 1.5.0 `_omitRecoveryAttempt`）。stopReason=length 且输出低于 maxTokens 的回复被
+     * context_edit(replacement=null) 排除；时间线上截断气泡的 stopReason 是 length。旧实现只跳条目，a-3 拿到 e2、a-1 为空。
+     */
+    @Test
+    fun lengthRecoveryOmittedEntrySkipsWithLengthBubble() {
+        val t = MessageMetaTracker()
+        val cut = o("""{"type":"message","id":"e4","parentId":"e3","message":{"role":"assistant","provider":"fake","model":"m","content":[{"type":"text","text":"截断的回"}],"stopReason":"length","usage":{"input":120,"output":12,"cacheRead":0,"cacheWrite":0,"totalTokens":132,"cost":{"total":0}}}}""")
+        val edit = o("""{"type":"context_edit","id":"x1","parentId":"e4","targetId":"e4","replacement":null}""")
+        t.reset(listOf(user("e1", null, "a"), asst("e2", "e1", 5), user("e3", "e2", "b"), cut, edit), leafId = "x1", covered = setOf("u-0", "a-1", "u-2", "a-3"))
+        val items = listOf(
+            ChatItem.User("u-0", "a", Delivery.SENT), ChatItem.Assistant("a-1", emptyList(), false, "stop"),
+            ChatItem.User("u-2", "b", Delivery.SENT), ChatItem.Assistant("a-3", listOf(ContentBlock.Text(0, "截断的回")), false, "length"),
+        )
+        val m = t.compute(items)
+        assertNull("截断气泡不配对", m["a-3"])
+        assertEquals("e2", m.getValue("a-1").entryId)
+        assertEquals(5L, m.getValue("a-1").usage!!.output)
+        // 恢复后重试成功：新助手配新条目
+        t.merge(listOf(asst("e5", "x1", 9)), leafId = "e5", covered = setOf("u-0", "a-1", "u-2", "a-3", "a-4"))
+        val m2 = t.compute(items + ChatItem.Assistant("a-4", emptyList(), false, "stop"))
+        assertEquals("e5", m2.getValue("a-4").entryId)
+        assertEquals("e2", m2.getValue("a-1").entryId)
+        assertNull(m2["a-3"])
+        // 被排除条目与气泡 stopReason 不同（重建后截断消息已不在时间线）：只跳条目
+        val m3 = t.compute(listOf(items[0], items[1], items[2], ChatItem.Assistant("a-4", emptyList(), false, "stop")))
+        assertEquals("e5", m3.getValue("a-4").entryId)
+        assertEquals("e2", m3.getValue("a-1").entryId)
+        // 未被排除的普通截断（输出达到 maxTokens，不恢复）照常配对
+        val plain = MessageMetaTracker()
+        plain.reset(listOf(user("e1", null, "a"), asst("e2", "e1", 5), user("e3", "e2", "b"), cut), leafId = "e4", covered = setOf("u-0", "a-1", "u-2", "a-3"))
+        assertEquals("e4", plain.compute(items).getValue("a-3").entryId)
     }
 
     /** 链断（parentId 指向快照里没有的条目）时只用已知的叶子一侧，不整个清空。 */
