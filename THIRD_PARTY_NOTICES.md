@@ -101,7 +101,12 @@ GPL/LGPL 义务：mvp/runtime 引入时在 `core/runtime/NOTICE-runtime.md` 记�
   - earendil-works/pi（npm `@earendil-works/pi-coding-agent@1.5.0`），MIT —— 运行时调用（不复制）：`pigo-auth.mjs` 在容器内 import pi 自带的 `ModelRuntime`、`SettingsManager`、`getAgentDir`；`AuthJsonLock.kt` 遵循其 `dist/core/auth-storage.js` 的 proper-lockfile 锁目录约定
 - feat/modules（W0，`docs/notices/feat-modules.md`）：无移植代码；新增 Gradle 依赖已并入 §3。
 - feat/wiring（W5）：无新增移植；`app/.../nav/WiredPages.kt`、`feature/chat/.../ui/ChatWiring.kt` 为原创接线代码。
-- feat/engine-rpc（W1）、feat/files（W3）合入 main 后，其 `docs/notices/*.md` 在此追加。
+- feat/files（W3，`docs/notices/feat-files.md`）：
+  - agegr/pi-web@025e24e74fdbc8f46c4e0cf31c6d6b3fa6cf29d5（npm @agegr/pi-web 0.14.2），MIT，Copyright (c) 2026 agegr —— 改写：`core/workspace/.../GitParse.kt`（状态分类思路，改为解析 porcelain v2）← `lib/git-status.ts:10-47`
+  - agegr/pi-web@025e24e，MIT —— 移植：`core/workspace/.../GitParse.kt` `addedFilePatch`（未跟踪文件生成「全部新增」diff）← `lib/git-changes.ts:158-176`
+  - agegr/pi-web@025e24e，MIT —— 改写：`core/workspace/.../FileTypes.kt`（扩展名 → MIME 表）← `lib/file-types.ts:8-46`
+  - agegr/pi-web@025e24e，MIT —— 改写：`feature/files/.../output/Ansi.kt`（ANSI 转义匹配正则）← `lib/ansi.ts:1-3`
+- feat/engine-rpc（W1）合入 main 后，其 `docs/notices/*.md` 在此追加。
 
 ## 8. dsh-Go 界面移植（ui/dsh-style、ui/dsh-panels）
 
