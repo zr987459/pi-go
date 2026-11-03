@@ -298,7 +298,10 @@ class PiEngineTest {
         val seen = mutableListOf<EngineStatus>()
         val collector = scope.launch { e.status.collect { synchronized(seen) { seen += it } } }
         e.send("会把 pi 撑爆")
-        waitFor { rt.processes.size == 2 && e.status.value is EngineStatus.Idle }
+        waitFor {
+            rt.processes.size == 2 && e.status.value is EngineStatus.Idle &&
+                e.chat.value.items.lastOrNull().let { it is ChatItem.Notice && it.kind == NoticeKind.INTERRUPTED }
+        }
         val crashed = synchronized(seen) { seen.filterIsInstance<EngineStatus.Crashed>() }.first()
         assertEquals(ErrCode.OOM, crashed.kind)
         assertEquals(134, crashed.exitCode)

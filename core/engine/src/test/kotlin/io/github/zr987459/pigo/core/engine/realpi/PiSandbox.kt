@@ -56,6 +56,8 @@ class PiSandbox : AutoCloseable {
         .replace(cwd.absolutePath, "/root/pi-cwd")
         .replace(root.absolutePath, "/root")
         .replace("127.0.0.1:${mock.port}", "127.0.0.1:PORT")
+        // pi 的系统提示词里带有它自己的安装路径：换成容器内的全局 npm 目录
+        .replace(Regex("/[^\"\\s\\\\]*?/lib/node_modules/"), "/usr/lib/node_modules/")
 
     /** pi 的会话目录名：去掉开头分隔符，`/ \ :` 换成 `-`（session-format.md）。 */
     private fun encoded(dir: File) =
