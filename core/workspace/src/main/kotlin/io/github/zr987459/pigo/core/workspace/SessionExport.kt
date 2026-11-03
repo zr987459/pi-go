@@ -21,7 +21,9 @@ import java.io.IOException
  *
  * - JSONL：原样复制会话文件。
  * - Markdown：宿主直接解析会话文件（不需要引擎），沿 `parentId` 从最后一条往回走，只导出当前分支。
- * - HTML：交给 [exportHtml]（引擎的 `export_html`，只能导出引擎当前打开的会话），再从容器里取出。
+ * - HTML：引擎的 `export_html` 只能导出**当前打开**的会话。所以先用 [currentSessionPath] 核对：
+ *   请求的会话就是当前会话时走 [exportHtml]；否则走 [cliExportHtml]（容器内一次性 `pi --export <会话> <输出>`）；
+ *   两者都不可用时返回 Err（「请先打开该会话再导出 HTML」），绝不把当前会话的内容按别的会话命名导出。
  *
  * 输出写到宿主的 [outDir]（应用缓存目录），供系统分享或另存。
  */
@@ -30,6 +32,10 @@ class WorkspaceSessionExporter(
     private val outDir: File,
     private val exportHtml: (suspend (outputGuestPath: String) -> Outcome<String>)? = null,
     private val io: CoroutineDispatcher = Dispatchers.IO,
+    /** 引擎当前打开的会话文件（容器路径）；未知或没有会话时返回 null。为 null（未注入）时不走 [exportHtml]。 */
+    private val currentSessionPath: (suspend () -> String?)? = null,
+    /** 导出任意会话：`pi --export <sessionGuestPath> <outputGuestPath>`，返回生成文件的容器路径。 */
+    private val cliExportHtml: (suspend (sessionGuestPath: String, outputGuestPath: String) -> Outcome<String>)? = null,
 ) : SessionExporter {
 
     override suspend fun export(sessionGuestPath: String, format: ExportFormat): Outcome<File> = withContext(io) {
@@ -44,10 +50,21 @@ class WorkspaceSessionExporter(
                     Outcome.Ok(File(outDir, "$base.md").apply { writeText(md) })
                 }
                 ExportFormat.HTML -> {
-                    val fn = exportHtml ?: return@withContext Outcome.Err(ErrCode.ENGINE_EXIT, "导出 HTML 需要引擎运行")
                     val guestOut = "/root/.pigo/exports/$base.html"
+                    val current = currentSessionPath?.let { f -> runCatching { f() }.getOrNull() }
+                    val isCurrent = current != null && samePath(current, sessionGuestPath)
+                    val engineFn = exportHtml?.takeIf { isCurrent }
+                    val cliFn = cliExportHtml
+                    val run: suspend () -> Outcome<String> = when {
+                        engineFn != null -> { { engineFn(guestOut) } }
+                        cliFn != null -> { { cliFn(GuestPaths.normalize(sessionGuestPath), guestOut) } }
+                        exportHtml == null -> return@withContext Outcome.Err(ErrCode.ENGINE_EXIT, "导出 HTML 需要引擎运行")
+                        else -> return@withContext Outcome.Err(ErrCode.UNKNOWN, "请先打开该会话再导出 HTML")
+                    }
                     workspace.paths().hostFile("/root/.pigo/exports").mkdirs()
-                    when (val r = fn(guestOut)) {
+                    // 先删旧产物，避免上次的同名文件被当作这次的结果
+                    runCatching { workspace.paths().hostFile(guestOut).delete() }
+                    when (val r = run()) {
                         is Outcome.Err -> r
                         is Outcome.Ok -> {
                             val produced = r.value.ifBlank { guestOut }
@@ -63,6 +80,9 @@ class WorkspaceSessionExporter(
             Outcome.Err(ErrCode.UNKNOWN, "导出失败：${e.message}", e)
         }
     }
+
+    private fun samePath(a: String, b: String): Boolean =
+        runCatching { GuestPaths.normalize(a) == GuestPaths.normalize(b) }.getOrDefault(false)
 
     /** 会话文件在 `/root/.pi/agent/sessions/` 下，在 `/root` 范围内。 */
     private fun rawSession(guest: String, requireJsonl: Boolean = true): File {

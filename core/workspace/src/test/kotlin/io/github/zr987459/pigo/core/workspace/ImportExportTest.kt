@@ -146,11 +146,54 @@ class ImportExportTest {
                 asked = p
                 File(rootfs, p.removePrefix("/")).writeText("<html>ok</html>")
                 Outcome.Ok(p)
-            }, io = Dispatchers.Unconfined)
+            }, io = Dispatchers.Unconfined, currentSessionPath = { "/root/.pi/agent/sessions/x/./s.jsonl" })
             val f = (ex.export("/root/.pi/agent/sessions/x/s.jsonl", ExportFormat.HTML) as Outcome.Ok).value
             assertEquals("/root/.pigo/exports/s.html", asked)
             assertEquals("<html>ok</html>", f.readText())
             assertEquals(out, f.parentFile)
+        } finally {
+            out.deleteRecursively()
+        }
+    }
+
+    /** 审查第 1 轮：请求的不是引擎当前会话时，不得用 export_html 导出当前会话冒充。 */
+    @Test
+    fun htmlExportOfNonCurrentSessionNeverUsesEngine() = runBlocking {
+        val dir = File(rootfs, "root/.pi/agent/sessions/x").apply { mkdirs() }
+        File(dir, "a.jsonl").writeText(session.first())
+        File(dir, "b.jsonl").writeText(session.first())
+        val out = Files.createTempDirectory("pigo-out3").toFile()
+        try {
+            var engineCalls = 0
+            val engine: suspend (String) -> Outcome<String> = { p ->
+                engineCalls++
+                File(rootfs, p.removePrefix("/")).apply { parentFile.mkdirs() }.writeText("<html>当前会话 a</html>")
+                Outcome.Ok(p)
+            }
+            // 1) 没有 CLI 兜底：返回 Err，提示先打开
+            val noCli = WorkspaceSessionExporter(ws, out, engine, Dispatchers.Unconfined, currentSessionPath = { "/root/.pi/agent/sessions/x/a.jsonl" })
+            val err = noCli.export("/root/.pi/agent/sessions/x/b.jsonl", ExportFormat.HTML)
+            assertTrue(err is Outcome.Err && err.message.contains("请先打开该会话"))
+            // 当前会话未知（未注入）同样不走引擎
+            assertTrue(WorkspaceSessionExporter(ws, out, engine, Dispatchers.Unconfined).export("/root/.pi/agent/sessions/x/a.jsonl", ExportFormat.HTML) is Outcome.Err)
+            assertEquals(0, engineCalls)
+
+            // 2) 有 CLI：非当前会话走 pi --export，参数是请求的会话
+            var cliArgs: Pair<String, String>? = null
+            val withCli = WorkspaceSessionExporter(ws, out, engine, Dispatchers.Unconfined,
+                currentSessionPath = { "/root/.pi/agent/sessions/x/a.jsonl" },
+                cliExportHtml = { session, o ->
+                    cliArgs = session to o
+                    File(rootfs, o.removePrefix("/")).writeText("<html>会话 b</html>")
+                    Outcome.Ok(o)
+                })
+            val f = (withCli.export("/root/.pi/agent/sessions/x/b.jsonl", ExportFormat.HTML) as Outcome.Ok).value
+            assertEquals("/root/.pi/agent/sessions/x/b.jsonl" to "/root/.pigo/exports/b.html", cliArgs)
+            assertEquals("<html>会话 b</html>", f.readText())
+            assertEquals(0, engineCalls)
+            // 当前会话仍走引擎
+            assertEquals("<html>当前会话 a</html>", (withCli.export("/root/.pi/agent/sessions/x/a.jsonl", ExportFormat.HTML) as Outcome.Ok).value.readText())
+            assertEquals(1, engineCalls)
         } finally {
             out.deleteRecursively()
         }
