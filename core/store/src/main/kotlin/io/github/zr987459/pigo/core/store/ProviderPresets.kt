@@ -36,7 +36,20 @@ object ProviderPresets {
             }
     }
 
+    /** 全量（由目录生成，首次访问会解析约 459 KB 的目录快照，只在 IO 线程用；新页面与 ModelCatalog 用它）。 */
     val ALL: List<ProviderPreset> by lazy { fromCatalog(BuiltinCatalog.bundled()) + CUSTOM }
+
+    /**
+     * 旧设置页（`ProviderConfigStore.presets()`）用的列表（审查第 1 轮 Important #3）：
+     * 旧页只有一个 Key 输入框，所以**去掉需要额外字段的云平台**（Bedrock、Azure、Cloudflare×2、Vertex）
+     * 和只能登录的服务商，只留「填一个 Key 就能用」的。直接由 [ProviderSpecs] 静态表生成，不解析目录，
+     * 在主线程的组合阶段调用也不卡。多字段服务商在 W2 的新服务商页里配置。
+     */
+    val SINGLE_KEY: List<ProviderPreset> by lazy {
+        ProviderSpecs.ALL
+            .filter { it.keyEnv != null && it.extra.isEmpty() && !it.keyOptional && it.validate == null }
+            .map { ProviderPreset(it.provider, it.label, it.kind, it.keyEnv, null, it.note) } + CUSTOM
+    }
 
     val BUILT_IN: List<ProviderPreset> by lazy { ALL.filter { it.kind != PresetKind.CUSTOM_OPENAI } }
 

@@ -64,6 +64,24 @@ class ProviderConfigStoreTest {
         assertEquals("DEEPSEEK_API_KEY", groups[PresetKind.PAY_AS_YOU_GO]!!.first { it.provider == "deepseek" }.envVar)
     }
 
+    /** 审查第 1 轮 Important #3：旧设置页只有一个 Key 框，不能列出要额外字段的云平台和只能登录的服务商。 */
+    @Test fun legacyPresetsOnlySingleKeyProviders() = runTest {
+        val ids = store().presets().map { it.provider }.toSet()
+        for (p in listOf("amazon-bedrock", "azure", "cloudflare-ai-gateway", "cloudflare-workers-ai", "google-vertex", "openai-codex")) {
+            assertFalse("旧设置页不应出现 $p", p in ids)
+        }
+        val multi = ProviderSpecs.ALL.filter { it.extra.isNotEmpty() || it.keyEnv == null }.map { it.provider }
+        assertTrue(multi.isNotEmpty())
+        assertTrue(multi.none { it in ids })
+        assertTrue(store().presets().all { it.kind == PresetKind.CUSTOM_OPENAI || ProviderSpecs.get(it.provider)!!.extra.isEmpty() })
+        // 原来的 9 个仍在
+        for (p in listOf("deepseek", "moonshotai-cn", "zai-coding-cn", "kimi-coding", "openai", "anthropic", "google", "openrouter", "bailian")) {
+            assertTrue("缺少 $p", p in ids)
+        }
+        // 全量列表（新页面用）仍包含多字段服务商
+        assertTrue(ProviderPresets.ALL.any { it.provider == "amazon-bedrock" })
+    }
+
     // ---------------- Key 清洗与内置 Provider ----------------
 
     @Test fun builtInKeyIsSanitizedAndOnlyInEnv() = runTest {

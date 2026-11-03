@@ -44,7 +44,8 @@ class PiProviderConfigStore(
     private fun cleanKey(raw: String): String =
         sanitizeApiKey(raw).let { if (it.equals("Bearer", ignoreCase = true)) "" else it }
 
-    override fun presets(): List<ProviderPreset> = ProviderPresets.ALL
+    /** 旧设置页只有一个 Key 输入框：只给单 Key 服务商（见 [ProviderPresets.SINGLE_KEY]）；全量见 [ProviderPresets.ALL]。 */
+    override fun presets(): List<ProviderPreset> = ProviderPresets.SINGLE_KEY
 
     override suspend fun setBuiltInKey(provider: String, rawKey: String) {
         val preset = ProviderPresets.BUILT_IN.firstOrNull { it.provider == provider }
