@@ -5,7 +5,7 @@
 - [x] 阶段 1：主题（`theme:` 提交）——**B 现在可以用了**，API 见下
 - [x] 阶段 2：聊天主页（渐变背景、顶部胶囊、空会话问候 + 启动引擎、底部输入框）
 - [x] 阶段 3：消息气泡、工具行、Markdown/代码块、提示与动画、抽屉容器
-- [x] 阶段 4：@Preview（浅/深）、差距说明；CI 见下
+- [x] 阶段 4：@Preview（浅/深）、差距说明、CI 绿
 
 调度方 14:40 追加要求已执行：**不用吉祥物**（没有入库任何吉祥物资源）；排版尽量一比一照 dsh-Go；顶栏「选择模型▾」/ 输入框「+」留 `onModelClick` / `onAttachClick` 回调。
 说明：dsh-Go 的界面是 **Flutter（Dart）**，没有 Compose 代码可直接拷贝，这里按它的组件树、尺寸、配色、动效参数逐项翻译成 Compose。
@@ -66,3 +66,9 @@ AppBackdrop { /* 页面内容 */ }           // 渐变 + 光晕背景。页面�
 - 列表顶部渐隐是简单渐变，不随滚动量渐变。
 - 强调色：dsh-Go 默认是「雾蓝」seed #4B67B4；这里按参考截图用了它的「黛青」配色（主色 #0F5E7E），其余中性色照雾蓝。
 - 本地无法跑 AAPT2，`:app` 只在 CI 编译；没有截图（无模拟器），以 Preview 代替。
+
+## CI
+- 05e72f2（界面改完）：https://github.com/zr987459/pi-go/actions/runs/41595071530 —— success（assembleDebug）
+- af52ea3（主题修复）：https://github.com/zr987459/pi-go/actions/runs/41593713759 —— success
+- 6395c89（第一个 theme 提交）：失败（AppIcons 里 `package` 撞关键字），已在 af52ea3 修复
+- 仪器测试（androidTest）CI 不跑；`StopKeepsDraftTest` / `StreamingJankTest` 用到的 tag（chat:input / chat:send / chat:stopAlt / chip:withdrawn）都保留，发送键的「发送/排队/停止」文字放进了语义 text。
