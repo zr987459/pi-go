@@ -1,10 +1,11 @@
 # r3-pi-features 状态
 
-- 状态：已开始（2026-11-04 06:08 CST）
-- 任务：梳理 @earendil-works/pi-coding-agent 1.5.0 全部功能 → docs/pi-features.md
+- 状态：**完成**（2026-11-04）
+- 产出：`docs/pi-features.md`
+- 依据：`npm pack @earendil-works/pi-coding-agent@1.5.0`（README、docs 48 篇、dist 源码），以及实际运行 `pi --help`；对照 pi-go main@527708e
+- 06:09 新要求已落实：表格的「建议形态」改成两列「终端形态呈现」「UI 形态入口/呈现」，每个功能两种形态都覆盖；新增 §13「两种形态无缝切换」（一个 rpc 进程、同一份状态和草稿、只换渲染层）
 
-## 计划
-1. npm pack 1.5.0，读 README/docs、dist 源码，跑 `pi --help`
-2. 按章节写 pi-features.md：CLI/模式、RPC 命令与事件、斜杠命令、内置工具、会话、模型/服务商、技能/扩展/模板/上下文/主题、settings.json/环境变量、快捷键与输入语法、TUI 元素与配色
-3. 每项标注 pi-go 现状 / 建议形态 / 理由；单列 pi-go 独有功能（候选删除）；文末摘要
-4. 每 15 分钟推送一次部分成果
+## 要点
+- RPC 33 个命令 pi-go 契约层全部建模；缺口在 pi 交互界面自己实现、RPC 里没有命令的功能（/settings、/login、/resume 列表、/tree 原地切换、标签、/scoped-models、/import、/share、/reload、/mcp、包、上下文文件、主题、@文件）
+- 建议随 App 带一个桥接扩展（`-e`），用 navigateTree、setLabel、reload 补齐
+- 候选删除见 §12：吉祥物（main 里没找到残留）、汇率、文件浏览器、Git 页面、自动起名、每轮统计卡、dsh 视觉风格；HTML 导出是 pi 原生功能，保留
