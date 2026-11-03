@@ -133,4 +133,49 @@ class FakeEngineReplayTest {
         assertFalse(users.contains("排队1"))
         assertFalse(users.contains("插话1"))
     }
+
+    @Test
+    fun secondSendWithoutAdvancingTimeIsQueuedNotASecondReplay() = runTest {
+        val engine = FakeEngineClient(backgroundScope, stepDelayMs = 10, clock = { 0L })
+        assertEquals(Outcome.Ok(Disposition.STARTED), engine.send("第一条"))
+        // 回放协程还没来得及应用 agent_start（running 仍为 false），第二条也必须排队
+        assertFalse(engine.chat.value.running)
+        assertEquals(Outcome.Ok(Disposition.QUEUED), engine.send("第二条"))
+        assertEquals(Outcome.Ok(Disposition.QUEUED), engine.send("第三条"))
+
+        drain()
+        val users = engine.chat.value.items.filterIsInstance<ChatItem.User>().map { it.text }
+        assertEquals(1, users.count { it == "第一条" })
+        assertEquals(1, users.count { it == "第二条" })
+        assertEquals(1, users.count { it == "第三条" })
+        // 排队消息在第一轮（含夹具自带的排队消息）之后按顺序送达
+        assertTrue(users.indexOf("第二条") < users.indexOf("第三条"))
+        assertTrue(users.indexOf("第一条") < users.indexOf("第二条"))
+        assertEquals(2, engine.chat.value.items.count { it is ChatItem.Tool })
+        assertFalse(engine.chat.value.running)
+    }
+
+    @Test
+    fun noOutputAfterStop() = runTest {
+        val engine = FakeEngineClient(backgroundScope, stepDelayMs = 10, clock = { 0L })
+        engine.send("第一条")
+        engine.send("排队的")
+        advanceTimeBy(50)
+        runCurrent()
+
+        engine.stop()
+        val afterStop = engine.chat.value
+        assertFalse(afterStop.running)
+        assertTrue(afterStop.queue.isEmpty)
+
+        drain()
+        assertEquals("stop 之后不应再有任何输出", afterStop, engine.chat.value)
+        assertTrue(engine.chat.value.items.filterIsInstance<ChatItem.User>().none { it.text == "排队的" })
+
+        // 停止后可以重新开始一轮
+        assertEquals(Outcome.Ok(Disposition.STARTED), engine.send("新的一条"))
+        drain()
+        assertTrue(engine.chat.value.items.filterIsInstance<ChatItem.User>().any { it.text == "新的一条" })
+        assertFalse(engine.chat.value.running)
+    }
 }

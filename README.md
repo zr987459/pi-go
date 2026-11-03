@@ -7,10 +7,10 @@ pi-go 是一个原生 Android 的「pi 编程助手」客户端。它在手机�
 - 第三方组件与代码来源：[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
 - 测试版 APK：每次推送 main 后由 GitHub Actions 构建，发布在 Releases 的「pi-go 测试版」（tag `nightly`）。
 
-当前状态：设计已定稿，工程骨架（`mvp/scaffold`）尚未合入。许可证尚未选定（建议 Apache-2.0，由仓库所有者决定）。
+当前状态：设计已定稿；工程骨架 `mvp/scaffold` 已提交审查（PR #1），合入后 W1–W4 并行开发。许可证已选定 Apache-2.0（见下）。
 
 ## 许可证
 
 pi-go 以 [Apache License 2.0](LICENSE) 授权（Copyright 2026 zr987459）。
 
-第三方组件及其许可证见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。proot 等随 APK 分发的独立可执行程序按其各自的许可证分发（如 proot 为 GPL-2.0-or-later），不影响 pi-go 自身代码的许可证。
+第三方组件及其许可证见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。proot 等随 APK 分发的独立可执行程序按其各自的许可证分发（如 proot 按 Termux 打包元数据为 GPL-2.0），不影响 pi-go 自身代码的许可证。

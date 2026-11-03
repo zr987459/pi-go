@@ -28,7 +28,7 @@ pi-go 自身许可证：**Apache-2.0**（见根目录 `LICENSE`，Copyright 2026
 
 | 组件 | 文件 | 许可证 | 上游 / 源码 | 版本（Termux 打包） | 状态 |
 |---|---|---|---|---|---|
-| PRoot（Termux 分支） | `libproot.so`、`libprootloader.so`、`libprootloader32.so` | GPL-2.0-or-later | https://github.com/termux/proot ；打包脚本 https://github.com/termux/termux-packages/tree/master/packages/proot | 5.1.107.102（以引入时为准） | 计划引入（mvp/runtime） |
+| PRoot（Termux 分支） | `libproot.so`、`libprootloader.so`、`libprootloader32.so` | GPL-2.0（Termux 打包元数据 `TERMUX_PKG_LICENSE`） | https://github.com/termux/proot ；打包脚本 https://github.com/termux/termux-packages/tree/master/packages/proot | 5.1.107.102（以引入时为准） | 计划引入（mvp/runtime） |
 | talloc | `libtalloc.so` | LGPL-3.0-or-later | https://talloc.samba.org/ ；https://github.com/termux/termux-packages/tree/master/packages/libtalloc | 2.5.0 | 计划引入（mvp/runtime） |
 | libandroid-shmem | `libandroidshmem.so` | BSD-3-Clause | https://github.com/termux/libandroid-shmem | 0.7 | 计划引入（mvp/runtime） |
 

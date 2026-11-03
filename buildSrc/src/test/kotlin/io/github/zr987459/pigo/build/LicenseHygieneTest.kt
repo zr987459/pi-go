@@ -52,6 +52,45 @@ class LicenseHygieneTest {
     }
 
     @Test
+    fun packageDirectoriesNamedBuildOrOutAreScanned() {
+        write("core/runtime/build.gradle.kts", "plugins {}\n")
+        write("core/runtime/src/main/kotlin/x/build/Y.kt", "package x.build\nimport $plantedPackage.dsh.Foo\n")
+        write("core/runtime/src/main/kotlin/x/out/Z.kt", "package x.out\n// $plantedPackage\n")
+        write("buildSrc/src/main/kotlin/io/github/zr987459/pigo/build/W.kt", "// $plantedPackage\n")
+        val v = LicenseHygiene.scan(root)
+        assertEquals(v.joinToString(), 3, v.size)
+    }
+
+    @Test
+    fun soInsideSrcBuildDirIsChecked() {
+        write("core/runtime/build.gradle.kts", "plugins {}\n")
+        val so = write("core/runtime/src/main/jniLibs/build/libx.so", "pretend binary")
+        val v = LicenseHygiene.scan(root, badSo = setOf(LicenseHygiene.sha256(so)))
+        assertEquals(1, v.size)
+    }
+
+    @Test
+    fun onlyModuleRootOutputsAreSkipped() {
+        write("core/runtime/build.gradle.kts", "plugins {}\n")
+        write("core/runtime/build/generated/G.kt", "$plantedPackage\n")      // 模块输出：跳过
+        write("build/tmp/T.kt", "$plantedPackage\n")                         // 根输出：跳过
+        write("core/runtime/src/main/res/raw/build.json", "{\"a\":\"$plantedPackage\"}\n")
+        val v = LicenseHygiene.scan(root)
+        assertEquals(v.joinToString(), 1, v.size)
+        assertTrue(v.single().file.path.endsWith("build.json"))
+    }
+
+    @Test
+    fun hygieneSourcesThemselvesContainNoPlainKeywords() {
+        // 单测工作目录为 buildSrc/；把扫描器自身源码放进临时模块的 src/ 下扫描，必须干净。
+        val dir = File("src/main/kotlin/io/github/zr987459/pigo/build")
+        assertTrue("找不到 ${dir.absolutePath}", dir.isDirectory)
+        dir.listFiles()!!.filter { it.isFile }.forEach { it.copyTo(File(root, "probe/src/main/kotlin/" + it.name)) }
+        val v = LicenseHygiene.scan(root)
+        assertTrue(v.joinToString(), v.isEmpty())
+    }
+
+    @Test
     fun soWithKnownHashFails() {
         val so = write("core/runtime/src/main/jniLibs/arm64-v8a/libproot.so", "pretend binary")
         val sha = LicenseHygiene.sha256(so)

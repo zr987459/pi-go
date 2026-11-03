@@ -111,7 +111,9 @@ sealed interface RpcCommand {
             when {
                 cancelled -> put("cancelled", true)
                 confirmed != null -> put("confirmed", confirmed)
-                else -> put("value", value)
+                value != null -> put("value", value)
+                // 三者都没给：按“用户关闭对话框”处理，避免发出 value:null 让 pi 误解
+                else -> put("cancelled", true)
             }
         }
     }

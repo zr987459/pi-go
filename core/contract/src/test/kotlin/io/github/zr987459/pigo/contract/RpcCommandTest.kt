@@ -30,6 +30,15 @@ class RpcCommandTest {
             """{"type":"extension_ui_response","id":"ui-8","value":"Allow"}""",
             RpcCommand.ExtensionUiResponse("ui-8", value = "Allow").toJson().toString(),
         )
+        assertEquals(
+            """{"type":"extension_ui_response","id":"ui-9","confirmed":false}""",
+            RpcCommand.ExtensionUiResponse("ui-9", confirmed = false).toJson().toString(),
+        )
+        // 什么都没给：退化为 cancelled，而不是发出 value:null
+        assertEquals(
+            """{"type":"extension_ui_response","id":"ui-10","cancelled":true}""",
+            RpcCommand.ExtensionUiResponse("ui-10").toJson().toString(),
+        )
     }
 
     @Test

@@ -17,6 +17,7 @@ import io.github.zr987459.pigo.contract.SessionStats
 import io.github.zr987459.pigo.contract.rpc.EngineEvent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -47,6 +48,8 @@ class FakeEngineClient(
     private val reducer = FakeChatReducer()
     private val mutex = Mutex()
     private var replayJob: Job? = null
+    /** 是否有一轮（含其排队的后续回合）尚未结束。只在 [mutex] 内读写；比 chat.running 更早置位、更晚清除。 */
+    private var busy = false
     private var turns = 0
     private val pendingFollowUp = ArrayDeque<String>()
     private val pendingSteer = ArrayDeque<String>()
@@ -81,18 +84,21 @@ class FakeEngineClient(
     }
 
     override suspend fun send(text: String, mode: SendMode): Outcome<Disposition> = mutex.withLock {
-        if (_chat.value.running) {
+        if (busy) {
             if (mode == SendMode.STEER) pendingSteer.addLast(text) else pendingFollowUp.addLast(text)
             publishQueue()
             return@withLock Outcome.Ok(Disposition.QUEUED)
         }
+        busy = true
         // 乐观气泡：收到 message_start 时由归约器确认为 SENT。
         _chat.update { it.copy(items = it.items + ChatItem.User("pending-${turns}", text, Delivery.SENDING)) }
         startTurn(text)
         Outcome.Ok(Disposition.STARTED)
     }
 
+    /** 只在 [mutex] 内、[busy] 置位后调用。 */
     private fun startTurn(text: String) {
+        replayJob?.cancel()
         val events = if (turns++ == 0) FakeFixtures.demoTurn(text) else FakeFixtures.simpleTurn(text)
         replayJob = scope.launch {
             replay(events)
@@ -100,14 +106,21 @@ class FakeEngineClient(
         }
     }
 
+    /** 逐条发出排队消息；确认队列为空后才清除 [busy]，与 send() 之间没有空档。 */
     private suspend fun drainQueue() {
-        val next = mutex.withLock {
-            val t = pendingSteer.removeFirstOrNull() ?: pendingFollowUp.removeFirstOrNull()
-            if (t != null) publishQueue()
-            t
-        } ?: return
-        replay(FakeFixtures.simpleTurn(next))
-        drainQueue()
+        while (true) {
+            val next = mutex.withLock {
+                val t = pendingSteer.removeFirstOrNull() ?: pendingFollowUp.removeFirstOrNull()
+                if (t == null) {
+                    busy = false
+                    replayJob = null
+                } else {
+                    publishQueue()
+                }
+                t
+            } ?: return
+            replay(FakeFixtures.simpleTurn(next))
+        }
     }
 
     private fun publishQueue() {
@@ -121,14 +134,17 @@ class FakeEngineClient(
     }
 
     override suspend fun stop(): Outcome<QueueSnapshot> {
-        val withdrawn = mutex.withLock {
+        val (withdrawn, job) = mutex.withLock {
             val snap = QueueSnapshot(pendingSteer.toList(), pendingFollowUp.toList())
             pendingSteer.clear()
             pendingFollowUp.clear()
-            snap
+            val j = replayJob
+            replayJob = null
+            busy = false
+            snap to j
         }
-        replayJob?.cancel()
-        replayJob = null
+        // 等回放协程真正结束，之后不会再有任何输出。
+        job?.cancelAndJoin()
         apply(EngineEvent.QueueUpdate(emptyList(), emptyList(), JsonObject(emptyMap())))
         if (_chat.value.running) {
             _chat.update { s ->

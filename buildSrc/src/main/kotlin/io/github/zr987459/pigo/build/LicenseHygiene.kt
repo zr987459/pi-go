@@ -6,10 +6,12 @@ import java.security.MessageDigest
 /**
  * 许可证防回归扫描（DESIGN.md §4.1 第 8 条）。
  *
- * - 源码（各模块 `src/` 与 `buildSrc/`、`build-logic/`、根构建脚本）中出现 GPL-3.0 DSH-Folk 的包名或名称；
- * - 任意位置出现 PiMet / DSH-Folk 那组 `.so` 的已知 SHA256。
+ * - 源码（各模块 `src/` 与 `buildSrc/`、`build-logic/`、根构建脚本）中出现 GPL-3.0 派生项目（见 §4.1 第 2 条）的包名或名称；
+ * - 任意位置出现 PiMet 那组 `.so`（与该 GPL 项目的二进制相同）的已知 SHA256。
  *
- * 违规关键字用拼接写出，避免本文件自身被扫描命中。
+ * 只跳过模块根目录下的构建输出（`<模块>/build/`、`<模块>/out/` 等，按相对路径判断），
+ * 任何 `src/` 之下的目录（包括名为 build/out 的包目录）一律扫描。
+ * 违规关键字和项目名在本文件中都用拼接写出，避免本文件自身被扫描命中。
  */
 object LicenseHygiene {
 
@@ -21,7 +23,7 @@ object LicenseHygiene {
         Regex("\\b" + "DS" + "HA" + "\\b"),
     )
 
-    /** PiMet `app/src/main/jniLibs/`（与 DSH-Folk `app/libs/` 相同）各 .so 的 SHA256，取自 zr987459/pimet main。 */
+    /** PiMet `app/src/main/jniLibs/`（与 §4.1 第 3 条所述 GPL 项目 `app/libs/` 相同）各 .so 的 SHA256，取自 zr987459/pimet a80222c。 */
     val knownBadSoSha256: Set<String> = setOf(
         // arm64-v8a
         "84475798e07c8174dbbfaec70a827fdb02f19ffa69a589380c13e7507fd0e731", // libandroidshmem.so
@@ -47,7 +49,26 @@ object LicenseHygiene {
         "c", "cc", "cpp", "h",
     )
 
-    private val skippedDirs = setOf("build", ".gradle", ".git", ".idea", ".kotlin", "out", "node_modules")
+    /** 只在仓库根或模块根（含 build.gradle[.kts] 的目录）下跳过的输出/缓存目录。 */
+    private val moduleOutputDirs = setOf("build", "out", ".gradle", ".kotlin", "node_modules")
+
+    /** 只在仓库根下跳过的目录。 */
+    private val rootOnlyDirs = setOf(".git", ".idea")
+
+    private fun isModuleRoot(dir: File): Boolean =
+        File(dir, "build.gradle.kts").isFile || File(dir, "build.gradle").isFile ||
+            File(dir, "settings.gradle.kts").isFile || File(dir, "settings.gradle").isFile
+
+    /** 是否跳过 [dir]：按相对路径判断，`src/` 之下永不跳过。 */
+    internal fun isSkipped(root: File, dir: File): Boolean {
+        if (dir == root) return false
+        val rel = dir.relativeTo(root).invariantSeparatorsPath
+        val segments = rel.split('/')
+        if ("src" in segments.dropLast(1)) return false
+        val parent = dir.parentFile ?: return false
+        if (parent == root && dir.name in rootOnlyDirs) return true
+        return dir.name in moduleOutputDirs && (parent == root || isModuleRoot(parent))
+    }
 
     data class Violation(val file: File, val line: Int, val reason: String) {
         override fun toString(): String = if (line > 0) "${file.path}:$line  $reason" else "${file.path}  $reason"
@@ -56,7 +77,7 @@ object LicenseHygiene {
     fun scan(root: File, badSo: Set<String> = knownBadSoSha256): List<Violation> {
         val out = mutableListOf<Violation>()
         root.walkTopDown()
-            .onEnter { dir -> dir == root || dir.name !in skippedDirs }
+            .onEnter { dir -> !isSkipped(root, dir) }
             .filter { it.isFile }
             .forEach { file ->
                 val rel = file.relativeTo(root).invariantSeparatorsPath
