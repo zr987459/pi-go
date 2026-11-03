@@ -11,6 +11,7 @@ import io.github.zr987459.pigo.contract.ToolStatus
 import io.github.zr987459.pigo.feature.chat.logic.ErrorText
 import io.github.zr987459.pigo.feature.chat.logic.LocalSend
 import io.github.zr987459.pigo.feature.chat.logic.PhaseLabel
+import io.github.zr987459.pigo.feature.chat.logic.RetryAnchor
 import io.github.zr987459.pigo.feature.chat.logic.RetryVisibility
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -94,5 +95,27 @@ class PhaseLabelTest {
         assertTrue(ErrorText.classify("model_not_found").suggestsSettings)
         assertTrue("模型服务连不上", ErrorText.classify("getaddrinfo ENOTFOUND api.example.com").suggestsSettings)
         assertFalse(ErrorText.classify("500 internal error").suggestsSettings)
+    }
+
+    @Test
+    fun secondRetryStaysVisibleAfterFirstRetryStreamedPartialText() {
+        // 第 1 次重试流出部分文字后失败（连接中途被重置）；第 2 次重试等待期间黄条仍要显示。
+        val failed = ChatItem.Assistant("a1", listOf(ContentBlock.Text(0, "")), streaming = false, stopReason = "error")
+        val anchor = RetryAnchor()
+        var st = ChatState(items = listOf(user, failed), running = true, retry = RetryBanner(1, 3, 2000, "503"))
+        assertEquals(1, anchor.update(st)?.attempt)
+        // 第 1 次重试开始出字：隐藏
+        val partial = ChatItem.Assistant("a2", listOf(ContentBlock.Text(0, "半句")), streaming = true)
+        st = st.copy(items = listOf(user, failed, partial))
+        assertNull(anchor.update(st))
+        // 第 1 次重试中途失败，进入第 2 次重试的等待：重新显示「第 2/3 次」
+        val partialFailed = partial.copy(streaming = false, stopReason = "error")
+        st = st.copy(items = listOf(user, failed, partialFailed), retry = RetryBanner(2, 3, 4000, "connection reset"))
+        assertEquals(2, anchor.update(st)?.attempt)
+        // 第 2 次重试开始出字：再次隐藏
+        st = st.copy(items = st.items + ChatItem.Assistant("a3", listOf(ContentBlock.Text(0, "好"))))
+        assertNull(anchor.update(st))
+        // 重试结束
+        assertNull(anchor.update(st.copy(retry = null)))
     }
 }

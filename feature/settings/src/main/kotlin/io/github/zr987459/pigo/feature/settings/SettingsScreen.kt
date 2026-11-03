@@ -33,12 +33,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,6 +57,9 @@ import io.github.zr987459.pigo.contract.ProviderPreset
 import io.github.zr987459.pigo.contract.RuntimeStatus
 import io.github.zr987459.pigo.contract.SecretStore
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -132,10 +137,19 @@ fun SettingsScreen(
     val presets = remember(providers) { providers.presets() }
     val listState = rememberLazyListState()
     var testingCurrent by remember { mutableStateOf(false) }
+    // 「当前模型」跟随引擎实时更新（换默认模型、引擎重启后不显示旧模型，测试连接也测新模型）。
+    val currentModel by remember(engine) {
+        engine?.chat?.map { it.model }?.distinctUntilChanged() ?: flowOf(null)
+    }.collectAsState(initial = engine?.chat?.value?.model)
     var currentCheck by remember { mutableStateOf<ConnectionCheck?>(null) }
 
-    // 从聊天页「去设置模型」等入口进来：滚到对应区块。
-    LaunchedEffect(focus, configured) {
+    var configuredLoaded by remember { mutableStateOf(false) }
+    var focusDone by rememberSaveable(focus) { mutableStateOf(false) }
+
+    // 从聊天页「去设置模型」等入口进来：等配置读出来（行数确定）后滚到对应区块，只定位一次；
+    // 之后保存 Key 导致 configured 变化不再把列表拉回去。
+    LaunchedEffect(focus, configuredLoaded) {
+        if (!configuredLoaded || focusDone) return@LaunchedEffect
         val key = when (focus) {
             SettingsFocus.MODELS -> "sec-models"
             SettingsFocus.DEFAULT_MODEL -> "sec-default"
@@ -143,10 +157,12 @@ fun SettingsScreen(
         } ?: return@LaunchedEffect
         val index = settingsItemIndex(key, presets, configured)
         if (index >= 0) listState.scrollToItem(index)
+        focusDone = true
     }
 
     LaunchedEffect(providers, version) {
         configured = runCatching { providers.configured() }.getOrDefault(emptyList())
+        configuredLoaded = true
         // 只取末 4 位（SecretStore 实现内部在 IO 线程解密），明文不进界面层。
         masks = if (secrets == null) emptyMap() else configured.associateWith { id ->
             val builtIn = presets.any { it.provider == id && it.kind != PresetKind.CUSTOM_OPENAI }
@@ -231,7 +247,7 @@ fun SettingsScreen(
                         OutlinedButton(onClick = { pickingDefault = true }, enabled = configured.isNotEmpty()) {
                             Text("选择默认模型")
                         }
-                        val current = engine?.chat?.value?.model
+                        val current = currentModel
                         val tester = testConnection
                         if (tester != null && current != null) {
                             Text("当前模型：${current.name ?: current.id}（${current.provider}）", style = MaterialTheme.typography.bodySmall)
@@ -518,31 +534,44 @@ private fun CustomDialog(
     var discovered by remember { mutableStateOf<List<String>>(emptyList()) }
     var discovering by remember { mutableStateOf(false) }
     var discoverMsg by remember { mutableStateOf<String?>(null) }
+    val discoverGate = remember { LatestOnly() }
     var testing by remember { mutableStateOf(false) }
     var check by remember { mutableStateOf<ConnectionCheck?>(null) }
     val keyReady = KeyText.clean(key).isNotEmpty() || existing
 
     /** 填好地址和 Key 后自动获取模型列表（piweb-study G2）；失败给出原因，允许手填。 */
+    // 只接受最新一次请求的结果：旧请求（阻塞的 HTTP 取消不掉）晚到时不覆盖新结果，取消也不当成失败显示。
     suspend fun discover() {
         val d = discoverModels ?: return
         if (url.isBlank() || !keyReady) return
+        val token = discoverGate.begin()
         discovering = true
         discoverMsg = null
-        when (val r = runCatching { d(id.ifBlank { preset.provider }, url, key) }.getOrElse { Outcome.Err(io.github.zr987459.pigo.contract.ErrCode.UNKNOWN, it.message ?: "") }) {
-            is Outcome.Ok -> {
-                discovered = r.value
-                discoverMsg = "找到 ${r.value.size} 个模型，点选加入（也可以手动填写）"
+        try {
+            val r = discoverGate.run(
+                token,
+                onError = { Outcome.Err(io.github.zr987459.pigo.contract.ErrCode.UNKNOWN, it.message ?: "") },
+            ) { d(id.ifBlank { preset.provider }, url, key) } ?: return
+            when (r) {
+                is Outcome.Ok -> {
+                    discovered = r.value
+                    discoverMsg = "找到 ${r.value.size} 个模型，点选加入（也可以手动填写）"
+                }
+                is Outcome.Err -> {
+                    discovered = emptyList()
+                    discoverMsg = "获取模型列表失败：${r.message.ifBlank { "未知错误" }}。可以在下面手动填写模型 id。"
+                }
             }
-            is Outcome.Err -> {
-                discovered = emptyList()
-                discoverMsg = "获取模型列表失败：${r.message.ifBlank { "未知错误" }}。可以在下面手动填写模型 id。"
-            }
+        } finally {
+            if (discoverGate.isLatest(token)) discovering = false
         }
-        discovering = false
     }
 
     // 地址和 Key 都填好后停顿片刻自动获取一次（输入过程中不反复请求）。
     LaunchedEffect(url, key, existing) {
+        // 输入变了：之前发出的请求一律作废，按钮先恢复可点（旧请求可能还卡在网络上）。
+        discoverGate.invalidate()
+        discovering = false
         if (discoverModels == null || url.isBlank() || !keyReady) return@LaunchedEffect
         kotlinx.coroutines.delay(800)
         discover()

@@ -26,7 +26,7 @@ import io.github.zr987459.pigo.feature.chat.logic.LocalSend
 import io.github.zr987459.pigo.feature.chat.logic.Outbox
 import io.github.zr987459.pigo.feature.chat.logic.ErrorText
 import io.github.zr987459.pigo.feature.chat.logic.PhaseLabel
-import io.github.zr987459.pigo.feature.chat.logic.RetryVisibility
+import io.github.zr987459.pigo.feature.chat.logic.RetryAnchor
 import io.github.zr987459.pigo.feature.chat.logic.PrimaryAction
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -153,6 +153,10 @@ class ChatController(
     private val thinkingStart = HashMap<String, Long?>()
     private val thinkingEnd = HashMap<String, Long>()
 
+    /** 自动重试黄条锚点（每次 attempt 变化重新记录）；只在合成协程里读写。
+     * 必须在 [state] 之前初始化：[state] 的初始值在构造时就调用 compose()。 */
+    private val retryAnchor = RetryAnchor()
+
     val state: StateFlow<ChatScreenState> =
         combine(engine.chat, engine.status, local) { chat, status, l -> compose(chat, status, l) }
             .stateIn(scope, SharingStarted.Eagerly, compose(engine.chat.value, engine.status.value, local.value))
@@ -257,19 +261,8 @@ class ChatController(
     /** 思考计时所属的会话代数；变化时清空计时缓存（跨会话 assistant key 可能相同）。 */
     private var thinkingGeneration = 0
 
-    /** 当前这次自动重试开始时最后一条助手消息的 key；只在合成协程里读写。 */
-    private var retryAnchor: String? = null
-    private var retryShownAttempt: RetryBanner? = null
-
     private fun compose(chat: ChatState, status: EngineStatus, l: Local): ChatScreenState {
-        val retry = chat.retry
-        if (retry == null) {
-            retryShownAttempt = null
-        } else if (retryShownAttempt == null) {
-            // 黄条第一次出现：记下此刻最后一条助手消息，之后出现的新助手消息就是重试那一轮的输出。
-            retryShownAttempt = retry
-            retryAnchor = RetryVisibility.lastAssistantKey(chat)
-        }
+        val visibleRetry = retryAnchor.update(chat)
         if (l.generation != thinkingGeneration) {
             thinkingStart.clear()
             thinkingEnd.clear()
@@ -286,7 +279,8 @@ class ChatController(
         val phase = PhaseLabel.of(status, chat, l.sends, l.composer.stopping)
         val statusLines = buildList {
             phase?.let(::add)
-            chat.statusLine?.takeIf { it.isNotBlank() }?.let(::add)
+            // 阶段提示已经概括了引擎状态行（如「正在压缩上下文（n 条排队）」）时不再重复显示。
+            if (phase == null) chat.statusLine?.takeIf { it.isNotBlank() }?.let(::add)
             l.status.values.filter { it.isNotBlank() }.forEach(::add)
         }
         return ChatScreenState(
@@ -301,7 +295,7 @@ class ChatController(
             statusLines = statusLines,
             title = l.title?.takeIf { it.isNotBlank() } ?: chat.sessionName?.takeIf { it.isNotBlank() } ?: "新会话",
             contextPercent = chat.contextPercent ?: l.statsPercent,
-            retry = retry?.takeIf { RetryVisibility.visible(chat, retryAnchor) },
+            retry = visibleRetry,
             phase = phase,
         )
     }
@@ -534,6 +528,12 @@ class ChatController(
     private fun onUiRequest(r: ExtUiRequest) {
         when (val a = ExtUi.classify(r)) {
             is ExtUiAction.Dialog -> {
+                if (r.needsResponse && local.value.composer.stopping) {
+                    // 停止过程中才到的阻塞类对话框（引擎队列或宽限窗口里的）：直接回 cancelled，不弹出，
+                    // 否则 abort 可能一直等它，直到 20 s 被强杀。
+                    scope.launch { engine.answerUi(r.id, cancelled = true) }
+                    return
+                }
                 local.update { s ->
                     if (s.dialogs.any { it.request.id == r.id }) s
                     else s.copy(dialogs = s.dialogs + DialogEntry(r, clock()))

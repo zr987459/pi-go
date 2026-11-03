@@ -42,7 +42,7 @@
 | 编号 | 状态 | 证据 / 说明 |
 |---|---|---|
 | C1 三组预设，自定义预填百炼/智谱 baseUrl | ⚠️ 单测✅ / 界面📱 | `B/core/store/src/test/.../ProviderConfigStoreTest.kt`；设置页分组渲染 |
-| C2 容器内 grep 不到 Key、`auth.json` 未改动 | 📱 | Key 只经 `LaunchEnvProvider` 环境变量；本次新增的「测试连接」内置 Provider 也只经 `exec(env=…)`，命令行参数不含 Key（`ProviderProbeTest.builtInProviderIsTestedWithPiPrintAndKeyOnlyInEnv`） |
+| C2 容器内 grep 不到 Key、`auth.json` 未改动 | ✅ argv / 📱 真机 | 审查 R1 修复后：`ProotLauncher` 把容器内变量（含 Key）放进 proot 宿主进程的环境，容器入口改为 `/usr/bin/env -u <proot 宿主变量名>…`，argv 里只有变量名、没有任何值，`/proc/<pid>/cmdline` 读不到 Key；引擎启动与「测试连接」走同一路径。测试 `B/core/runtime/src/test/kotlin/io/github/zr987459/pigo/core/runtime/MiscRuntimeTest.kt`（`secretsNeverAppearInArgvOnlyInProcessEnv`，直接断言 `buildArgv` 输出）。注意：pi 进程自己的环境变量里仍有 Key（设计如此，`/proc/<pid>/environ` 同用户可读），真机仍需按 C2 在容器内 grep 一遍 |
 | C3 `models.json` 的 `$PIGO_KEY_<ID>`、权限 600、保留其他条目 | ✅ | `ProviderConfigStoreTest` |
 | C4 重启后 `get_available_models` 列出、`set_model` 写 settings.json、真实 DeepSeek 对话 | 📱 | 设置页已传入 `engine`（保存后自动 `restart`、默认模型从 `models()` 选择） |
 | C5 `"  Bearer sk-xxxx  "` 清洗、只显示末 4 位、日志/诊断无完整 Key | ✅ | `SettingsLogicTest.keyCleanAndMask`、`ProviderConfigStoreTest`；新增 `ProviderProbeTest` 断言获取模型/测试连接的错误文案不含 Key |
@@ -85,7 +85,7 @@
 | L2 点击切换、新建、不同 cwd 自动重启 | ⚠️ 接线✅ / 真机📱 | 本次接线：会话页 `onOpen → engine.openSession(guestPath, cwd)`、`onNewSession → engine.newSession()`，成功后回到聊天页（`PiGoNavHost.SessionsPage`）；引擎侧见 `PiEngineTest` |
 | L3 重命名同步 | ❌ | 会话页（sessions-settings）没有重命名入口；引擎有 `rename()`。见遗留问题 R3 |
 | L4 删除（含当前会话，二次确认）进回收站、可恢复 | ⚠️ 单测✅ / 真机📱 | 本次接线：`currentGuestPath = ChatState.sessionFile`，删除当前会话前 `onBeforeDeleteCurrent → engine.newSession()`；`SessionRepositoryTest` 覆盖移入/恢复 |
-| L5 冷启动回到上次会话、被系统杀时提示 | 📱 | 运行环境 READY 后 `EngineBindings.warmUp` 启动引擎（`PiEngine.start` 读 `SharedPrefsRunMarker`） |
+| L5 冷启动回到上次会话、被系统杀时提示 | ✅ 逻辑 / 📱 真机 | 审查 R1 修复：`EngineBindings.warmUpOnce`（appScope，只做一次）在运行环境 READY 后：上一轮被系统中断且会话文件还在 → 交给 `PiEngine.start` 恢复并提示；否则用 `ResumePolicy.coldStartTarget` 取最近更新的会话 `openSession`，没有会话或失败才普通启动。测试 `B/core/store/src/test/kotlin/io/github/zr987459/pigo/core/store/ResumePolicyTest.kt`；端到端需真机冷启动观察 |
 
 ### 5.7 非功能
 
@@ -105,9 +105,9 @@
 | 1 | 聊天页从会话层拿当前会话、从设置层拿模型配置；切会话/改设置后聊天页更新；自定义端点预填经 nav 传到设置页 | ✅ 接线 / 📱 运行 | `PiGoNavHost`：会话页用 `engine.chat.sessionFile` 与 `openSession/newSession`；设置页传 `secrets/engine/runtimeStatus/onRepairRuntime/loadCustom = StoreBindings.customPrefill(...)`；聊天页 `ChatPage` 在 `chat.model` 变化时重读 `providerConfig.configured()`，未配置时顶部显示「还没有配置模型 · 去设置模型」 |
 | 2 | 出错时「去设置模型」直达设置页对应位置 | ✅ | 错误卡（`ErrorInfo.suggestsSettings` 新增「连不上模型服务」）、失败气泡（`LocalSend.needsSettings`：`NO_MODEL`/`PROVIDER`/可识别的鉴权错误）、未配置横条 → `settings?focus=models`，设置页滚动到「模型与 Key」（`SettingsFocus`、`settingsItemIndex`）。测试：`ChatControllerTest.noModelSendFailureOffersSettings`、`PhaseLabelTest.settingsShortcutForModelProblems`、`SettingsLogicTest.focusIndexPointsAtSections`、`AppSmokeTest.noModelBannerJumpsToModelSettings` |
 | 3a | 停止时收起等待中的确认框/提问 | ✅ | `ChatController.stop()` 先本地关闭全部阻塞类对话框、取消通知，并对每个 id 发一次 `answerUi(cancelled=true)`，再 `clear_queue → abort`。测试 `ChatControllerTest.stopClosesPendingBlockingDialogsAndCancelsThemOnce` |
-| 3b | 自定义端点填好地址和 Key 后自动获取模型列表，失败清楚提示、允许手填 | ✅ | `core/store/ModelDiscovery`（宿主侧 `GET {baseUrl}/models`，OpenAI/Anthropic/Gemini 格式）；设置页输入停顿 0.8 s 自动获取 + 「获取模型列表」按钮，结果点选加入，失败显示「获取模型列表失败：… 可以手动填写」。测试 `ProviderProbeTest`（5 项）、`SettingsLogicTest.discoveredModelToggleKeepsManualIds` |
-| 3c | 设置页「测试连接」显示成功/失败原因 | ✅ 逻辑 / 📱 真 Key | 自定义端点：宿主侧 `POST chat/completions`（16 token、20 s）；内置 Provider：容器内 `pi --print --no-session --provider <id>`（45 s，Key 只经环境变量）；Key 对话框、自定义端点对话框、默认模型卡片各一个按钮。测试 `ProviderProbeTest.testConnectionOkAndBadKey`、`builtInProviderIsTestedWithPiPrintAndKeyOnlyInEnv` |
-| 3d | 自动重试提示条在重试成功或结束后及时消失 | ✅ | 界面层 `RetryVisibility`：重试那一轮的新助手消息一出内容就隐藏，回合结束不残留（归约器在 `:core:protocol`，本分支不改）。测试 `PhaseLabelTest.retryBarHidesOnceRetryStartsProducing` |
+| 3b | 自定义端点填好地址和 Key 后自动获取模型列表，失败清楚提示、允许手填 | ✅ | 审查 R1：`LatestOnly` 闸门只接受最新一次请求的结果，取消异常原样抛出不当失败显示，`discovering` 在 finally 复位、输入变化时先复位（`LatestOnlyTest`）。`core/store/ModelDiscovery`（宿主侧 `GET {baseUrl}/models`，OpenAI/Anthropic/Gemini 格式）；设置页输入停顿 0.8 s 自动获取 + 「获取模型列表」按钮，结果点选加入，失败显示「获取模型列表失败：… 可以手动填写」。测试 `ProviderProbeTest`（5 项）、`SettingsLogicTest.discoveredModelToggleKeepsManualIds` |
+| 3c | 设置页「测试连接」显示成功/失败原因 | ✅ 逻辑 / 📱 真 Key | 自定义端点：宿主侧 `POST chat/completions`（16 token、20 s）；内置 Provider：容器内 `pi --print --no-session --provider <id>`（45 s，Key 只经 proot 进程环境，argv 不含 Key，见 C2）；Key 对话框、自定义端点对话框、默认模型卡片各一个按钮。测试 `ProviderProbeTest.testConnectionOkAndBadKey`、`builtInProviderIsTestedWithPiPrintAndKeyOnlyInEnv` |
+| 3d | 自动重试提示条在重试成功或结束后及时消失 | ✅ | 审查 R1：`RetryAnchor` 每次 attempt 变化重新记锚点，第 1 次重试流出部分文字后失败、第 2 次重试等待期间黄条仍显示（`PhaseLabelTest.secondRetryStaysVisibleAfterFirstRetryStreamedPartialText`）。界面层 `RetryVisibility`：重试那一轮的新助手消息一出内容就隐藏，回合结束不残留（归约器在 `:core:protocol`，本分支不改）。测试 `PhaseLabelTest.retryBarHidesOnceRetryStartsProducing` |
 | 3e | 发送到首字之间的阶段提示 | ✅ | `PhaseLabel`：正在启动引擎… / 正在连接模型… / 等待回复… / 正在思考… / 正在运行 <工具>：<最后一行输出> / 正在压缩上下文（n 条排队）；显示在输入框上方状态区。测试 `PhaseLabelTest`（4 项）、`ChatControllerTest.phaseHintAppearsBetweenSendAndFirstToken` |
 | 4 | 尽量补单测，CI 绿 | ✅ | 见 PR 描述的本地测试结果 |
 | 5 | 进度标记 | ✅ | `B/docs/status/integration.md` |
@@ -129,6 +129,8 @@
 
 ## 5. 遗留问题
 
+- **审查 R1 已修**：#1 Key 不进 argv（`core/runtime` ProotLauncher/GuestRunner）、#2 获取模型列表取消竞态、#3 多次重试黄条、#4 L5、#5 打开/新建会话失败给 snackbar；Nit 6–10 全部在范围内处理。
+
 - **R1（需要 engine / scaffold）回合完成通知（G7）**：`EngineService` 尚无 DEFAULT 级「任务通知」通道；通知点击跳转与 Android 13 运行时 `POST_NOTIFICATIONS` 申请需要改 `MainActivity.kt`（scaffold 范围）或由 engine 在服务里申请。需要 engine 处理：完成/出错通知；需要所有者决定：在哪一层申请通知权限。
 - **R2（需要 engine）G1 / G4 / G9 / G10 引擎侧**：`PiEngine.stop()` 先对未应答的阻塞类请求发 `cancelled`；`ChatReducer` 在 `AgentStart` 清 `retry`；`stats()` 在 `percent == null` 时置空；过滤 `parentToolCallId`。本分支在界面层做了 G1（收起+cancelled）与 G4（隐藏黄条）的等价处理，引擎改好后界面逻辑仍兼容。
 - **R3（sessions-settings）L3 重命名**：会话页没有重命名入口，引擎 `rename()` 已有。需要在 `SessionsScreen` 增加入口（或聊天页顶栏），本次未做。
@@ -146,5 +148,7 @@
 | `feature/chat/src/**` | 追加要求 2、3a、3d、3e（用户授权最小改动） |
 | `feature/settings/src/**` | 追加要求 2（定位）、3b、3c 的界面 |
 | `core/store/src/**`（新增 `ModelDiscovery.kt`、`ProviderTester.kt` 与测试） | 追加要求 3b、3c 的宿主侧实现 |
-| `app/src/main/java/**/di/StoreBindings.kt`、`EngineBindings.kt` | 把 3b/3c 回调与引擎预启动接到装配层 |
+| `app/src/main/java/**/di/StoreBindings.kt`、`EngineBindings.kt` | 把 3b/3c 回调与引擎预启动接到装配层；R1：冷启动回到上次会话（L5） |
+| `core/runtime/src/**`（`ProotLauncher.kt`、`GuestRunner.kt`、`MiscRuntimeTest.kt`） | 审查 R1 #1：环境变量的值（含 Key）不再进 proot 的 argv（用户授权） |
+| `core/store/src/**`（新增 `ResumePolicy.kt` 与测试） | 审查 R1 #4：L5 冷启动目标会话的纯逻辑 |
 | `THIRD_PARTY_NOTICES.md` | 记录 Pi-Web 移植来源 |

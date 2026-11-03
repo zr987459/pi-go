@@ -748,4 +748,50 @@ class ChatControllerTest {
         drain()
         assertNull("回合结束后阶段提示消失", e.controller.state.value.phase)
     }
+
+    /** chat 状态由测试直接设置的引擎（压缩状态行等）。 */
+    private class ChatOverrideEngine(val fake: FakeEngineClient) : EngineClient by fake {
+        val chatFlow = kotlinx.coroutines.flow.MutableStateFlow(fake.chat.value)
+        override val chat: kotlinx.coroutines.flow.StateFlow<io.github.zr987459.pigo.contract.ChatState> get() = chatFlow
+    }
+
+    @Test
+    fun compactionWithQueueShowsOneStatusLine() = runTest {
+        val fake = FakeEngineClient(backgroundScope, stepDelayMs = 100)
+        val engine = ChatOverrideEngine(fake)
+        val c = ChatController(engine, backgroundScope)
+        runCurrent()
+        engine.chatFlow.value = engine.chatFlow.value.copy(
+            running = true,
+            statusLine = "正在压缩…",
+            queue = io.github.zr987459.pigo.contract.QueueSnapshot(emptyList(), listOf("排队的消息")),
+        )
+        runCurrent()
+        assertEquals(listOf("正在压缩上下文（1 条排队）"), c.state.value.statusLines)
+        // 没有排队时只显示引擎自己的状态行
+        engine.chatFlow.value = engine.chatFlow.value.copy(queue = io.github.zr987459.pigo.contract.QueueSnapshot.EMPTY)
+        runCurrent()
+        assertEquals(listOf("正在压缩…"), c.state.value.statusLines)
+    }
+
+    @Test
+    fun blockingDialogArrivingWhileStoppingIsCancelledNotShown() = runTest {
+        val e = env()
+        warmUp(e)
+        startRunning(e)
+        e.engine.stopDelayMs = 3_000
+        e.controller.stop()
+        runCurrent()
+        assertTrue(e.controller.state.value.composer.stopping)
+        e.engine.fake.emitUiRequest(ExtUiRequest(id = "late", method = "confirm", title = "继续？"))
+        e.engine.fake.emitUiRequest(ExtUiRequest(id = "note", method = "notify", message = "提示"))
+        runCurrent()
+        assertNull("停止过程中到达的对话框不弹出", e.controller.state.value.dialog)
+        assertTrue(e.engine.answers.contains(Triple("late", null, true)))
+        drain()
+        // 停止结束后到达的对话框照常显示
+        e.engine.fake.emitUiRequest(ExtUiRequest(id = "after", method = "confirm"))
+        runCurrent()
+        assertEquals("after", e.controller.state.value.dialog?.request?.id)
+    }
 }

@@ -18,7 +18,9 @@ data class ProbeResult(val ok: Boolean, val message: String, val httpStatus: Int
  *
  * - 自定义 OpenAI 兼容端点：宿主侧 `POST {baseUrl}/chat/completions`，提示词「Reply with OK only.」、`max_tokens 16`、
  *   20 s 超时、不重试；
- * - 内置 Provider：在容器里跑一次 `pi --print --no-session --provider <id> [--model <id>]`，Key 只经进程环境变量传入。
+ * - 内置 Provider：在容器里跑一次 `pi --print --no-session --provider <id> [--model <id>]`，Key 只经进程环境变量传入：
+ *   `:core:runtime` 把容器内变量放进 proot 进程的环境，argv 里只有 `env -u <名字>`，Key 不出现在任何进程的 cmdline 里
+ *   （见 `ProotLauncher`，审查 R1 #1）。
  *
  * 移植自 agegr/pi-web@025e24e `app/api/models-config/test/route.ts:11`、`:28-121`（提示词、maxTokens 16、20 s、
  * 结果结构：成功/失败原因、HTTP 状态、耗时），MIT。

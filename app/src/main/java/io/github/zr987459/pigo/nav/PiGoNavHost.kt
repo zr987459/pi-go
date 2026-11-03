@@ -15,6 +15,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -41,6 +43,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import io.github.zr987459.pigo.AppGraph
+import io.github.zr987459.pigo.contract.ErrCode
 import io.github.zr987459.pigo.contract.Outcome
 import io.github.zr987459.pigo.contract.Phase
 import io.github.zr987459.pigo.di.BindingContext
@@ -80,12 +83,23 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
     // 运行环境已装好就直接进聊天页；否则先进安装向导。只在首次组合时决定起点。
     val start = remember { if (graph.runtime.status.value.phase == Phase.READY) Destination.Chat else Destination.Onboarding }
 
-    // 运行环境就绪后预先拉起引擎（握手、恢复上次会话），聊天页一打开就有模型与会话信息。
+    val app = LocalContext.current.applicationContext
+    val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    fun toast(msg: String) {
+        scope.launch { snackbar.showSnackbar(msg) }
+    }
+
+    // 运行环境就绪后预先拉起引擎（握手、冷启动回到上次会话 L5），聊天页一打开就有模型与会话信息。
+    // 跑在 appScope 里且只做一次：旋转、切换深色模式等 Activity 重建不会取消或重复启动。
     LaunchedEffect(runtimeStatus.phase) {
-        if (runtimeStatus.phase == Phase.READY) EngineBindings.warmUp(graph.engine)
+        if (runtimeStatus.phase == Phase.READY) {
+            EngineBindings.warmUpOnce(graph.engine, BindingContext(app, graph.appScope), graph.runtime, graph.sessions, graph.log)
+        }
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbar) },
         bottomBar = {
             NavigationBar {
                 Destination.entries.forEach { d ->
@@ -108,7 +122,7 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
                 ChatPage(graph, onOpenModelSettings = { navController.openSettings(SettingsFocus.MODELS) })
             }
             composable(Destination.Sessions.route) {
-                SessionsPage(graph, onOpened = { navController.navigateTopLevel(Destination.Chat) })
+                SessionsPage(graph, onOpened = { navController.navigateTopLevel(Destination.Chat) }, onError = ::toast)
             }
             composable(
                 SETTINGS_PATTERN,
@@ -142,7 +156,7 @@ private fun ChatPage(graph: AppGraph, onOpenModelSettings: () -> Unit) {
 }
 
 @Composable
-private fun SessionsPage(graph: AppGraph, onOpened: () -> Unit) {
+private fun SessionsPage(graph: AppGraph, onOpened: () -> Unit, onError: (String) -> Unit) {
     val chat by graph.engine.chat.collectAsState()
     SessionsScreen(
         repository = graph.sessions,
@@ -150,11 +164,20 @@ private fun SessionsPage(graph: AppGraph, onOpened: () -> Unit) {
         onOpen = { s ->
             when (val r = graph.engine.openSession(s.guestPath, s.cwd)) {
                 is Outcome.Ok -> onOpened()
-                is Outcome.Err -> graph.log.w("nav", "打开会话失败：${r.message}")
+                is Outcome.Err -> {
+                    graph.log.w("nav", "打开会话失败：${r.code} ${r.message}")
+                    onError(sessionErrorText("打开会话", r))
+                }
             }
         },
         onNewSession = {
-            if (graph.engine.newSession() is Outcome.Ok) onOpened()
+            when (val r = graph.engine.newSession()) {
+                is Outcome.Ok -> onOpened()
+                is Outcome.Err -> {
+                    graph.log.w("nav", "新建会话失败：${r.code} ${r.message}")
+                    onError(sessionErrorText("新建会话", r))
+                }
+            }
             graph.sessions.refresh()
         },
         onBeforeDeleteCurrent = {
@@ -183,6 +206,18 @@ private fun SettingsPage(graph: AppGraph, focus: String?) {
         discoverModels = StoreBindings.discoverModels(BindingMode.store, graph.secrets),
         testConnection = StoreBindings.testConnection(BindingMode.store, ctx, graph.secrets, graph.runtime),
     )
+}
+
+/** 打开 / 新建会话失败时给用户看的中文原因（审查 R1 #5：失败不能毫无反应）。 */
+internal fun sessionErrorText(action: String, e: Outcome.Err): String {
+    val reason = when (e.code) {
+        ErrCode.ENGINE_START, ErrCode.ENGINE_EXIT -> "引擎没有在运行，请稍后再试或在聊天页重启引擎"
+        ErrCode.RPC_TIMEOUT -> "pi 没有及时回应，请稍后再试"
+        ErrCode.CANCELLED -> "被扩展取消了"
+        ErrCode.OOM -> "内存不足，pi 被系统结束"
+        else -> e.message.trim().ifBlank { "未知错误" }
+    }
+    return "${action}失败：$reason"
 }
 
 /** 顶层切换：回到起点再进入，不叠加返回栈；保存/恢复各页状态。 */

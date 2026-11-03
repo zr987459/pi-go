@@ -5,6 +5,7 @@ import io.github.zr987459.pigo.contract.ChatState
 import io.github.zr987459.pigo.contract.ContentBlock
 import io.github.zr987459.pigo.contract.Delivery
 import io.github.zr987459.pigo.contract.EngineStatus
+import io.github.zr987459.pigo.contract.RetryBanner
 import io.github.zr987459.pigo.contract.ToolStatus
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -109,4 +110,31 @@ object RetryVisibility {
     }
 
     fun lastAssistantKey(chat: ChatState): String? = chat.items.lastOrNull { it is ChatItem.Assistant }?.key
+}
+
+/**
+ * 黄条锚点：每一次重试（attempt 变化）开始时重新记下最后一条助手消息。
+ * 只在黄条第一次出现时记锚点不够：第 1 次重试已流出部分文字后失败，第 2 次重试等待期间
+ * 「最后一条助手消息」就是那条带字的失败消息，会被误判为重试已在出字而提前隐藏黄条。
+ */
+class RetryAnchor {
+    private var shown: RetryBanner? = null
+    var anchorKey: String? = null
+        private set
+
+    /** 每次合成时调用；返回要显示的黄条（不显示为 null）。 */
+    fun update(chat: ChatState): RetryBanner? {
+        val retry = chat.retry
+        if (retry == null) {
+            shown = null
+            anchorKey = null
+            return null
+        }
+        val prev = shown
+        if (prev == null || prev.attempt != retry.attempt) {
+            shown = retry
+            anchorKey = RetryVisibility.lastAssistantKey(chat)
+        }
+        return retry.takeIf { RetryVisibility.visible(chat, anchorKey) }
+    }
 }
