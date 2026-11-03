@@ -60,12 +60,31 @@ jobs:
         if: steps.detect.outputs.has_project == 'true'
         run: ./gradlew --no-daemon --stacktrace assembleDebugAndroidTest
 
-      - name: 上传单测报告（失败时）
-        if: failure() && steps.detect.outputs.has_project == 'true'
+      - name: 单测结果汇总（r3）
+        if: always() && steps.detect.outputs.has_project == 'true'
+        run: |
+          python3 - <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          import glob, xml.etree.ElementTree as ET
+          rows = []
+          for f in sorted(glob.glob('**/build/test-results/**/TEST-*.xml', recursive=True)):
+              r = ET.parse(f).getroot()
+              mod = f.split('/build/')[0]
+              rows.append((mod, r.get('name'), int(r.get('tests', 0)), int(r.get('failures', 0)) + int(r.get('errors', 0)), int(r.get('skipped', 0))))
+          print('| 模块 | 测试类 | 用例 | 失败 | 跳过 |')
+          print('|---|---|---|---|---|')
+          for m, n, t, fl, s in rows:
+              print(f'| {m} | {n} | {t} | {fl} | {s} |')
+          print(f'\n合计 {len(rows)} 个测试类，{sum(r[2] for r in rows)} 个用例，失败 {sum(r[3] for r in rows)}，跳过 {sum(r[4] for r in rows)}')
+          PY
+
+      - name: 上传单测报告
+        if: always() && steps.detect.outputs.has_project == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: unit-test-reports-${{ github.sha }}
-          path: '**/build/reports/tests/'
+          path: |
+            **/build/reports/tests/
+            **/build/test-results/
           retention-days: 7
 
       - name: 收集 APK
