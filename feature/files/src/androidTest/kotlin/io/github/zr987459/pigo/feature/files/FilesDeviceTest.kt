@@ -12,9 +12,8 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
-import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.onAllNodes
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -224,7 +223,7 @@ class FilesDeviceTest {
             }
             OutputViewerScreen(title = "bash", text = text, onBack = {})
         }
-        compose.waitUntil(10_000) { compose.onAllNodesWithTagExists("output.lines") }
+        compose.waitUntil(10_000) { compose.onAllNodesWithTag("output.lines").fetchSemanticsNodes().isNotEmpty() }
         compose.waitForIdle()
         frames.set(0); janky.set(0)
         // 真实手势连续滑动（不是 performScrollToIndex 的跳转）。
@@ -244,6 +243,4 @@ class FilesDeviceTest {
         compose.onNodeWithText("line 7777 — some build output", substring = true).assertIsDisplayed()
     }
 
-    private fun androidx.compose.ui.test.junit4.ComposeContentTestRule.onAllNodesWithTagExists(tag: String): Boolean =
-        onAllNodes(androidx.compose.ui.test.hasTestTag(tag)).fetchSemanticsNodes().isNotEmpty()
 }
