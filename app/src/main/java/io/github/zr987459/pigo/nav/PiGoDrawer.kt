@@ -70,6 +70,8 @@ fun PiGoDrawer(
     onDestination: (Destination) -> Unit,
     engineStatus: EngineStatus,
     modifier: Modifier = Modifier,
+    /** W1 的 extras 是否为真实实现；为 false 时不显示会话树、技能与模板、用量（它们只有假数据）。 */
+    extrasReady: Boolean = true,
     panel: @Composable (footer: @Composable () -> Unit) -> Unit,
 ) {
     BoxWithConstraints(modifier.fillMaxHeight()) {
@@ -84,8 +86,11 @@ fun PiGoDrawer(
                         modifier = Modifier.padding(horizontal = 10.dp),
                     ) { onDestination(Destination.Chat) }
                     // W5 抽屉入口：文件、会话树、技能与模板、用量。
-                    for (d in listOf(Destination.Files, Destination.Tree, Destination.Skills, Destination.Usage)) {
-                        DrawerRow(d, selected = current == d.route, modifier = Modifier.padding(horizontal = 10.dp)) { onDestination(d) }
+                    val entries = if (extrasReady) listOf(Destination.Files, Destination.Tree, Destination.Skills, Destination.Usage) else listOf(Destination.Files)
+                    // 路由可能带查询参数（files?path={path}）：比较前去掉（审查 Nit）。
+                    val currentBase = current?.substringBefore('?')
+                    for (d in entries) {
+                        DrawerRow(d, selected = currentBase == d.route.substringBefore('?'), modifier = Modifier.padding(horizontal = 10.dp)) { onDestination(d) }
                     }
                     DrawerRow(
                         Destination.Onboarding,

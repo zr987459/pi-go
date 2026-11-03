@@ -16,6 +16,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -95,7 +96,10 @@ internal fun LongPressMenu(row: ChatRow, menu: MessageMenu?, modifier: Modifier 
     val text = TimelineMerge.plainText(row)
     val confirmedUser = row is ChatRow.User && row.localId == null && row.delivery != Delivery.FAILED
     val entryId = if (confirmedUser && menu.onFork != null) menu.entryIdOf(row.key) else null
-    Box(modifier.pointerInput(row.key) { detectTapGestures(onLongPress = { if (text != null || entryId != null) open = true }) }) {
+    // 手势协程只随 key 重启：流式回复第一帧 text 为 null，必须读最新值，否则生成完也长按不出菜单（审查第 1 轮 Important 2）。
+    val latestText by rememberUpdatedState(text)
+    val latestEntryId by rememberUpdatedState(entryId)
+    Box(modifier.pointerInput(row.key) { detectTapGestures(onLongPress = { if (latestText != null || latestEntryId != null) open = true }) }) {
         content()
         DropdownMenu(open, onDismissRequest = { open = false }, modifier = Modifier.testTag("chat:messageMenu")) {
             if (text != null) {

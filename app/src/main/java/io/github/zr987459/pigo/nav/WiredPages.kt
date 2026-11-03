@@ -91,27 +91,56 @@ internal fun SubPage(title: String, tag: String, onBack: () -> Unit, content: @C
 }
 
 /**
- * 「回到聊天自动选中刚配置的模型」（feature-gap §3.2 W5 验收①）。
- * W2 的 ModelPicker 点未配置模型时只回调服务商 id（`onConfigure(provider)`），所以这里记下服务商；
- * 配置完成回到聊天时，若之前点的那个服务商已配置，就选它目录里第一个可用模型（缺口已写进 PR 描述）。
+ * 「回到聊天自动选中刚配置的模型」（feature-gap §3.2 W5 验收①，审查第 1 轮 Important 3）。
+ * ModelPicker 点未配置模型时经 `onConfigureModel(ModelRef)` 回传**被点的那个模型**，这里记下；
+ * 配置完成回到聊天时把引擎切到这个模型。服务商标题上的「去配置」没有具体模型（[ref] 为 null），
+ * 此时才退回该服务商目录里第一个可用模型。
  */
 object PendingModel {
-    val provider = MutableStateFlow<String?>(null)
+    data class Target(val provider: String, val ref: ModelRef?)
+
+    val target = MutableStateFlow<Target?>(null)
+    val provider: String? get() = target.value?.provider
+
+    fun clear() {
+        target.value = null
+    }
 }
 
 internal suspend fun applyPendingModel(graph: AppGraph): String? {
-    val p = PendingModel.provider.value ?: return null
-    val state = graph.models.auth.state(p)
+    val t = PendingModel.target.value ?: return null
+    val state = graph.models.auth.state(t.provider)
     if (!state.configured) return null
-    PendingModel.provider.value = null
-    val entries = (graph.models.catalog.entries(p) as? Outcome.Ok)?.value.orEmpty()
-    val ready = entries.firstOrNull { it.availability == ModelAvailability.READY } ?: entries.firstOrNull() ?: return null
-    return when (val r = graph.engine.setModel(ready.model.provider, ready.model.id)) {
+    PendingModel.clear()
+    val entries = (graph.models.catalog.entries(t.provider) as? Outcome.Ok)?.value.orEmpty()
+    val chosen = PendingModelLogic.pick(t, entries) ?: return null
+    return when (val r = graph.engine.setModel(chosen.provider, chosen.id)) {
         is Outcome.Ok -> {
-            graph.models.catalog.markUsed(ModelRef(ready.model.provider, ready.model.id))
-            "已切换到 ${ready.model.name ?: ready.model.id}"
+            graph.models.catalog.markUsed(chosen)
+            "已切换到 " + (entries.firstOrNull { it.model.ref == chosen }?.model?.name ?: chosen.id)
         }
         is Outcome.Err -> "切换模型失败：" + r.message
+    }
+}
+
+/** 纯函数（便于单测）：选回用户点的模型；没有具体模型时取该服务商第一个可用的。 */
+internal object PendingModelLogic {
+    fun pick(t: PendingModel.Target, entries: List<io.github.zr987459.pigo.contract.CatalogEntry>): ModelRef? {
+        t.ref?.let { return it }
+        val ready = entries.firstOrNull { it.availability == ModelAvailability.READY } ?: entries.firstOrNull() ?: return null
+        return ready.model.ref
+    }
+
+    /** 配置页只在「从弹层过来的那个服务商」且「确实已配置」时才算完成，回聊天（审查 Nit：点清除不算）。 */
+    fun shouldReturn(pending: PendingModel.Target?, providerId: String, configured: Boolean): Boolean =
+        pending?.provider == providerId && configured
+}
+
+/** 依赖 W1 extras 的页面在切 REAL 前的占位（深链接 / 测试直达时）。 */
+@Composable
+internal fun NeedsNewEnginePage(title: String, tag: String, onBack: () -> Unit) {
+    SubPage(title, tag, onBack) {
+        Text("需要新版引擎：$title 依赖 pi 引擎的扩展能力，当前版本尚未接入。", Modifier.padding(16.dp).testTag("page:needsEngine"))
     }
 }
 
@@ -154,13 +183,26 @@ internal fun ProviderConfigPage(graph: AppGraph, providerId: String, onDone: () 
         provider = list.firstOrNull { it.id == providerId }
         missing = provider == null
     }
-    val states by graph.models.auth.observe().collectAsState(initial = emptyMap())
-    SubPage(provider?.displayName ?: providerId, "provider", onBack) {
+    val scope = rememberCoroutineScope()
+    // 不管怎么离开配置页（返回键、左上角返回），都清掉「去配置」留下的待选模型：之后从设置首页配置这个服务商
+    // 不会被意外带回聊天并切模型（审查 Nit）。配好回聊天的那次在 onDone 之前已由 ChatPage 读取并清空。
+    val back = {
+        PendingModel.clear()
+        onBack()
+    }
+    BackHandler(onBack = back)
+    SubPage(provider?.displayName ?: providerId, "provider", back) {
         provider?.let { p ->
             ProviderConfigScreen(
                 p,
                 graph.models.auth,
-                onChanged = { if ((states[p.id] ?: AuthState.None).configured || PendingModel.provider.value == p.id) onDone() },
+                // 只有「从模型弹层过来的这个服务商」且状态真的变成已配置时才回聊天；点「清除」等不算。
+                onChanged = {
+                    scope.launch {
+                        val configured = runCatching { graph.models.auth.state(p.id).configured }.getOrDefault(false)
+                        if (PendingModelLogic.shouldReturn(PendingModel.target.value, p.id, configured)) onDone()
+                    }
+                },
                 savedFields = graph.models.savedFields,
             )
         }

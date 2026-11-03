@@ -163,6 +163,8 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
             PiGoDrawer(
                 current = current,
                 onDestination = ::go,
+                // 会话树、技能与模板、用量依赖 W1 的 extras：切 REAL 前不显示（审查第 1 轮 Important 1）。
+                extrasReady = graph.extrasReady,
                 engineStatus = graph.engine.status.collectAsState().value,
             ) { footer ->
                 SessionsPage(
@@ -221,17 +223,28 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
                         graph,
                         id,
                         // 从模型选择弹层「去配置」进来的：配好就回聊天，并自动选中该服务商的模型（验收①）。
-                        onDone = { if (PendingModel.provider.value == id) navController.navigateTopLevel(Destination.Chat) },
+                        // 是否该回聊天由配置页判断（PendingModelLogic.shouldReturn）；回到聊天后 applyPendingModel 切到用户点的模型。
+                        onDone = { navController.navigateTopLevel(Destination.Chat) },
                         onBack = { if (!navController.popBackStack()) navController.navigateTopLevel(Destination.Chat) },
                     )
                 }
                 composable(Routes.CUSTOM_PROVIDER) { CustomProviderPage(graph, onBack = { navController.popBackStack() }) }
                 composable(Routes.NETWORK) { NetworkPage(graph, onBack = { navController.popBackStack() }) }
                 composable(Routes.TREE) {
+                    if (!graph.extrasReady) {
+                        NeedsNewEnginePage("会话树", "tree") { navController.navigateTopLevel(Destination.Chat) }
+                        return@composable
+                    }
                     SessionTreePage(graph, onForked = { navController.navigateTopLevel(Destination.Chat) }, onError = ::toast, onBack = { navController.navigateTopLevel(Destination.Chat) })
                 }
-                composable(Routes.SKILLS) { SkillsPage(graph, onBack = { navController.navigateTopLevel(Destination.Chat) }) }
-                composable(Routes.USAGE) { UsagePage(graph, onBack = { navController.navigateTopLevel(Destination.Chat) }) }
+                composable(Routes.SKILLS) {
+                    if (graph.extrasReady) SkillsPage(graph, onBack = { navController.navigateTopLevel(Destination.Chat) })
+                    else NeedsNewEnginePage("技能与模板", "skills") { navController.navigateTopLevel(Destination.Chat) }
+                }
+                composable(Routes.USAGE) {
+                    if (graph.extrasReady) UsagePage(graph, onBack = { navController.navigateTopLevel(Destination.Chat) })
+                    else NeedsNewEnginePage("用量", "usage") { navController.navigateTopLevel(Destination.Chat) }
+                }
                 composable(
                     Routes.FILES_PATTERN,
                     arguments = listOf(navArgument("path") { type = NavType.StringType; nullable = true; defaultValue = null }),
@@ -294,7 +307,9 @@ private fun ChatPage(
     val model by remember(graph) { graph.engine.chat.map { it.model }.distinctUntilChanged() }.collectAsState(initial = graph.engine.chat.value.model)
     val thinking by remember(graph) { graph.engine.chat.map { it.thinkingLevel }.distinctUntilChanged() }.collectAsState(initial = graph.engine.chat.value.thinkingLevel)
     val running by remember(graph) { graph.engine.chat.map { it.running }.distinctUntilChanged() }.collectAsState(initial = false)
-    val extras by graph.extras.timelineExtras.collectAsState()
+    // 只有真实 extras（W1）才订阅附加项；Fake 的假数据不进时间线（审查第 1 轮 Important 1）。
+    val live = graph.liveExtras
+    val extras by (live?.timelineExtras ?: NO_EXTRAS).collectAsState()
     var noModel by remember { mutableStateOf(false) }
     var picker by remember { mutableStateOf(false) }
     var usage by remember { mutableStateOf(false) }
@@ -338,7 +353,8 @@ private fun ChatPage(
         },
         messageMenu = remember(graph) {
             MessageMenu(
-                entryIdOf = { key -> graph.extras.messageMeta.value[key]?.entryId },
+                // 没有真实 extras 时拿不到 entryId，「从这里分叉」自动禁用，复制 / 复制 Markdown 照常可用。
+                entryIdOf = { key -> graph.liveExtras?.messageMeta?.value?.get(key)?.entryId },
                 onFork = { entryId ->
                     scope.launch {
                         when (val r = graph.chatDeps.controller.forkFrom(entryId)) {
@@ -350,7 +366,8 @@ private fun ChatPage(
                 onCopied = onToast,
             )
         },
-        onContextClick = { usage = true },
+        // 用量弹层依赖 W1 的 usage/compact：W1 合入、切 REAL 前不响应点击。
+        onContextClick = if (graph.extrasReady) ({ usage = true }) else null,
     )
 
     if (picker) {
@@ -380,9 +397,12 @@ private fun ChatPage(
                         }
                     }
                 },
+                // 点某个未配置的模型：记下这个模型（不是服务商第一个），配好回来就选它（审查第 1 轮 Important 3）。
+                onConfigureModel = { ref -> PendingModel.target.value = PendingModel.Target(ref.provider, ref) },
                 onConfigure = { provider ->
                     picker = false
-                    PendingModel.provider.value = provider
+                    // 服务商标题上的「去配置」没有具体模型；点模型行时 onConfigureModel 已先记下模型，这里不覆盖。
+                    if (PendingModel.target.value?.provider != provider) PendingModel.target.value = PendingModel.Target(provider, null)
                     onConfigureProvider(provider)
                 },
                 modifier = Modifier.fillMaxHeight(0.85f),
@@ -390,7 +410,7 @@ private fun ChatPage(
         }
     }
     if (attach) AttachSheetBridge(graph) { attach = false }
-    if (usage) {
+    if (usage && graph.extrasReady) {
         ModalBottomSheet(onDismissRequest = { usage = false }, modifier = Modifier.testTag("sheet:usage")) {
             UsageContent(graph)
         }
@@ -507,3 +527,5 @@ fun NavHostController.openSettings(focus: String) {
         launchSingleTop = true
     }
 }
+
+private val NO_EXTRAS = kotlinx.coroutines.flow.MutableStateFlow<List<io.github.zr987459.pigo.contract.TimelineExtra>>(emptyList())

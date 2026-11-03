@@ -59,7 +59,8 @@ object ModelTags {
  * - 列出 pi 目录里**全部**模型（含未配凭据的，灰显），可用的在前，最近使用 5 个置顶；
  * - 显示上下文窗口、是否推理、是否看图、单价（美元，可选同时显示人民币）；
  * - 点可用模型 → [onSelect]（调用方执行 `set_model`；生成中切换下一轮生效，[generating] 为真时提示）；
- *   点未配置模型 → [onConfigure]（跳到该服务商的 Key / 登录页）；
+ *   点未配置模型 → [onConfigure]（跳到该服务商的 Key / 登录页），同时 [onConfigureModel] 收到被点的那个模型，
+ *   供调用方在配置完成后自动选中它（W5 验收①）；服务商标题上的「去配置」只回调 [onConfigure]；
  * - 底部思考强度分段控件只对支持推理的当前模型显示。
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -75,6 +76,8 @@ fun ModelPicker(
     onThinking: (String) -> Unit,
     onConfigure: (provider: String) -> Unit,
     modifier: Modifier = Modifier,
+    /** 点的是某个未配置的模型时先回调它（在 [onConfigure] 之前）；为 null 时只回调 [onConfigure]（旧行为）。 */
+    onConfigureModel: ((ModelRef) -> Unit)? = null,
 ) {
     var entries by remember { mutableStateOf<List<CatalogEntry>>(emptyList()) }
     var providers by remember { mutableStateOf<List<ProviderInfo>>(emptyList()) }
@@ -129,7 +132,10 @@ fun ModelPicker(
                                 scope.launch { catalog.markUsed(c.ref) }
                                 onSelect(c.ref)
                             }
-                            is PickerLogic.Click.Configure -> onConfigure(c.provider)
+                            is PickerLogic.Click.Configure -> {
+                                c.ref?.let { onConfigureModel?.invoke(it) }
+                                onConfigure(c.provider)
+                            }
                         }
                     }
                 }

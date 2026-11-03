@@ -28,7 +28,12 @@ class ModelPickerUiTest {
         .fetchSemanticsNodes().mapNotNull { node -> node.config.getOrElseNullable(SemanticsProperties.TestTag) { null } }
         .filter { it.startsWith(ModelTags.ROW_PREFIX) }
 
-    private fun show(current: ModelRef?, onConfigure: (String) -> Unit = {}, onSelect: (ModelRef) -> Unit = {}) = rule.setContent {
+    private fun show(
+        current: ModelRef?,
+        onConfigure: (String) -> Unit = {},
+        onSelect: (ModelRef) -> Unit = {},
+        onConfigureModel: ((ModelRef) -> Unit)? = null,
+    ) = rule.setContent {
         ModelPicker(
             catalog = FakeModelCatalog(FakeAuthManager()),
             settings = FakeAppSettingsStore(),
@@ -39,6 +44,7 @@ class ModelPickerUiTest {
             onSelect = onSelect,
             onThinking = {},
             onConfigure = onConfigure,
+            onConfigureModel = onConfigureModel,
         )
     }
 
@@ -58,6 +64,16 @@ class ModelPickerUiTest {
         rule.waitUntil(5_000) { rowTags().isNotEmpty() }
         rule.onNodeWithTag(ModelTags.ROW_PREFIX + "anthropic/claude-sonnet-4-5").performClick()
         assertEquals("anthropic", configured)
+    }
+
+    @Test fun unconfiguredModelReportsTheClickedModel() {
+        var configured: String? = null
+        var model: ModelRef? = null
+        show(null, onConfigure = { configured = it }, onConfigureModel = { model = it })
+        rule.waitUntil(5_000) { rowTags().isNotEmpty() }
+        rule.onNodeWithTag(ModelTags.ROW_PREFIX + "anthropic/claude-sonnet-4-5").performClick()
+        assertEquals("anthropic", configured)
+        assertEquals(ModelRef("anthropic", "claude-sonnet-4-5"), model)
     }
 
     @Test fun thinkingControlHiddenForNonReasoningModel() {

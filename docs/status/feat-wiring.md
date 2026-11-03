@@ -1,6 +1,10 @@
 # feat/wiring（W5）状态
 
-> **审查第 1 轮修复进行中**（2026-11-03 17:42 CST，接手续做）：修复1（extras 非 REAL 时传 null、隐藏依赖 extras 的入口）进行中；之后依次修 2（长按菜单旧值）、3（ModelPicker 回传 ModelRef）、4（M8 开关 + 会话导出）及 Nit。
+> **审查第 1 轮修复进行中**（2026-11-03 17:42 CST，接手续做）：
+> - 17:58 修复1 ✅：`AppGraph.liveExtras`（仅 REAL 时非 null）传给 ChatController；时间线附加项、长按分叉、上下文小环、抽屉「会话树 / 技能与模板 / 用量」只在 REAL 时出现，直达路由显示「需要新版引擎」。
+> - 17:58 修复2 ✅：长按菜单用 rememberUpdatedState 读最新 text / entryId；新增 feature/chat `LongPressMenuTest`（仪器）。
+> - 17:58 修复3 ✅：feature/models `ModelPicker` 新增 `onConfigureModel(ModelRef)`（旧回调保留），`PickerLogic.Click.Configure` 带 ref；`PendingModel` 存 ModelRef，回聊天 setModel 到被点的模型；配置页返回清空、只在真正配置后回聊天（Nit）；WiringSmokeTest ① 断言 provider + id。
+> - 进行中：修复4（会话长按「导出」、M8 开关 REAL 时显示）、其余 Nit。
 
 > **等待 W1**（2026-11-03 17:3x CST）：PR #13 feat/engine-rpc 仍未合入 main（main@f9097eb）。合入后：merge origin/main → `ExtrasBindings.real()` 返回 W1 的 `EngineBindings.extras(engine)`（PiEngine 本身实现 EngineExtras）→ `BindingMode.extras = REAL` → `WorkspaceBindings` 当前会话 HTML 导出改走 `extras.exportHtml` → 「从这里分叉」随 messageMeta 可用 → 全量单测。
 

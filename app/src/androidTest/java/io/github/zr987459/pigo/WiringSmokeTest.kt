@@ -1,5 +1,7 @@
 package io.github.zr987459.pigo
 
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -14,6 +16,7 @@ import androidx.compose.ui.test.swipeRight
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.github.zr987459.pigo.contract.ImageInput
+import io.github.zr987459.pigo.contract.ModelRef
 import io.github.zr987459.pigo.contract.Outcome
 import kotlinx.coroutines.flow.first
 import androidx.compose.ui.test.onFirst
@@ -38,7 +41,7 @@ import org.junit.runner.RunWith
  * 需要外部条件的用例用 [Assume] 跳过而不是失败：
  * - ①④⑤ 需要真实模型 Key：`-Pandroid.testInstrumentationRunnerArguments.pigoProvider=deepseek
  *   -Pandroid.testInstrumentationRunnerArguments.pigoKey=sk-...`（不写进仓库）。
- * - ②④⑤ 需要 W1（feat/engine-rpc）的真实 EngineExtras，合入前 BindingMode.extras 为 FAKE，自动跳过。⑥ 用 W3 真实文件页。
+ * - ②③④⑤ 需要 W1（feat/engine-rpc）的真实 EngineExtras，合入前 BindingMode.extras 为 FAKE，自动跳过。⑥ 用 W3 真实文件页。
  */
 @RunWith(AndroidJUnit4::class)
 class WiringSmokeTest {
@@ -55,6 +58,10 @@ class WiringSmokeTest {
     private fun waitText(text: String, timeoutMs: Long = 10_000) {
         rule.waitUntil(timeoutMs) { rule.onAllNodes(hasText(text, substring = true)).fetchSemanticsNodes().isNotEmpty() }
     }
+
+    private fun rowTags(): List<String> = rule.onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsProperties.TestTag))
+        .fetchSemanticsNodes().mapNotNull { node -> node.config.getOrElseNullable(SemanticsProperties.TestTag) { null } }
+        .filter { it.startsWith(ModelTags.ROW_PREFIX) }
 
     private fun drawer(tag: String) {
         rule.onRoot().performTouchInput { swipeRight(startX = 2f, endX = centerX) }
@@ -79,15 +86,19 @@ class WiringSmokeTest {
         rule.onNodeWithTag("chat:model").performClick()
         waitTag(ModelTags.LIST)
         rule.onNodeWithTag(ModelTags.SEARCH).performTextInput(provider!!)
-        // 未配置的服务商分组标题旁有「去配置」
-        waitText("去配置")
-        rule.onAllNodes(hasText("去配置")).onFirst().performClick()
+        // 点该服务商下的某一个模型（不是分组标题的「去配置」）：配置完成后要选回的正是它（审查第 1 轮 Important 3）。
+        rule.waitUntil(10_000) { rowTags().any { it.startsWith(ModelTags.ROW_PREFIX + provider + "/") } }
+        val tag = rowTags().first { it.startsWith(ModelTags.ROW_PREFIX + provider + "/") }
+        val id = tag.removePrefix(ModelTags.ROW_PREFIX + provider + "/")
+        rule.onNodeWithTag(tag).performClick()
         waitTag("page:provider")
-        assertEquals(provider, PendingModel.provider.value)
+        assertEquals(PendingModel.Target(provider, ModelRef(provider, id)), PendingModel.target.value)
         rule.onNodeWithTag("provider.key").performTextInput(key!!)
         rule.onNodeWithTag("provider.save").performClick()
         waitTag("page:chat", 30_000)
-        rule.waitUntil(60_000) { graph.engine.chat.value.model?.provider == provider }
+        rule.waitUntil(60_000) { graph.engine.chat.value.model?.let { it.provider == provider && it.id == id } == true }
+        assertEquals(provider, graph.engine.chat.value.model?.provider)
+        assertEquals(id, graph.engine.chat.value.model?.id)
     }
 
     /** ② 「+」选一张图发给支持看图的模型，时间线显示缩略图（UserImages 附加项）。 */
@@ -105,9 +116,10 @@ class WiringSmokeTest {
     /** ③ 输入 `/` 出现至少一个技能或模板。 */
     @Test
     fun slashShowsAtLeastOneSkillOrTemplate() {
+        Assume.assumeTrue("需要 W1 真实 EngineExtras（get_commands）：Fake 的命令列表不算", BindingMode.extras == Mode.REAL)
         rule.onNodeWithTag("chat:input").performTextReplacement("/")
         waitTag("command-palette", 15_000)
-        val cmds = runBlocking { graph.extras.commands(false) }
+        val cmds = runBlocking { graph.liveExtras!!.commands(false) }
         assertTrue("pi 没有返回任何命令：$cmds", cmds is Outcome.Ok && cmds.value.isNotEmpty())
         val first = (cmds as Outcome.Ok).value.first()
         waitTag("cmd-${first.name}")

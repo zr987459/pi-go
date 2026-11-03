@@ -10,6 +10,7 @@ import io.github.zr987459.pigo.contract.SecretStore
 import io.github.zr987459.pigo.contract.SessionRepository
 import io.github.zr987459.pigo.di.BindingContext
 import io.github.zr987459.pigo.di.BindingMode
+import io.github.zr987459.pigo.di.Mode
 import io.github.zr987459.pigo.di.ChatBindings
 import io.github.zr987459.pigo.di.EngineBindings
 import io.github.zr987459.pigo.di.RuntimeBindings
@@ -50,6 +51,14 @@ class AppGraph(context: Context) {
     // pi 其余 RPC（W1，合入前 Fake）
     val extras: EngineExtras by lazy { ExtrasBindings.extras(BindingMode.extras, ctx, engine) }
 
+    /**
+     * 真正能用的 extras：只有 [BindingMode.extras] 为 REAL 时才有，否则为 null（审查第 1 轮 Important 1）。
+     * 生产路径（聊天控制器、时间线附加项、长按分叉、用量小环、会话树 / 技能 / 用量入口、M8 开关）一律只用它：
+     * Fake 只给开发期的 W3/W4 内部图用，绝不能让「!命令」、带图发送、压缩、分叉落到 Fake 上（会静默丢消息）。
+     */
+    val extrasReady: Boolean get() = BindingMode.extras == Mode.REAL
+    val liveExtras: EngineExtras? get() = if (extrasReady) extras else null
+
     // 模型目录、服务商与登录、代理与费用显示（W2）
     val models: ModelsBindings.Models by lazy { ModelsBindings.models(BindingMode.models, ctx, runtime, secrets, engine) }
 
@@ -60,5 +69,5 @@ class AppGraph(context: Context) {
     val commands: CommandsGraph by lazy { CommandsBindings.graph(BindingMode.commands, ctx, runtime, engine, extras, launchEnv) }
 
     // 聊天界面：界面侧的可替换依赖（控制器带上 W1 extras 与 W4 草稿）
-    val chatDeps: ChatBindings.ChatDeps by lazy { ChatBindings.deps(BindingMode.chat, ctx, engine, extras, commands.drafts) }
+    val chatDeps: ChatBindings.ChatDeps by lazy { ChatBindings.deps(BindingMode.chat, ctx, engine, liveExtras, commands.drafts) }
 }

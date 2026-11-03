@@ -39,7 +39,8 @@ class PickerLogicTest {
 
     @Test fun clickingUnconfiguredGoesToProviderConfig() {
         val e = entries().first { it.availability == ModelAvailability.NEEDS_AUTH }
-        assertEquals(PickerLogic.Click.Configure(e.model.provider), PickerLogic.onClick(e))
+        // 未配置模型：带上被点的模型（W5 配置完成后自动选中它）
+        assertEquals(PickerLogic.Click.Configure(e.model.provider, e.model.ref), PickerLogic.onClick(e))
         val r = entries().first { it.availability == ModelAvailability.READY }
         assertEquals(PickerLogic.Click.Select(r.model.ref), PickerLogic.onClick(r))
     }
