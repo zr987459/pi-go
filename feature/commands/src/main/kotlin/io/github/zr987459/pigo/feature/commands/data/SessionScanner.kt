@@ -48,10 +48,16 @@ data class ScanHit(
  *   不重读整个文件；否则整份重读。
  * - 名字取**最后一条** `session_info`，所以名字在文件中间、在尾部都能读对（修 G8：旧实现只读头尾各 64 KB）。
  * - 只解析以换行结束的完整行；最后半行留到下次。
+ * - 流式分块读取（[chunkBytes]，默认 64 KB），跨块保留未结束的半行，内存只与单行长度有关、与文件大小无关；
+ *   单行超过 [maxLineBytes]（带 base64 图片的消息、超长 bash 输出）时不解析整行：只看行首一小段判断是不是
+ *   user/assistant 消息并计入 messageCount，不进 userTexts / firstMessage（审查第 1 轮 Important 3）。
  *
  * 思路移植自 agegr/pi-web@025e24e `lib/session-list-scanner.ts:44-66`（ResumePoint）与 `:140-260`（foldEntry），MIT。
  */
-class SessionScanner {
+class SessionScanner(
+    private val chunkBytes: Int = CHUNK_BYTES,
+    private val maxLineBytes: Int = MAX_LINE_BYTES,
+) {
     private data class Resume(
         val offset: Long,
         val headerHash: String,
@@ -138,29 +144,89 @@ class SessionScanner {
     // ---------------- 读取 ----------------
 
     private fun read(file: File, acc: Acc, from: Long, size: Long, mtime: Long): Entry {
-        var offset = from
+        var lineStart = from // 当前（未结束）行在文件里的起点 = 已处理完整行之后的位置
         var headerEnd = -1L
+        val line = LineBuffer(maxLineBytes)
         RandomAccessFile(file, "r").use { raf ->
             raf.seek(from)
-            val len = (size - from).toInt().coerceAtLeast(0)
-            val buf = ByteArray(len)
-            raf.readFully(buf)
-            bytesRead += len
-            var start = 0
-            for (i in buf.indices) {
-                if (buf[i] != '\n'.code.toByte()) continue
-                val line = String(buf, start, i - start, Charsets.UTF_8).removeSuffix("\r")
-                if (from == 0L && headerEnd < 0) headerEnd = (i + 1).toLong()
-                fold(acc, line)
-                start = i + 1
+            val buf = ByteArray(chunkBytes)
+            var pos = from
+            while (pos < size) {
+                val want = minOf(chunkBytes.toLong(), size - pos).toInt()
+                val n = raf.read(buf, 0, want)
+                if (n <= 0) break
+                bytesRead += n
+                var segStart = 0
+                for (i in 0 until n) {
+                    if (buf[i] != NL) continue
+                    line.append(buf, segStart, i - segStart)
+                    if (line.overflowed) foldOverlong(acc, line.head()) else fold(acc, line.text())
+                    line.reset()
+                    lineStart = pos + i + 1
+                    if (from == 0L && headerEnd < 0) headerEnd = lineStart
+                    segStart = i + 1
+                }
+                line.append(buf, segStart, n - segStart)
+                pos += n
             }
-            offset = from + start
         }
+        val offset = lineStart
         val resume = if (offset <= 0) null else {
             val hEnd = if (from == 0L) headerEnd else null
             headerHashOf(file, hEnd)?.let { h -> Resume(offset, h, sampleHash(file, offset)) }
         }
         return Entry(size, mtime, acc, resume)
+    }
+
+    /**
+     * 一行的缓冲。超过上限后只保留行首 [HEAD_BYTES] 字节（用来判断消息角色），其余丢弃，直到这一行结束。
+     */
+    private class LineBuffer(private val limit: Int) {
+        private var bytes = ByteArray(minOf(limit, 8 * 1024).coerceAtLeast(16))
+        private var len = 0
+        var overflowed = false
+            private set
+
+        fun append(src: ByteArray, off: Int, n: Int) {
+            if (n <= 0) return
+            if (overflowed) {
+                // 只补齐行首片段
+                val room = HEAD_BYTES - len
+                if (room > 0) { ensure(len + minOf(room, n)); System.arraycopy(src, off, bytes, len, minOf(room, n)); len += minOf(room, n) }
+                return
+            }
+            if (len.toLong() + n > limit) {
+                overflowed = true
+                if (len > HEAD_BYTES) len = HEAD_BYTES
+                append(src, off, n)
+                return
+            }
+            ensure(len + n)
+            System.arraycopy(src, off, bytes, len, n)
+            len += n
+        }
+
+        private fun ensure(cap: Int) {
+            if (cap <= bytes.size) return
+            var c = bytes.size
+            while (c < cap) c = (c.toLong() * 2).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+            bytes = bytes.copyOf(c)
+        }
+
+        fun text(): String = String(bytes, 0, len, Charsets.UTF_8).removeSuffix("\r")
+        fun head(): String = String(bytes, 0, minOf(len, HEAD_BYTES), Charsets.UTF_8)
+
+        fun reset() {
+            len = 0
+            overflowed = false
+            if (bytes.size > 64 * 1024) bytes = ByteArray(8 * 1024) // 读过一条长行后不长期占着大缓冲
+        }
+    }
+
+    /** 过长的一行：只按行首判断是不是 user/assistant 消息，计数，不解析正文。 */
+    private fun foldOverlong(acc: Acc, head: String) {
+        if (!TYPE_MESSAGE.containsMatchIn(head)) return
+        if (ROLE_CHAT.containsMatchIn(head)) acc.messageCount++
     }
 
     private fun fold(acc: Acc, line: String) {
@@ -201,7 +267,7 @@ class SessionScanner {
 
     /** 头一行（到第一个换行为止，最多 [HEADER_MAX] 字节）的哈希。 */
     private fun headerHashOf(file: File, knownEnd: Long?): String? = RandomAccessFile(file, "r").use { raf ->
-        val n = (knownEnd ?: minOf(raf.length(), HEADER_MAX.toLong())).toInt()
+        val n = minOf(knownEnd ?: raf.length(), raf.length(), HEADER_MAX.toLong()).toInt()
         val buf = ByteArray(n)
         raf.readFully(buf)
         val end = buf.indexOf('\n'.code.toByte()).let { if (it < 0) n else it + 1 }
@@ -278,6 +344,15 @@ class SessionScanner {
         const val RESUME_SAMPLE_BYTES = 512
         const val HEADER_MAX = 64 * 1024
         const val MAX_TEXT_CHARS = 256 * 1024
+        /** 每次读取的块大小。 */
+        const val CHUNK_BYTES = 64 * 1024
+        /** 单行超过这个长度就不整行解析（带图消息、超长工具输出）。 */
+        const val MAX_LINE_BYTES = 4 * 1024 * 1024
+        /** 过长行保留的行首字节数，用来判断 type / role。 */
+        internal const val HEAD_BYTES = 4 * 1024
+        private const val NL = '\n'.code.toByte()
+        private val TYPE_MESSAGE = Regex(""""type"\s*:\s*"message"""")
+        private val ROLE_CHAT = Regex(""""role"\s*:\s*"(user|assistant)"""")
         private const val FORMAT_VERSION = 1
         private val JSON = Json { ignoreUnknownKeys = true }
 
