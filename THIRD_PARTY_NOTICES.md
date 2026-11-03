@@ -69,7 +69,7 @@ GPL/LGPL 义务：mvp/runtime 引入时在 `core/runtime/NOTICE-runtime.md` 记�
 
 ## 5. 只参考设计、未使用代码的项目
 
-- dsh-Go（https://github.com/ccch1mneyyy/dsh-Go ，AGPL-3.0）：只参考了其公开的设计说明（工具卡片折叠、插话/排队交互、运行时状态机等）。**pi-go 没有拷贝其任何代码或资源**，pi-go 的名称、界面、图标与形象中也不使用该项目的名称、标识或吉祥物。如果将来确需拷贝其代码，pi-go 必须改为 AGPL-3.0，并在此列出拷贝来源与署名。
+- dsh-Go：自 2026-11-03 起不再只是参考，界面代码与资源已移植，见 §8。
 
 ## 6. 明确不使用的资源
 
@@ -84,3 +84,18 @@ GPL/LGPL 义务：mvp/runtime 引入时在 `core/runtime/NOTICE-runtime.md` 记�
   - `core/store/.../ModelDiscovery.kt` ← `lib/model-discovery.ts:1-135`、`app/api/models-config/discover/route.ts:13-99`
   - `core/store/.../ProviderTester.kt` ← `app/api/models-config/test/route.ts:11`、`:28-121`
 
+
+## 8. dsh-Go 界面移植（ui/dsh-style、ui/dsh-panels）
+
+- 来源：https://github.com/ccch1mneyyy/dsh-Go （默认分支，2026-11-03 取），**AGPL-3.0**。所有者自用、不分发，已明确同意直接移植其 UI 代码与资源（2026-11-03）。dsh-Go 的界面是 Flutter（Dart），pi-go 按其组件结构、尺寸、配色、动效参数逐项翻译为 Kotlin/Compose。dsh-Go 的部分主题代码自身注明源自 PiPilot（https://github.com/CikeSeven/pi_pilot ，MIT，Copyright (c) 2026 CikeSeven）。
+- 移植的代码（dsh-Go 路径 → pi-go 路径）：
+  - `app/lib/ui/theme/palette.dart`、`accent.dart`（黛青 daiqing）、`surfaces.dart` → `core/ui/.../DshPalette.kt`、`DshTokens.kt`（`DshColors`、`GlassStyle`）
+  - `app/lib/ui/theme/shapes.dart`、`motion.dart` → `core/ui/.../DshTokens.kt`（`AppShape`、`AppSpace`、`AppMotion`）
+  - `app/lib/ui/theme/typography.dart` → `core/ui/.../Type.kt`
+  - `app/lib/ui/theme/backdrop.dart`、`glass.dart`、`ui/common/glass_pill.dart`、`status_dot.dart`、`status_chip.dart`、`pressable.dart` → `core/ui/.../Components.kt`
+  - `app/lib/ui/theme/dsh_glyphs.dart`、`app_icons.dart` → `core/ui/.../AppIcons.kt`（生成）
+- 拷贝的资源：
+  - `app/assets/fonts/DshIcons.ttf` → `core/ui/src/main/res/font/dsh_icons.ttf`（字形来自 Phosphor Icons 2.1.1，MIT，Copyright (c) 2023 Phosphor Icons）
+  - `app/assets/fonts/JetBrainsMono-{Regular,Medium,Bold}.ttf` → `core/ui/src/main/res/font/jetbrains_mono_*.ttf`（JetBrains Mono，SIL OFL 1.1）
+- **未拷贝**：吉祥物（鲸娘、Deepy 小鲸鱼）、品牌标识与鲸鱼尾图形（dsh-Go `ASSETS.md` 声明不在 AGPL 授权内；所有者 2026-11-03 要求先不用）。
+- 后续工作流（聊天页、抽屉、设置、引导页）移植的文件在此追加。
