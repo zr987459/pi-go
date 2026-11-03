@@ -47,12 +47,15 @@ class FilesController(
     private var job: Job? = null
 
     init {
+        // 先 roots 再列目录与 gitStatus：roots(sessionCwd) 负责把 /root 以外的会话 cwd 登记进允许范围，
+        // 而 list / gitStatus 只检查不扩大。并发跑时首次 gitStatus（或 list）可能抢在登记前，
+        // 得到「不能访问工作目录以外的位置」，Git 标记要等下次刷新才出现（审查第 2 轮）。
         scope.launch {
             val roots = fs.roots(sessionCwd)
             _state.update { it.copy(roots = roots) }
+            open(_state.value.dir)
+            refreshGit()
         }
-        open(_state.value.dir)
-        refreshGit()
     }
 
     fun open(dir: String) {
