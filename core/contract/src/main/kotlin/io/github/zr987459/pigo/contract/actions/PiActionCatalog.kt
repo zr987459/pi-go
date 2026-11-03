@@ -520,7 +520,7 @@ object PiActionCatalog {
             title = "切换形态",
             group = ActionGroup.SESSION,
             slash = listOf("ui", "term"),
-            featureRefs = listOf("§3 本地命令 /ui、/term"),
+            featureRefs = listOf("§13 两种形态无缝切换", "§3 本地命令 /ui、/term"),
             ui = UiEntry.Persistent("persist:form.toggle"),
             term = TermEntry.Slash,
         ),

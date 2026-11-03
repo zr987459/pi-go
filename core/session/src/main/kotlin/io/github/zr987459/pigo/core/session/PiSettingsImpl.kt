@@ -106,10 +106,16 @@ object SettingsJson {
         return out
     }
 
+    private val inProcess = java.util.concurrent.ConcurrentHashMap<String, Any>()
+
+    /** 进程内互斥（同一 JVM 里 FileChannel.lock 不能重入）+ 跨进程文件锁（pi 也会写 settings.json）。 */
     fun <T> locked(file: File, block: () -> T): T {
         file.parentFile?.mkdirs()
-        RandomAccessFile(File(file.parentFile, file.name + ".lock"), "rw").use { raf ->
-            raf.channel.lock().use { return block() }
+        val mutex = inProcess.computeIfAbsent(file.absolutePath) { Any() }
+        synchronized(mutex) {
+            RandomAccessFile(File(file.parentFile, file.name + ".lock"), "rw").use { raf ->
+                raf.channel.lock().use { return block() }
+            }
         }
     }
 }
