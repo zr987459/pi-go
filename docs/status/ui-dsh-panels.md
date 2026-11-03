@@ -1,13 +1,15 @@
 # ui/dsh-panels 状态（工作者 B：抽屉内容 + 设置 + 安装引导）
 
-**状态：阶段 2 代码已推，等 CI**（2026-11-03 15:20 CST）
+**状态：完成——panels 已合入 ui/dsh-style @3714a2b737098a1fe1e828fd101759b3b8d73285，抽屉已接入 SessionsScreen @4640e2e，CI 绿**（2026-11-03 16:00 CST）
 
 ## 进度
 - [x] 14:40 已开始；14:45 通读 dsh-Go 完成
 - [x] 已普通 merge ui/dsh-style（含 A 的 `theme:` 6395c89）→ 9427e8e
 - [x] 抽屉会话面板（9eb55db）、设置 + 后台引导 + 安装引导（1827177）按 dsh-Go 改版，均用 A 的 `DshTheme`/`AppIcon`/`GlassSurface`/`AppShape`/`AppMotion`
-- [ ] CI 绿：**当前被 ui/dsh-style 自身的编译错误挡住**——`core/ui/.../AppIcons.kt:164`、`:450-451` 用了关键字 `package` 作属性名（需加反引号），`:core:ui:compileDebugKotlin` 失败，B 的模块还没编到。core/ui 归 A，B 不改；A 修好后 B 立刻再 merge。
-- [ ] 再次 merge ui/dsh-style → CI 绿 → 合回 ui/dsh-style
+- [x] CI 绿（收尾工作者）：B 的三个模块唯一的编译错误是 `OnboardingScreen.kt` 用了不存在的 `TextButtonDefaults`（M3 只有 `ButtonDefaults.textButtonColors`），1050b3e 修复后 CI 绿（run 41596888527）。原记录：当时被 ui/dsh-style 自身的编译错误挡住——`core/ui/.../AppIcons.kt:164`、`:450-451` 用了关键字 `package` 作属性名（需加反引号），`:core:ui:compileDebugKotlin` 失败，B 的模块还没编到。core/ui 归 A，B 不改；A 修好后 B 立刻再 merge。
+- [x] 再次 merge ui/dsh-style → 78b25f7，CI 绿（run 41597170045）→ 普通 merge 回 ui/dsh-style → 3714a2b
+- [x] ui/dsh-style 抽屉接入 `SessionsScreen`（含 `onOpenSettings`、新增可选 `footer` 槽）→ 4640e2e，CI 绿（run 41597702241）
+- [x] 本地单测（arm64 沙箱）：sessions 12、settings 14、onboarding 7、chat 65，全过
 
 ## 每个界面改成了什么样（无法本地出图，文字说明；预览见各模块 `*Previews.kt`，浅色 + 深色）
 
@@ -20,7 +22,7 @@
 - **会话列表**：按 今天 / 昨天 / 本周 / 更早 分组，组标题为 12sp 字距 0.8 的眉题（三级灰）；每行 44dp、14dp 圆角，**当前会话铺 primary 9%（深色 18%）底并加粗**，160ms 淡入；只显示标题（与 dsh-Go 一致）。**长按**弹出底部操作面板（标题 + 目录/时间 + 红色「删除」），删除保护逻辑不变（`SessionFormat.deleteGuard`）。
 - 回收站：同样的行，右侧「恢复」。读取中显示 dsh-Go 的骨架列表（2.4s 呼吸）；空列表居中偏上的提示。
 - 底部身份栏：薄荷色圆标「本机 / 会话保存在本机」+ 44dp 玻璃圆钮「刷新」「设置」（设置钮需要导航层传 `onOpenSettings`）。
-- 本组件不画面板底色：放进抽屉时由 A 的抽屉容器提供玻璃面板和右侧 28dp 圆角。
+- 本组件不画面板底色：放进抽屉时由 A 的抽屉容器提供玻璃面板和右侧 28dp 圆角。**已接入**：`PiGoDrawer` 直接内嵌本面板（替换「全部会话」占位），会话打开/新建/删除当前会话保护沿用原导航接线。
 - 新增可选参数 `onOpenSettings: (() -> Unit)? = null`（默认不显示设置钮，旧调用不受影响）。
 
 ### 设置页 `feature/settings/SettingsScreen.kt`（对照 `settings/settings_screen.dart`、`settings_widgets.dart`）
@@ -49,7 +51,8 @@
 - 抽屉：没有置顶、文件夹、归档、多选、重命名、分享、未读/运行中/待确认状态点、工作区切换、DS Bot 行、远程主机切换（pi-go 没有这些状态或功能，按要求不做假功能）；搜索是就地筛选，不是 dsh-Go 的独立搜索页；没有玻璃背景模糊（Compose 版 GlassSurface 不做 blur）。
 - 设置：dsh-Go 的设置索引/搜索、概览卡、外观/字号/语言/通知/权限等分组 pi-go 没有对应功能，未做；Key 编辑仍是对话框而不是 dsh-Go 的独立服务商页面。
 - 引导：dsh-Go 的欢迎页（品牌动画）、API Key 引导页、外观选择、本地/远程选择没有对应流程（pi-go 只有一页安装向导）；品牌标识与吉祥物按用户要求不用。
-- 截图：无法本地生成，见上面文字说明。
+- 抽屉多了 pi-go 自有的「安装与运行环境」行（列表与身份栏之间），dsh-Go 没有。
+- 截图：无模拟器，未截图，见各模块 `*Previews.kt` 与 `app/nav/PiGoDrawer.kt` 的 @Preview。
 
 ## 用户变更（14:40 生效）
 1. **不要吉祥物**：不移植、不显示像素吉祥物（本分支未引入任何吉祥物资源）。
@@ -72,5 +75,5 @@
 范围：只改 feature/sessions/**、feature/settings/**、feature/onboarding/**（含 res/测试）、本文件、docs/ui-shots/**、THIRD_PARTY_NOTICES.md 一行来源。不改逻辑/ViewModel 状态机/core/**/app nav。
 
 
-## 收尾工作者已接手（2026-11-03 15:30 CST）
+## 收尾工作者（2026-11-03 15:30–16:00 CST，已完成）
 计划：修 feature/sessions、feature/settings、feature/onboarding 编译/测试直到 CI 绿 → 合入 ui/dsh-style 并回合 → 在 ui/dsh-style 抽屉接线 SessionsScreen → CI 绿后更新状态并开 PR 到 main。

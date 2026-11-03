@@ -6,6 +6,7 @@
 - [x] 阶段 2：聊天主页（渐变背景、顶部胶囊、空会话问候 + 启动引擎、底部输入框）
 - [x] 阶段 3：消息气泡、工具行、Markdown/代码块、提示与动画、抽屉容器
 - [x] 阶段 4：@Preview（浅/深）、差距说明、CI 绿
+- [x] 收尾（2026-11-03 16:00 CST）：**panels 已合入 ui/dsh-style @3714a2b737098a1fe1e828fd101759b3b8d73285**（普通 merge，含 ui/dsh-panels @78b25f7）；抽屉接入 B 的 `SessionsScreen` @4640e2ee93dc62a087d1f2149210e7967cc534b4，CI 绿；已开 PR 到 main
 
 调度方 14:40 追加要求已执行：**不用吉祥物**（没有入库任何吉祥物资源）；排版尽量一比一照 dsh-Go；顶栏「选择模型▾」/ 输入框「+」留 `onModelClick` / `onAttachClick` 回调。
 说明：dsh-Go 的界面是 **Flutter（Dart）**，没有 Compose 代码可直接拷贝，这里按它的组件树、尺寸、配色、动效参数逐项翻译成 Compose。
@@ -54,10 +55,12 @@ AppBackdrop { /* 页面内容 */ }           // 渐变 + 光晕背景。页面�
 
 **外壳（app/nav）**：去掉底部导航栏，改为 `ModalNavigationDrawer`：宽 min(320, 屏宽-56)，Sheet 玻璃、右侧 28dp 圆角，scrim 用 `DshTheme.colors.scrim`，左边缘手势拉出；顶部「pi-go」字标 + 主色「新对话」；行：聊天、全部会话；底部「系统」：安装与运行环境（带引擎状态点）、设置。没配模型的提示改为输入条上方的胶囊（`chat:goSettings` 不变）。`AppSmokeTest` 改为先拉出抽屉再点 `nav:*`。
 
+**抽屉接线（收尾，app/nav/PiGoDrawer.kt、PiGoNavHost.kt）**：抽屉里直接放 B 的会话面板 `SessionsScreen`（品牌行 +「新对话」、搜索胶囊、全部/回收站、按天分组的会话、长按删除、身份栏「刷新」「设置」），替换原来的「聊天 / 全部会话」占位行。打开/新建会话、删除当前会话前先新建（`onBeforeDeleteCurrent`）、`currentGuestPath` 高亮都沿用原 `SessionsPage` 的引擎与会话仓库接线，成功后关抽屉回聊天页；身份栏设置钮跳设置页（设置页 `onModelClick` 仍用默认对话框）。「安装与运行环境」（带引擎状态点）通过 `SessionsScreen` 新增的可选 `footer` 槽放在列表与身份栏之间。`sessions` 路由保留为整页版。`AppSmokeTest` 改为从身份栏 `sessions:settings` 进设置、`nav:onboarding` 进安装向导。
+
 ## 与 dsh-Go 的差距
 - 吉祥物、鲸鱼尾、品牌标识：按要求不用。
 - 玻璃面无背景模糊（dsh-Go 用 BackdropFilter）；只做了半透明填充 + 描边 + 阴影。
-- 抽屉里没有会话列表、搜索、工作区切换（会话列表在 B 的 `feature/sessions`，现为「全部会话」入口；B 合并后可把列表嵌进 `PiGoDrawer`）。
+- 抽屉已嵌入会话列表与就地搜索；仍没有工作区切换、远程主机、置顶/文件夹/归档/多选/重命名、会话状态点，搜索不是独立搜索页。「安装与运行环境」入口是 pi-go 自有的，dsh-Go 抽屉里没有。
 - 顶栏「选择模型▾」点开仍是下拉菜单，不是 dsh-Go 的模型底部面板（功能工作流接 `onModelClick`）。
 - 「+」附件面板、斜杠命令面板、@ 提及、语音输入：未做，入口为提示「暂不支持」。
 - 代码块无语法高亮、无换行切换、无 Mermaid 预览；Markdown 仍用 mikepenz 渲染器，只换了配色与字号。
@@ -68,6 +71,9 @@ AppBackdrop { /* 页面内容 */ }           // 渐变 + 光晕背景。页面�
 - 本地无法跑 AAPT2，`:app` 只在 CI 编译；没有截图（无模拟器），以 Preview 代替。
 
 ## CI
+- 4640e2e（抽屉接线）：https://github.com/zr987459/pi-go/actions/runs/41597702241 —— success（assembleDebug）
+- 78b25f7（ui/dsh-panels 合入 ui/dsh-style 后的分支头）：https://github.com/zr987459/pi-go/actions/runs/41597170045 —— success
+- 本地（arm64 沙箱，无 AAPT2）：`:feature:sessions/settings/onboarding/chat:testDebugUnitTest` 全部通过（12/14/7/65 个用例）；`:app` 只在 CI 编译
 - 05e72f2（界面改完）：https://github.com/zr987459/pi-go/actions/runs/41595071530 —— success（assembleDebug）
 - af52ea3（主题修复）：https://github.com/zr987459/pi-go/actions/runs/41593713759 —— success
 - 6395c89（第一个 theme 提交）：失败（AppIcons 里 `package` 撞关键字），已在 af52ea3 修复
