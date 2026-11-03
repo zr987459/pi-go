@@ -78,11 +78,16 @@ class RealCustomProviderStore(
         Outcome.Err(ErrCode.PROVIDER, e.message ?: "删除失败")
     }
 
+    /** 「获取模型列表」走 M9 的代理（配了的话）；地址无法解析时直连，由请求本身报错。 */
+    private suspend fun proxyFor(baseUrl: String): java.net.Proxy =
+        runCatching { io.github.zr987459.pigo.core.store.HostProxy.select(config.proxy(), ModelDiscovery.modelsUrl(baseUrl)) }
+            .getOrDefault(java.net.Proxy.NO_PROXY)
+
     override suspend fun discover(baseUrl: String, api: ProviderApi, rawKey: String?, providerId: String?): Outcome<List<CustomModel>> {
         val key = rawKey?.takeIf { it.isNotBlank() }
             ?: providerId?.let { secrets.get(ProviderPresets.customAlias(ProviderPresets.normalizeCustomId(it))) }
             ?: return Outcome.Err(ErrCode.PROVIDER, "请先填写 API Key")
-        return when (val r = ModelDiscovery.discoverDetailed(baseUrl, key, api.wire)) {
+        return when (val r = ModelDiscovery.discoverDetailed(baseUrl, key, api.wire, proxyFor(baseUrl))) {
             is Outcome.Ok -> Outcome.Ok(
                 r.value.map { d ->
                     CustomModel(

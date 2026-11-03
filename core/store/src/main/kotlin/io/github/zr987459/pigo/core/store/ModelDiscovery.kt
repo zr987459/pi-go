@@ -120,7 +120,13 @@ object ModelDiscovery {
     }
 
     /** 带详情的模型列表；[api] 决定鉴权头（Gemini 用 `x-goog-api-key`，Anthropic 加 `anthropic-version`）。 */
-    suspend fun discoverDetailed(baseUrl: String, rawKey: String, api: String? = null): Outcome<List<Discovered>> =
+    suspend fun discoverDetailed(
+        baseUrl: String,
+        rawKey: String,
+        api: String? = null,
+        /** M9 的代理（[HostProxy.select]）；null = 直连。 */
+        proxy: java.net.Proxy? = null,
+    ): Outcome<List<Discovered>> =
         withContext(Dispatchers.IO) {
             val key = sanitizeApiKey(rawKey)
             val url = try {
@@ -129,7 +135,7 @@ object ModelDiscovery {
                 return@withContext Outcome.Err(ErrCode.PROVIDER, e.message ?: "接口地址不正确")
             }
             try {
-                val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                val conn = (URL(url).openConnection(proxy ?: java.net.Proxy.NO_PROXY) as HttpURLConnection).apply {
                     requestMethod = "GET"
                     connectTimeout = TIMEOUT_MS
                     readTimeout = TIMEOUT_MS
