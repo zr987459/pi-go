@@ -14,6 +14,7 @@ import java.io.File
  *
  * 可分享的只有两类目录（`res/xml/pigo_files_paths.xml`）：应用缓存的 `pigo-share/`、`pigo-camera/`。
  * rootfs 里的文件先复制到 `pigo-share/` 再分享，避免把整个 rootfs 暴露给 FileProvider。
+ * 副本 1 小时后由 [io.github.zr987459.pigo.feature.files.share.ShareCache.cleanStale] 清理。
  */
 object FileShare {
     const val SHARE_DIR = "pigo-share"
@@ -25,6 +26,7 @@ object FileShare {
 
     /** 复制到分享目录（同名覆盖），返回副本。大文件在调用方的 IO 线程上执行。 */
     fun stage(ctx: Context, src: File, name: String = src.name): File {
+        io.github.zr987459.pigo.feature.files.share.ShareCache.cleanStale(ctx)
         val dir = File(ctx.cacheDir, SHARE_DIR).apply { mkdirs() }
         val dst = File(dir, name)
         if (src.canonicalPath != dst.canonicalPath) src.copyTo(dst, overwrite = true)

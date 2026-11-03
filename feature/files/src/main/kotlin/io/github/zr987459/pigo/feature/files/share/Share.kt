@@ -21,8 +21,19 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** 其他应用经系统分享菜单发来的内容（解析后、处理前）。 */
-data class SharedPayload(val text: String?, val subject: String?, val uris: List<Uri>, val mimeType: String?) {
+/**
+ * 其他应用经系统分享菜单发来的内容（解析后、处理前）。
+ * [rejected]：被 [ShareUriPolicy] 拒绝的 Uri 个数（file://、本包 provider 等），交付时列为错误。
+ */
+data class SharedPayload(
+    val text: String?,
+    val subject: String?,
+    val uris: List<Uri>,
+    val mimeType: String?,
+    val rejected: Int = 0,
+    /** 冷启动暂存时因超过 [ShareCache.INBOX_MAX_BYTES] 而丢弃的文件数。 */
+    val tooLarge: Int = 0,
+) {
     val isEmpty: Boolean get() = text.isNullOrBlank() && uris.isEmpty()
 }
 
@@ -45,9 +56,14 @@ object ShareInbox {
     /** 取走并清空（只交付一次）。 */
     fun consume(): ShareDelivery? = _delivery.getAndSet(null)
 
+    /** 处理冷启动时暂存的分享。暂存副本是本 App 自己的 inbox 文件，处理完即删除。 */
     suspend fun processPending(ctx: Context, processor: AttachmentProcessor, cwd: String): ShareDelivery? {
         val p = _raw.getAndSet(null) ?: return null
-        return ShareReceiver.process(ctx, p, processor, cwd).also(::put)
+        return try {
+            ShareReceiver.process(ctx, p, processor, cwd, trustOwnInbox = true).also(::put)
+        } finally {
+            ShareCache.deleteInboxCopies(ctx, p.uris)
+        }
     }
 
     private fun <T> MutableStateFlow<T?>.getAndSet(v: T?): T? {
@@ -59,8 +75,11 @@ object ShareInbox {
 }
 
 object ShareReceiver {
-    /** 解析 ACTION_SEND / SEND_MULTIPLE；其他 Intent 返回 null。 */
-    fun parse(intent: Intent): SharedPayload? {
+    /**
+     * 解析 ACTION_SEND / SEND_MULTIPLE；其他 Intent 返回 null。
+     * [accept] 过滤 Uri（入口传 [ShareUriPolicy]）；被拒的计入 [SharedPayload.rejected]。
+     */
+    fun parse(intent: Intent, accept: (Uri) -> Boolean = { it.scheme.equals("content", ignoreCase = true) }): SharedPayload? {
         val uris = ArrayList<Uri>()
         when (intent.action) {
             Intent.ACTION_SEND -> intent.streamExtra()?.let(uris::add)
@@ -70,17 +89,31 @@ object ShareReceiver {
         intent.clipData?.let { c -> for (i in 0 until c.itemCount) c.getItemAt(i).uri?.let { if (it !in uris) uris += it } }
         val text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
         val subject = intent.getStringExtra(Intent.EXTRA_SUBJECT)
-        return SharedPayload(text, subject, uris, intent.type).takeUnless { it.isEmpty }
+        val ok = uris.filter(accept)
+        val p = SharedPayload(text, subject, ok, intent.type, rejected = uris.size - ok.size)
+        return p.takeUnless { it.isEmpty && it.rejected == 0 }
     }
 
     /**
      * 图片 → [AttachmentProcessor.prepareImage]（压缩、摆正、base64）；其他文件 → 导入到 `<cwd>/.pigo/uploads/<日期>/`。
      * 单个失败不影响其他，错误以中文列在 [ShareDelivery.errors]。
      */
-    suspend fun process(ctx: Context, p: SharedPayload, processor: AttachmentProcessor, cwd: String): ShareDelivery = withContext(Dispatchers.IO) {
+    suspend fun process(
+        ctx: Context,
+        p: SharedPayload,
+        processor: AttachmentProcessor,
+        cwd: String,
+        /** 只有 [ShareInbox.processPending] 传 true：允许本 App 自己 inbox 目录的 FileProvider Uri。 */
+        trustOwnInbox: Boolean = false,
+    ): ShareDelivery = withContext(Dispatchers.IO) {
         val atts = ArrayList<Attachment>()
         val errors = ArrayList<String>()
+        if (p.rejected > 0) errors += "${p.rejected} 个文件：${ShareUriPolicy.REJECTED_MESSAGE}"
+        if (p.tooLarge > 0) errors += "${p.tooLarge} 个文件超过 ${ShareCache.INBOX_MAX_BYTES / (1024 * 1024)} MB，未导入"
         for (uri in p.uris) {
+            // 二次检查（process 也可能被直接调用）：只读别的应用提供的 content://；本 App 的 Uri 只认 inbox 副本。
+            val allowed = ShareUriPolicy.isAllowed(ctx, uri) || (trustOwnInbox && ShareCache.isInboxUri(ctx, uri))
+            if (!allowed) { errors += "${uri.lastPathSegment ?: "文件"}：${ShareUriPolicy.REJECTED_MESSAGE}"; continue }
             val (name, _) = FileShare.displayName(ctx, uri)
             val mime = ctx.contentResolver.getType(uri) ?: p.mimeType
             val isImage = mime?.startsWith("image/") == true && mime != "image/svg+xml"
@@ -104,8 +137,14 @@ object ShareReceiver {
 class ShareTargetActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val payload = ShareReceiver.parse(intent)
+        val appCtx = applicationContext
+        scope.launch(Dispatchers.IO) { ShareCache.cleanStale(appCtx) }
+        val payload = ShareReceiver.parse(intent) { ShareUriPolicy.isAllowed(this, it) }
         if (payload == null) { finish(); return }
+        if (payload.isEmpty) {
+            Toast.makeText(this, ShareUriPolicy.REJECTED_MESSAGE, Toast.LENGTH_LONG).show()
+            finish(); return
+        }
         val rt: io.github.zr987459.pigo.feature.files.FilesDeps? = FilesRuntime.current
         if (rt == null) {
             // App 还没装配好（冷启动直接从分享进来）：分享方给的读权限随本 Activity 结束而失效，
@@ -140,17 +179,19 @@ class ShareTargetActivity : Activity() {
         }
     }
 
+    /** 复制到 inbox（每个文件最多 [ShareCache.INBOX_MAX_BYTES]，超限的丢弃并计入 tooLarge）。 */
     private fun copyToInbox(ctx: Context, p: SharedPayload): SharedPayload {
-        val dir = java.io.File(ctx.cacheDir, FileShare.SHARE_DIR + "/inbox").apply { mkdirs() }
+        val dir = ShareCache.inboxDir(ctx).apply { mkdirs() }
+        var dropped = 0
         val uris = p.uris.mapNotNull { uri ->
             runCatching {
                 val name = FileShare.displayName(ctx, uri).first?.substringAfterLast('/')?.ifBlank { null } ?: "shared"
                 val f = java.io.File(dir, System.nanoTime().toString() + "-" + name)
-                ctx.contentResolver.openInputStream(uri)!!.use { inp -> f.outputStream().use { inp.copyTo(it) } }
-                FileShare.uriFor(ctx, f)
+                val ok = ctx.contentResolver.openInputStream(uri)!!.use { inp -> ShareCache.copyLimited(inp, f, ShareCache.INBOX_MAX_BYTES) }
+                if (!ok) { dropped++; null } else FileShare.uriFor(ctx, f)
             }.getOrNull()
         }
-        return p.copy(uris = uris)
+        return p.copy(uris = uris, tooLarge = p.tooLarge + dropped)
     }
 
     companion object {
