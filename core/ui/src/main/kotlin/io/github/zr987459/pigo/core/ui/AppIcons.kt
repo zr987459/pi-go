@@ -161,7 +161,7 @@ object DshGlyphs {
     val musicNote = Glyph('\ue096')
     val note = Glyph('\ue09f')
     val notePencil = Glyph('\ue03f')
-    val package = Glyph('\ue09d')
+    val `package` = Glyph('\ue09d')
     val palette = Glyph('\ue0ce')
     val paperPlaneRight = Glyph('\ue0e2')
     val path = Glyph('\ue0b0')
@@ -240,6 +240,8 @@ object DshGlyphs {
 
 /** 图标词汇（dsh-Go `AppIcons`）：按角色命名。 */
 object AppIcons {
+    /** 勾（选中、已发送、已复制）。pi-go 补充的角色。 */
+    val check get() = DshGlyphs.check
     val back get() = DshGlyphs.arrowLeft
     val forward get() = DshGlyphs.arrowRight
     val close get() = DshGlyphs.x
@@ -447,8 +449,8 @@ object AppIcons {
     val summary get() = DshGlyphs.textAlignLeft
     val code get() = DshGlyphs.code
     val diagram get() = DshGlyphs.graph
-    val artifacts get() = DshGlyphs.package
-    val shareBundle get() = DshGlyphs.package
+    val artifacts get() = DshGlyphs.`package`
+    val shareBundle get() = DshGlyphs.`package`
     val generating get() = DshGlyphs.sparkle
     val generateMedia get() = DshGlyphs.magicWand
     val generateImage get() = DshGlyphs.image
