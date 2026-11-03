@@ -19,7 +19,7 @@
 | `cycle_model` / `cycle_thinking_level` | `cycleModelResult()`（`{model, thinkingLevel, isScoped}` 直接解析）/ `cycleThinking()` | `cycleModel()` 由 `cycleModelResult()` 派生，不会切两次 |
 | `export_html{outputPath}` | `exportHtml(outputPath)` | 返回容器内路径 |
 | `summarization_retry_*` | 状态行 | |
-| `entry_appended` | `messageMeta` 增量 | |
+| `entry_appended` | 只作为「需要刷新 messageMeta」的信号（触发一次增量 `get_entries`） | pi 1.5.0 的 user / assistant / toolResult 在 `message_end` 时写盘，**不发** `entry_appended`；只有 custom / context_edit / compaction 等才发 |
 
 ## 时间线附加项（`EngineExtras.timelineExtras`）
 
@@ -34,14 +34,20 @@ W0 契约冻结 `Chat.kt`，不新增 `ChatItem` 子类。时间线本身与 mai
 
 ## messageMeta（S1、U1）
 
-`MessageMetaTracker`：`get_entries` 全量（打开、重建、分叉、压缩后）+ `entry_appended` 增量；从 leafId 沿 parentId 取**当前分支**；
-`toolResult` 按 `toolCallId` 对到 `tool-<id>`；user / assistant 各自**从尾部**配对（压缩后时间线头部对不齐）；
+`MessageMetaTracker` 的数据源只有 `get_entries`：打开 / 切换 / 分叉 / 重建 / 清空后**全量**；之后每次 `message_end`（或 `entry_appended`）按 `since=lastId` **增量**，
+`since` 找不到（`Entry not found`）时改全量。每份快照带 **covered**：发请求前登记的、已收到 `message_end`（已写盘）的时间线 key；
+请求期间又有 `message_end` 就丢弃快照重拉，会话被替换（epoch 变化）就丢弃迟到响应；`get_entries` 失败（超时、>32 MB）清空簿记并发布空表。
+从 leafId 沿 parentId 取**当前分支**（链断时只用叶子一侧）；`toolResult` 按 `toolCallId` 对到 `tool-<id>`；user / assistant 各自**从尾部**配对，只用 covered 里的气泡
+（压缩后时间线头部对不齐；未写盘的尾部气泡不会配到上一条）。
+失败助手消息由 tracker 对齐：被 `context_edit`（replacement=null）排除的条目、或 `stopReason=error` 的条目，与 `stopReason=error` 的气泡都不发 meta——
+两边都是失败一起跳过，只有一边是失败只跳那一边（自动重试成功、重试中停止、`abort_retry` 放弃重试、重建后失败消息已不在时间线，都不会让后面整体错位）。
+fork / clone 成功但随后 `get_messages` 失败时，时间线清空并重置簿记（与 openSession 失败一致），不再按旧 entryId 允许「从这里分叉」。
 乐观气泡、发送失败、扩展消费（handled）、流式中的助手消息不参与。不按文本匹配。
 
 ## 回合结果与通知（N1）
 
 `runOutcomes`：每次 `agent_settled` 发一条（COMPLETED / ERROR / ABORTED），阻塞式扩展对话框发 NEEDS_INPUT；文字经 Redactor 脱敏，预览 ≤200 字，带 `cwd`。
-`TaskNotifier` 订阅它：App 在后台（`ActivityVisibility`）且不是 ABORTED 时，经 `pigo-tasks` 通道发通知（同一会话复用通知 id），
+`TaskNotifier` 订阅它：App 在后台（`ForegroundDecider`：已启动的 Activity 计数 > 0 或进程重要性 == IMPORTANCE_FOREGROUND(100) 视为前台；迟注册也判对，只有前台服务时为 125 不算前台）且不是 ABORTED 时，经 `pigo-tasks` 通道发通知（同一会话复用通知 id），
 点通知以 `EXTRA_SESSION_FILE` / `EXTRA_CWD` 打开启动 Activity（W5 读取后 `openSession`）。
 
 ## 超时表（`RpcTimeouts.forCommand` / `EngineConfig.timeoutFor`）

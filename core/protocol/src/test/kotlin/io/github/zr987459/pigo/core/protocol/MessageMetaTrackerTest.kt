@@ -140,6 +140,64 @@ class MessageMetaTrackerTest {
         assertEquals("e3", m2.getValue("u-2").entryId)
     }
 
+    /**
+     * 审查第 2 轮 Important 1（真 pi 1.5.0 + 假 OpenAI 抓到的序列）：重试退避中停止 / 放弃重试。
+     * 失败消息 e4（有内容，时间线保留 a-3）被 context_edit 排除，retry 已为 null，其后没有助手消息。
+     * 旧实现把 a-3 配到 e2、a-1 配不到；现在 a-3 与 e4 一起跳过。
+     */
+    @Test
+    fun stopOrAbortDuringRetryDoesNotShiftAssistants() {
+        val t = MessageMetaTracker()
+        val failed = o("""{"type":"message","id":"e4","parentId":"e3","message":{"role":"assistant","provider":"fake","model":"m","content":[{"type":"text","text":"半截2"}],"stopReason":"error","errorMessage":"terminated","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"total":0}}}}""")
+        val edit = o("""{"type":"context_edit","id":"x1","parentId":"e4","targetId":"e4","replacement":null}""")
+        val base = listOf(user("e1", null, "a"), asst("e2", "e1", 5), user("e3", "e2", "b"), failed, edit)
+        t.reset(base, leafId = "x1", covered = setOf("u-0", "a-1", "u-2", "a-3"))
+        val items = listOf(
+            ChatItem.User("u-0", "a", Delivery.SENT), ChatItem.Assistant("a-1", emptyList(), false, "stop"),
+            ChatItem.User("u-2", "b", Delivery.SENT),
+            ChatItem.Assistant("a-3", listOf(ContentBlock.Text(0, "半截2")), false, "error", "terminated"),
+        )
+        val m = t.compute(items, retrying = false)
+        assertNull("失败气泡不配对", m["a-3"])
+        assertEquals("e2", m.getValue("a-1").entryId)
+        assertEquals(5L, m.getValue("a-1").usage!!.output)
+        assertEquals("e3", m.getValue("u-2").entryId)
+
+        // 再发一轮：仍对齐
+        t.merge(listOf(user("e6", "x1", "c"), asst("e7", "e6", 9)), leafId = "e7", covered = setOf("u-0", "a-1", "u-2", "a-3", "u-5", "a-6"))
+        val items2 = items + ChatItem.User("u-5", "c", Delivery.SENT) + ChatItem.Assistant("a-6", emptyList(), false, "stop")
+        val m2 = t.compute(items2)
+        assertEquals("e7", m2.getValue("a-6").entryId)
+        assertEquals("e2", m2.getValue("a-1").entryId)
+        assertNull(m2["a-3"])
+        assertEquals("e6", m2.getValue("u-5").entryId)
+
+        // 重建后（fromMessages 已不含被排除的失败消息）：只跳条目
+        val rebuilt = listOf(items[0], items[1], items[2], ChatItem.User("u-5", "c", Delivery.SENT), ChatItem.Assistant("a-6", emptyList(), false, "stop"))
+        t.reset(base + listOf(user("e6", "x1", "c"), asst("e7", "e6", 9)), leafId = "e7", covered = rebuilt.map { it.key }.toSet())
+        val m3 = t.compute(rebuilt)
+        assertEquals("e7", m3.getValue("a-6").entryId)
+        assertEquals("e2", m3.getValue("a-1").entryId)
+    }
+
+    /** 有失败条目但 context_edit 还没写盘（扩展 turn_end/agent_end 异步 await 的瞬时窗口）：失败条目与失败气泡都不配，也不错位。 */
+    @Test
+    fun failedEntryBeforeContextEditIsSkippedNotShifted() {
+        val t = MessageMetaTracker()
+        val failed = o("""{"type":"message","id":"e4","parentId":"e3","message":{"role":"assistant","provider":"fake","model":"m","content":[],"stopReason":"error","errorMessage":"overloaded"}}""")
+        t.reset(listOf(user("e1", null, "a"), asst("e2", "e1", 5), user("e3", "e2", "b"), failed), leafId = "e4", covered = setOf("u-0", "a-1", "u-2", "a-3"))
+        val withBubble = listOf(
+            ChatItem.User("u-0", "a", Delivery.SENT), ChatItem.Assistant("a-1", emptyList(), false, "stop"),
+            ChatItem.User("u-2", "b", Delivery.SENT), ChatItem.Assistant("a-3", emptyList(), false, "error", "overloaded"),
+        )
+        val m = t.compute(withBubble)
+        assertNull(m["a-3"])
+        assertEquals("e2", m.getValue("a-1").entryId)
+        // 空失败消息已被 onRetryStart 从时间线删掉：只跳条目
+        val m2 = t.compute(withBubble.take(3), retrying = true)
+        assertEquals("e2", m2.getValue("a-1").entryId)
+    }
+
     /** 链断（parentId 指向快照里没有的条目）时只用已知的叶子一侧，不整个清空。 */
     @Test
     fun brokenChainUsesKnownSuffix() {
