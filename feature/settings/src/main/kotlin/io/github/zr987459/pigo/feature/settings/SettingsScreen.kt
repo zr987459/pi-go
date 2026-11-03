@@ -1,17 +1,17 @@
 package io.github.zr987459.pigo.feature.settings
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -19,19 +19,15 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
@@ -47,6 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import io.github.zr987459.pigo.contract.EngineClient
 import io.github.zr987459.pigo.contract.ModelInfo
@@ -56,6 +53,21 @@ import io.github.zr987459.pigo.contract.ProviderConfigStore
 import io.github.zr987459.pigo.contract.ProviderPreset
 import io.github.zr987459.pigo.contract.RuntimeStatus
 import io.github.zr987459.pigo.contract.SecretStore
+import io.github.zr987459.pigo.core.ui.AppBackdrop
+import io.github.zr987459.pigo.core.ui.AppIcon
+import io.github.zr987459.pigo.core.ui.AppIcons
+import io.github.zr987459.pigo.core.ui.AppShape
+import io.github.zr987459.pigo.core.ui.DshTheme
+import io.github.zr987459.pigo.feature.settings.ui.DshFilled
+import io.github.zr987459.pigo.feature.settings.ui.DshOutlined
+import io.github.zr987459.pigo.feature.settings.ui.InfoRow
+import io.github.zr987459.pigo.feature.settings.ui.LargeTitle
+import io.github.zr987459.pigo.feature.settings.ui.NoticeCard
+import io.github.zr987459.pigo.feature.settings.ui.SettingsHues
+import io.github.zr987459.pigo.feature.settings.ui.SettingsSection
+import io.github.zr987459.pigo.feature.settings.ui.SettingsTile
+import io.github.zr987459.pigo.feature.settings.ui.dshFieldColors
+import io.github.zr987459.pigo.feature.settings.ui.groupTitleStyle
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOf
@@ -111,6 +123,8 @@ data class CustomEndpointPrefill(val baseUrl: String, val modelIds: List<String>
  * @param focus 打开时滚动到的区块（[SettingsFocus]）。
  * @param discoverModels 自定义端点「获取模型列表」：(id, baseUrl, rawKey) → 模型 id 列表；rawKey 为空表示用已保存的 Key。
  * @param testConnection 「测试连接」；为 null 时不显示按钮。
+ * @param onModelClick 「选择默认模型」入口；为 null 时用本页的默认模型对话框（现有行为）。
+ *   留给 features 工作流接完整的模型选择器。
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -125,6 +139,7 @@ fun SettingsScreen(
     focus: String? = null,
     discoverModels: (suspend (id: String, baseUrl: String, rawKey: String) -> Outcome<List<String>>)? = null,
     testConnection: (suspend (ConnectionTarget) -> ConnectionCheck)? = null,
+    onModelClick: (() -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
@@ -191,69 +206,82 @@ fun SettingsScreen(
         }
     }
 
-    Scaffold(
-        modifier = modifier.testTag("page:settings"),
-        topBar = { TopAppBar(title = { Text("设置") }) },
-        snackbarHost = { SnackbarHost(snackbar) },
-    ) { padding ->
-        LazyColumn(
-            Modifier.padding(padding).fillMaxSize().testTag("settings:list"),
-            state = listState,
-            contentPadding = PaddingValues(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            item(key = "sec-models") { Section("模型与 Key", Modifier.testTag("settings:sec-models")) }
-            item {
-                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)) {
-                    Text(
-                        "安全提示：pi 能读取容器内的文件和环境变量，请使用可随时作废的 Key，不要用主账号的 Key。" +
-                            "Key 只加密保存在本机，不会写进容器里的文件。",
-                        Modifier.padding(12.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-            }
-            PresetKind.entries.forEach { kind ->
-                item(key = "h-$kind") { Group(kindLabel(kind), kindHint(kind)) }
-                val rows = presets.filter { it.kind == kind } + if (kind == PresetKind.CUSTOM_OPENAI) {
-                    // 用户自己添加的端点各占一行，点开可修改（id 固定，地址与模型预填）。
-                    configured.filter { id -> presets.none { it.provider == id } }.map { id ->
-                        ProviderPreset(id, "自定义：$id", PresetKind.CUSTOM_OPENAI, KeyText.envVarFor(id), null, "")
-                    }
-                } else {
-                    emptyList()
-                }
-                items(rows, key = { "p-${it.provider}" }) { p ->
-                    val isOn = configured.contains(p.provider)
-                    PresetRow(
-                        preset = p,
-                        status = when {
-                            p.provider == CUSTOM_OTHER -> "添加新的 OpenAI 兼容服务"
-                            isOn -> "已配置 " + (masks[p.provider] ?: "")
-                            else -> "未配置"
-                        },
-                        onClick = { editing = p },
-                    )
-                }
-            }
-            item(key = "sec-default") { Section("默认模型", Modifier.testTag("settings:sec-default")) }
-            item {
-                Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    AppBackdrop(modifier.testTag("page:settings")) {
+        Scaffold(
+            containerColor = Color.Transparent,
+            snackbarHost = { SnackbarHost(snackbar) },
+        ) { padding ->
+            LazyColumn(
+                Modifier.padding(padding).fillMaxSize().testTag("settings:list"),
+                state = listState,
+                contentPadding = PaddingValues(top = 8.dp, bottom = 32.dp),
+            ) {
+                // 下标与 settingsItemIndex 一致：大标题(0) 模型与 Key(1) 三个服务商分组(2..4) 默认模型(5) 后台运行 运行环境
+                item(key = "title") { LargeTitle("设置") }
+                item(key = "sec-models") {
+                    Column(Modifier.padding(bottom = 24.dp)) {
                         Text(
-                            if (configured.isEmpty()) "先在上面填一个 Key，再选默认模型。" else "选一个模型作为新会话的默认模型。",
-                            style = MaterialTheme.typography.bodySmall,
+                            "模型与 Key",
+                            style = groupTitleStyle(),
+                            modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp).testTag("settings:sec-models"),
                         )
-                        OutlinedButton(onClick = { pickingDefault = true }, enabled = configured.isNotEmpty()) {
-                            Text("选择默认模型")
+                        NoticeCard(
+                            "使用可随时作废的 Key",
+                            "pi 能读取容器内的文件和环境变量，请使用可随时作废的 Key，不要用主账号的 Key。" +
+                                "Key 只加密保存在本机，不会写进容器里的文件。",
+                        )
+                    }
+                }
+                PresetKind.entries.forEach { kind ->
+                    val rows = presets.filter { it.kind == kind } + if (kind == PresetKind.CUSTOM_OPENAI) {
+                        // 用户自己添加的端点各占一行，点开可修改（id 固定，地址与模型预填）。
+                        configured.filter { id -> presets.none { it.provider == id } }.map { id ->
+                            ProviderPreset(id, "自定义：$id", PresetKind.CUSTOM_OPENAI, KeyText.envVarFor(id), null, "")
                         }
+                    } else {
+                        emptyList()
+                    }
+                    item(key = "g-$kind") {
+                        SettingsSection(kindLabel(kind), footer = kindHint(kind)) {
+                            rows.forEach { p ->
+                                val isOn = configured.contains(p.provider)
+                                PresetRow(
+                                    preset = p,
+                                    isOn = isOn,
+                                    status = when {
+                                        p.provider == CUSTOM_OTHER -> null
+                                        isOn -> masks[p.provider]?.takeIf { it.isNotBlank() } ?: "已配置"
+                                        else -> "未配置"
+                                    },
+                                    onClick = { editing = p },
+                                )
+                            }
+                        }
+                    }
+                }
+                item(key = "sec-default") {
+                    SettingsSection("默认模型", titleModifier = Modifier.testTag("settings:sec-default")) {
                         val current = currentModel
+                        SettingsTile(
+                            title = "选择默认模型",
+                            icon = AppIcons.model,
+                            tint = SettingsHues.AI,
+                            subtitle = if (configured.isEmpty()) "先在上面填一个 Key，再选默认模型" else "新会话默认使用的模型",
+                            value = current?.let { it.name ?: it.id },
+                            enabled = configured.isNotEmpty(),
+                            onTap = { (onModelClick ?: { pickingDefault = true })() },
+                            modifier = Modifier.testTag("settings:pickDefault"),
+                        )
                         val tester = testConnection
                         if (tester != null && current != null) {
-                            Text("当前模型：${current.name ?: current.id}（${current.provider}）", style = MaterialTheme.typography.bodySmall)
-                            OutlinedButton(
+                            SettingsTile(
+                                title = if (testingCurrent) "正在测试…" else "测试连接",
+                                icon = AppIcons.testConnection,
+                                tint = SettingsHues.AI,
+                                subtitle = "${current.name ?: current.id}（${current.provider}）",
                                 enabled = !testingCurrent,
-                                onClick = {
+                                chevron = false,
+                                onTap = {
                                     testingCurrent = true
                                     currentCheck = null
                                     scope.launch {
@@ -265,35 +293,49 @@ fun SettingsScreen(
                                     }
                                 },
                                 modifier = Modifier.testTag("settings:testCurrent"),
-                            ) { Text(if (testingCurrent) "正在测试…" else "测试连接") }
-                            currentCheck?.let { CheckText(it) }
+                            )
+                            currentCheck?.let { CheckText(it, Modifier.padding(start = 60.dp, end = 16.dp, bottom = 10.dp)) }
                         }
                     }
                 }
-            }
-            item { Section("后台运行") }
-            item {
-                Card(Modifier.fillMaxWidth().clickable { showGuide = true }) {
-                    Column(Modifier.padding(12.dp)) {
-                        Text("让 pi 在后台也能继续运行", style = MaterialTheme.typography.titleSmall)
-                        Text("电池优化、自启动设置，以及 Android 12+ 子进程限制说明", style = MaterialTheme.typography.bodySmall)
+                item(key = "sec-background") {
+                    SettingsSection("后台运行") {
+                        SettingsTile(
+                            title = "让 pi 在后台也能继续运行",
+                            icon = AppIcons.keepAlive,
+                            tint = SettingsHues.GENERAL,
+                            subtitle = "电池优化、自启动设置，以及 Android 12+ 子进程限制说明",
+                            onTap = { showGuide = true },
+                            modifier = Modifier.testTag("settings:openBackground"),
+                        )
                     }
                 }
-            }
-            item { Section("运行环境与关于") }
-            item {
-                Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        val st = runtimeStatus
+                item(key = "sec-runtime") {
+                    val st = runtimeStatus
+                    SettingsSection("运行环境与关于", footer = "pi-go 以 Apache-2.0 许可证开源。界面参照 dsh-Go。") {
                         if (st == null) {
-                            Text("运行环境信息暂不可用", style = MaterialTheme.typography.bodySmall)
+                            InfoRow("运行环境", "信息暂不可用")
                         } else {
-                            Text("状态：${phaseLabel(st.phase.name)}", style = MaterialTheme.typography.bodySmall)
-                            Text("Ubuntu ${st.ubuntu ?: "-"} · Node ${st.node ?: "-"} · pi ${st.pi ?: "-"}", style = MaterialTheme.typography.bodySmall)
-                            st.error?.let { Text("问题：$it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+                            InfoRow(
+                                "状态",
+                                phaseLabel(st.phase.name),
+                                valueColor = if (st.phase.name == "BROKEN") MaterialTheme.colorScheme.error else null,
+                            )
+                            InfoRow("Ubuntu", st.ubuntu ?: "-")
+                            InfoRow("Node.js", st.node ?: "-")
+                            InfoRow("pi", st.pi ?: "-")
+                            st.error?.let {
+                                Text(
+                                    "问题：$it",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                                )
+                            }
                         }
-                        onRepairRuntime?.let { OutlinedButton(onClick = it) { Text("修复运行环境") } }
-                        Text("pi-go 以 Apache-2.0 许可证开源。", style = MaterialTheme.typography.labelSmall)
+                        onRepairRuntime?.let {
+                            SettingsTile(title = "修复运行环境", icon = AppIcons.tool, tint = SettingsHues.HELP, onTap = it)
+                        }
                     }
                 }
             }
@@ -359,12 +401,7 @@ fun SettingsScreen(
     }
 
     if (showGuide) {
-        AlertDialog(
-            onDismissRequest = { showGuide = false },
-            title = { Text("后台运行") },
-            text = { BackgroundGuideContent(Modifier.verticalScroll(rememberScrollState())) },
-            confirmButton = { TextButton(onClick = { showGuide = false }) { Text("关闭") } },
-        )
+        BackgroundGuidePage(onClose = { showGuide = false })
     }
 }
 
@@ -391,54 +428,49 @@ private fun phaseLabel(p: String) = when (p) {
 }
 
 @Composable
-private fun Section(title: String, modifier: Modifier = Modifier) {
-    Text(title, style = MaterialTheme.typography.titleMedium, modifier = modifier.padding(top = 8.dp))
-}
-
-@Composable
-private fun CheckText(c: ConnectionCheck) {
-    Text(
-        (if (c.ok) "✓ " else "✗ ") + c.message,
-        style = MaterialTheme.typography.bodySmall,
-        color = if (c.ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-        modifier = Modifier.testTag(if (c.ok) "settings:checkOk" else "settings:checkFail"),
-    )
+private fun CheckText(c: ConnectionCheck, modifier: Modifier = Modifier) {
+    Row(modifier.testTag(if (c.ok) "settings:checkOk" else "settings:checkFail"), verticalAlignment = Alignment.CenterVertically) {
+        AppIcon(
+            if (c.ok) AppIcons.success else AppIcons.error,
+            null,
+            size = 16.dp,
+            tint = if (c.ok) DshTheme.colors.success else MaterialTheme.colorScheme.error,
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            c.message,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (c.ok) DshTheme.colors.success else MaterialTheme.colorScheme.error,
+        )
+    }
 }
 
 /**
  * [SettingsScreen] 里 LazyColumn 各区块的下标，与上面 item 的顺序一致：
- * 「模型与 Key」标题、安全提示，然后每组（标题 + 行），再是「默认模型」标题。
+ * 大标题(0)、「模型与 Key」(1)、每种服务商一个分组卡、「默认模型」。
+ * 分组卡把一组的服务商放在同一个 item 里，所以下标不再随服务商数量变化。
  */
-internal fun settingsItemIndex(key: String, presets: List<ProviderPreset>, configured: List<String>): Int {
-    if (key == "sec-models") return 0
-    var i = 2
-    PresetKind.entries.forEach { kind ->
-        i += 1 + presets.count { it.kind == kind }
-        if (kind == PresetKind.CUSTOM_OPENAI) i += configured.count { id -> presets.none { it.provider == id } }
-    }
-    return if (key == "sec-default") i else -1
+@Suppress("UNUSED_PARAMETER")
+internal fun settingsItemIndex(key: String, presets: List<ProviderPreset>, configured: List<String>): Int = when (key) {
+    "sec-models" -> 1
+    "sec-default" -> 2 + PresetKind.entries.size
+    else -> -1
 }
 
+/** 服务商行：apiKey 图标（已配置时用主色调）+ 名称 + 说明，右侧 Key 末 4 位 /「未配置」+ chevron。 */
 @Composable
-private fun Group(title: String, hint: String) {
-    Column(Modifier.padding(top = 4.dp)) {
-        Text(title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
-        Text(hint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
-@Composable
-private fun PresetRow(preset: ProviderPreset, status: String, onClick: () -> Unit) {
-    Card(Modifier.fillMaxWidth().clickable(onClick = onClick).testTag("preset:${preset.provider}")) {
-        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(preset.label, style = MaterialTheme.typography.bodyLarge)
-                if (preset.note.isNotBlank()) Text(preset.note, style = MaterialTheme.typography.bodySmall)
-                Text(status, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Text(if (status.startsWith("已")) "修改" else "填写", color = MaterialTheme.colorScheme.primary)
-        }
-    }
+private fun PresetRow(preset: ProviderPreset, isOn: Boolean, status: String?, onClick: () -> Unit) {
+    val add = preset.provider == CUSTOM_OTHER
+    SettingsTile(
+        title = preset.label,
+        icon = if (add) AppIcons.add else if (isOn) AppIcons.apiKey else AppIcons.noApiKey,
+        tint = if (add) SettingsHues.GENERAL else if (isOn) SettingsHues.AI else SettingsHues.HOSTS,
+        subtitle = if (add) "添加新的 OpenAI 兼容服务" else preset.note.takeIf { it.isNotBlank() },
+        value = status,
+        valueColor = if (!isOn && !add) DshTheme.colors.warning else null,
+        onTap = onClick,
+        modifier = Modifier.testTag("preset:${preset.provider}"),
+    )
 }
 
 /** 内置 Provider 的 Key 输入框。[onSave] 返回错误文案，null 表示成功。 */
@@ -471,11 +503,13 @@ private fun KeyDialog(
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false),
+                    shape = AppShape.Md,
+                    colors = dshFieldColors(),
                     modifier = Modifier.fillMaxWidth().testTag("settings:keyField"),
                 )
                 KeyText.preview(key)?.let { Text("将保存为 $it", style = MaterialTheme.typography.bodySmall) }
                 if (testConnection != null) {
-                    OutlinedButton(
+                    DshOutlined(
                         enabled = !testing && !saving && (KeyText.clean(key).isNotEmpty() || alreadySet),
                         onClick = {
                             testing = true
@@ -494,7 +528,7 @@ private fun KeyDialog(
             }
         },
         confirmButton = {
-            TextButton(
+            DshFilled(
                 enabled = !saving && KeyText.clean(key).isNotEmpty(),
                 onClick = {
                     saving = true
@@ -589,12 +623,16 @@ private fun CustomDialog(
                     label = { Text("名称（英文 id）") }, placeholder = { Text("例如 bailian") }, singleLine = true,
                     enabled = preset.provider == CUSTOM_OTHER,
                     supportingText = { Text("Key 会以环境变量 ${KeyText.envVarFor(id)} 交给 pi") },
+                    shape = AppShape.Md,
+                    colors = dshFieldColors(),
                     modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
                     value = url, onValueChange = { url = it; error = null },
                     label = { Text("接口地址（baseUrl）") }, singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, autoCorrectEnabled = false),
+                    shape = AppShape.Md,
+                    colors = dshFieldColors(),
                     modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
@@ -602,11 +640,13 @@ private fun CustomDialog(
                     label = { Text(if (existing) "API Key（留空 = 保持原来的 Key）" else "API Key") }, singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false),
+                    shape = AppShape.Md,
+                    colors = dshFieldColors(),
                     modifier = Modifier.fillMaxWidth(),
                 )
                 KeyText.preview(key)?.let { Text("将保存为 $it", style = MaterialTheme.typography.bodySmall) }
                 if (discoverModels != null) {
-                    OutlinedButton(
+                    DshOutlined(
                         enabled = !discovering && url.isNotBlank() && keyReady,
                         onClick = { scope.launch { discover() } },
                         modifier = Modifier.testTag("settings:discover"),
@@ -636,10 +676,12 @@ private fun CustomDialog(
                     value = models, onValueChange = { models = it; error = null },
                     label = { Text("模型 id（多个用逗号或换行分开）") },
                     placeholder = { Text(preset.note) },
+                    shape = AppShape.Md,
+                    colors = dshFieldColors(),
                     modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp),
                 )
                 if (testConnection != null) {
-                    OutlinedButton(
+                    DshOutlined(
                         enabled = !testing && !saving && url.isNotBlank() && keyReady && KeyText.splitModels(models).isNotEmpty(),
                         onClick = {
                             testing = true
@@ -658,7 +700,7 @@ private fun CustomDialog(
             }
         },
         confirmButton = {
-            TextButton(enabled = !saving, onClick = {
+            DshFilled(enabled = !saving, onClick = {
                 saving = true
                 scope.launch {
                     error = onSave(id, url, key, KeyText.splitModels(models))
@@ -719,6 +761,8 @@ private fun DefaultModelDialog(
                     OutlinedTextField(
                         value = model, onValueChange = { model = it; error = null },
                         label = { Text("模型 id") }, placeholder = { Text("例如 deepseek-chat") }, singleLine = true,
+                        shape = AppShape.Md,
+                        colors = dshFieldColors(),
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
@@ -732,7 +776,7 @@ private fun DefaultModelDialog(
             }
         },
         confirmButton = {
-            TextButton(enabled = !saving && provider.isNotBlank() && model.isNotBlank(), onClick = {
+            DshFilled(enabled = !saving && provider.isNotBlank() && model.isNotBlank(), onClick = {
                 saving = true
                 scope.launch {
                     error = onSave(provider, model.trim(), thinking)
