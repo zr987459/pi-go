@@ -247,6 +247,16 @@ class PiEngine(
     private val metaTracker = MessageMetaTracker()
     private var metaSignature: List<Any?> = emptyList()
 
+    /** 以下三项只在归约协程里读写。[metaEpoch]：会话 / 时间线被替换时递增，旧的 get_entries 响应作废。 */
+    private var metaEpoch = 0L
+    /** 每次 message_end（user/assistant/toolResult）或 entry_appended 递增：请求期间变过就丢弃那份快照。 */
+    private var metaEndSeq = 0L
+    /** 已收到 message_end（已写盘）的用户气泡 key（助手消息以 streaming=false 判断）。 */
+    private val endedUsers = HashSet<String>()
+
+    /** get_entries 刷新请求（合并）：由单个协程串行处理，响应不会乱序覆盖。 */
+    private val entriesSignal = Channel<Unit>(Channel.CONFLATED)
+
     /** `bash_execution_update` 的增量，按命令 id 分发给正在收集的 [bash] 流。 */
     private val bashDeltas = MutableSharedFlow<Pair<String?, String>>(extraBufferCapacity = 1024)
 
@@ -259,6 +269,17 @@ class PiEngine(
     init {
         scope.launch(compute) { actorLoop() }
         scope.launch(compute) { for ((c, req) in uiQueue) deliverUi(c, req) }
+        scope.launch(io) {
+            for (x in entriesSignal) {
+                try {
+                    refreshEntriesOnce()
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    log.w(TAG, "刷新 entries 异常", e)
+                }
+            }
+        }
     }
 
     // =================================================================== 归约协程
@@ -296,12 +317,14 @@ class PiEngine(
                 if (input.gen != conn?.gen) return state // 旧进程的残留事件
                 val event = input.record as? EngineEvent ?: return state
                 when (event) {
-                    is EngineEvents.EntryAppended -> event.entry?.let { metaTracker.append(it) }
+                    // 1.5.0 只为 custom / context_edit / compaction 等发 entry_appended；普通消息不发。一律改为增量拉 get_entries。
+                    is EngineEvents.EntryAppended -> { metaEndSeq++; requestEntries() }
                     is EngineEvents.BashExecutionUpdate -> bashDeltas.tryEmit(event.id to event.delta)
                     else -> Unit
                 }
                 try {
                     reducer.reduce(state, event, clock()).also { next ->
+                        if (event is EngineEvent.MessageEnd) onMessageEnded(event, next)
                         if (event is EngineEvent.AgentSettled) {
                             _runOutcomes.tryEmit(RunResults.onSettled(next, event.aborted, clock(), currentCwd, redactor::redact))
                         }
@@ -319,6 +342,40 @@ class PiEngine(
         return next
     }
 
+    /** message_end：pi 在发出这条事件后同步写盘（agent-session.js:766-781），之后的 get_entries 一定包含它。 */
+    private fun onMessageEnded(event: EngineEvent.MessageEnd, next: ChatState) {
+        val role = event.message["role"]?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
+        if (role != "user" && role != "assistant" && role != "toolResult") return
+        if (role == "user") {
+            next.items.lastOrNull { it is ChatItem.User && it.delivery == Delivery.SENT && it.key !in endedUsers }?.let { endedUsers += it.key }
+        }
+        metaEndSeq++
+        requestEntries()
+    }
+
+    /** 时间线被整体替换（打开 / 切换 / 分叉 / 重建 / 清空）后：作废旧簿记，新时间线里的已确认气泡都视为已写盘，再全量拉一次。 */
+    private fun resetMeta(state: ChatState) {
+        metaTracker.clear()
+        metaEpoch++
+        metaEndSeq++
+        endedUsers.clear()
+        val unpersisted = reducer.unpersistedKeys
+        state.items.forEach { if (it is ChatItem.User && it.delivery == Delivery.SENT && it.key !in unpersisted) endedUsers += it.key }
+        requestEntries()
+    }
+
+    private fun coveredKeys(state: ChatState): Set<String> = state.items.mapNotNullTo(HashSet()) {
+        when (it) {
+            is ChatItem.User -> it.key.takeIf { k -> k in endedUsers }
+            is ChatItem.Assistant -> it.key.takeIf { _ -> !it.streaming }
+            else -> null
+        }
+    }
+
+    private fun requestEntries() {
+        entriesSignal.trySend(Unit)
+    }
+
     private fun onRunStarted() {
         runMarker.set(sessionFile)
     }
@@ -329,8 +386,8 @@ class PiEngine(
         scope.launch(io) {
             refreshState()
             stats()
-            // messageMeta：entry_appended 是增量；轮末再全量对一次，防止漏事件或分支切换后错位。
-            refreshEntries()
+            // messageMeta：轮末再增量对一次（防漏事件）。
+            requestEntries()
         }
     }
 
@@ -342,19 +399,16 @@ class PiEngine(
         val last = state.items.lastOrNull()
         val sig = listOf(
             metaTracker.version, state.items.size, state.items.firstOrNull()?.key, last?.key, (last as? ChatItem.Assistant)?.streaming,
-            unpersisted.size, state.items.count { it is ChatItem.User && it.delivery == Delivery.SENT },
+            unpersisted.size, state.items.count { it is ChatItem.User && it.delivery == Delivery.SENT }, state.retry != null,
         )
         if (sig != metaSignature) {
             metaSignature = sig
-            val m = metaTracker.compute(state.items, unpersisted)
+            val m = metaTracker.compute(state.items, unpersisted, retrying = state.retry != null)
             if (m != _meta.value) _meta.value = m
         }
     }
 
-    private fun clearedAll(state: ChatState): ChatState {
-        metaTracker.clear()
-        return reducer.cleared(state)
-    }
+    private fun clearedAll(state: ChatState): ChatState = reducer.cleared(state).also { resetMeta(it) }
 
     private fun afterPublish(state: ChatState) {
         val c = conn
@@ -507,7 +561,7 @@ class PiEngine(
         mutate { reducer.applyPiState(it, st) }
         if (rebuild) rebuildFromMessages(c, carry = snapshotPendingCarry(), live = st.isStreaming)
         else mutate {
-            metaTracker.clear()
+            resetMeta(it)
             it
         }
         commandCache = null
@@ -584,9 +638,9 @@ class PiEngine(
         val r = c.channel.request(RpcCommand.GetMessages(ids.next()), config.getMessagesTimeoutMs)
         return if (r is Outcome.Ok) {
             val messages = Responses.messages(r.value.data)
-            mutate { reducer.fromMessages(messages, base = it, carry = carry, live = live) }
+            // 同一次归约里先作废旧会话的簿记，再换时间线：不会有一帧用旧 entry 配新时间线。
+            mutate { reducer.fromMessages(messages, base = it, carry = carry, live = live).also { s -> resetMeta(s) } }
             prunePendingCarry(carry, _chat.value.items)
-            scope.launch(io) { refreshEntries() }
             Outcome.Ok(Unit)
         } else {
             val err = r as Outcome.Err
@@ -965,8 +1019,7 @@ class PiEngine(
         if (m is Outcome.Ok) {
             val messages = Responses.messages(m.value.data)
             // fromMessages 会清掉旧会话的队列与上下文占用；占用随后由 stats() 重新取。
-            mutate { reducer.fromMessages(messages, base = it.copy(sessionName = null, statusLine = null, running = false), live = liveRunning) }
-            scope.launch(io) { refreshEntries() }
+            mutate { reducer.fromMessages(messages, base = it.copy(sessionName = null, statusLine = null, running = false), live = liveRunning).also { s -> resetMeta(s) } }
         } else {
             mutate { reducer.addNotice(clearedAll(it), NoticeKind.ERROR, HISTORY_FAILED) }
         }
@@ -1067,19 +1120,46 @@ class PiEngine(
         scope.launch(io) { stats() }
     }
 
-    /** `get_entries` 全量 → messageMeta 的配对簿记（打开、重建、分叉后）。失败只记日志：此时界面应禁用「从这里分叉」。 */
-    private suspend fun refreshEntries() {
+    /**
+     * 拉一次 get_entries（有快照时增量 `since=lastId`，否则全量）→ messageMeta 簿记。只在 [entriesSignal] 的协程里串行调用。
+     * - 发请求前在归约协程里登记 epoch、message_end 序号与已写盘的 key；响应回来时 epoch 变了（换了会话）就丢弃，
+     *   序号变了（请求期间又写了消息）也丢弃并重拉，保证快照与 covered 一致。
+     * - 失败（超时、>32 MB 等）：清空簿记并发布空表，界面按契约禁用「从这里分叉」；增量的 since 找不到时改全量。
+     */
+    private suspend fun refreshEntriesOnce() {
         val c = conn ?: return
         if (!c.ready) return
-        when (val r = c.channel.request(RpcCommands.GetEntries(ids.next()), config.timeoutFor("get_entries"))) {
+        var epoch = 0L
+        var seq = 0L
+        var since: String? = null
+        var covered: Set<String> = emptySet()
+        mutate {
+            epoch = metaEpoch; seq = metaEndSeq; since = metaTracker.lastId; covered = coveredKeys(it)
+            it
+        }
+        when (val r = c.channel.request(RpcCommands.GetEntries(ids.next(), since), config.timeoutFor("get_entries"))) {
             is Outcome.Ok -> {
                 val page = ExtraResponses.entries(r.value.data)
                 mutate {
-                    metaTracker.reset(page.entries.map { e -> e.raw }, page.leafId)
+                    if (epoch == metaEpoch) {
+                        if (seq != metaEndSeq) requestEntries()
+                        else if (since == null) metaTracker.reset(page.entries.map { e -> e.raw }, page.leafId, covered)
+                        else metaTracker.merge(page.entries.map { e -> e.raw }, page.leafId, covered)
+                    }
                     it
                 }
             }
-            is Outcome.Err -> log.w(TAG, "get_entries 失败：${r.message}")
+            is Outcome.Err -> {
+                log.w(TAG, "get_entries 失败：${r.message}")
+                val retryFull = since != null && r.message.contains("not found", ignoreCase = true)
+                mutate {
+                    if (epoch == metaEpoch) {
+                        metaTracker.clear()
+                        if (retryFull) requestEntries()
+                    }
+                    it
+                }
+            }
         }
     }
 
@@ -1151,10 +1231,8 @@ class PiEngine(
             ?: return Outcome.Err(ErrCode.RPC_REJECTED, "压缩没有返回结果")
         // 事件（compaction_start/end）已归约出压缩卡时，这里只补全；事件丢了就补一张（幂等）。
         mutate { reducer.applyCompaction(it, rec, manual = true) }
-        scope.launch(io) {
-            stats()
-            refreshEntries()
-        }
+        requestEntries()
+        scope.launch(io) { stats() }
         return Outcome.Ok(ContractMapping.compact(rec))
     }
 

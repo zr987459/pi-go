@@ -40,6 +40,7 @@ class MessageMetaTrackerTest {
                 user("e7", "m1", "第二句"), asst("e8", "e7", 9),
             ),
             leafId = "e8",
+            covered = setOf("u-0", "a-1", "a-2", "u-3", "a-4"),
         )
         val items = listOf(
             ChatItem.User("u-0", "第一句", Delivery.SENT),
@@ -68,23 +69,84 @@ class MessageMetaTrackerTest {
     }
 
     @Test
-    fun compactedTimelineAlignsAtTheTailAndAppendsIncrementally() {
+    fun compactedTimelineAlignsAtTheTailAndMergesIncrementally() {
         val t = MessageMetaTracker()
-        t.reset(listOf(user("e1", null, "a"), asst("e2", "e1", 1), user("e3", "e2", "b"), asst("e4", "e3", 2)), leafId = "e4")
+        t.reset(listOf(user("e1", null, "a"), asst("e2", "e1", 1), user("e3", "e2", "b"), asst("e4", "e3", 2)), leafId = "e4", covered = setOf("u-0", "a-1"))
         // 压缩后时间线只剩最后一轮
         val items = mutableListOf<ChatItem>(ChatItem.User("u-0", "b", Delivery.SENT), ChatItem.Assistant("a-1", emptyList(), false, "stop"))
         assertEquals(mapOf("u-0" to "e3", "a-1" to "e4"), t.compute(items).mapValues { it.value.entryId })
-        // 新一轮：entry_appended 增量
+        assertEquals("e4", t.lastId)
+        // 新一轮：get_entries(since=e4) 增量
         val v = t.version
         items += ChatItem.User("u-2", "c", Delivery.SENT)
-        t.append(user("e5", "e4", "c"))
+        t.merge(listOf(user("e5", "e4", "c")), leafId = "e5", covered = setOf("u-0", "a-1", "u-2"))
         items += ChatItem.Assistant("a-3", emptyList(), streaming = true)
         assertTrue(t.version > v)
         val m = t.compute(items)
         assertEquals("e5", m.getValue("u-2").entryId)
         assertNull("流式中的助手消息还没写入", m["a-3"])
-        t.append(asst("e6", "e5", 3))
+        t.merge(listOf(asst("e6", "e5", 3)), leafId = "e6", covered = setOf("u-0", "a-1", "u-2", "a-3"))
         items[3] = ChatItem.Assistant("a-3", emptyList(), streaming = false, stopReason = "stop")
         assertEquals("e6", t.compute(items).getValue("a-3").entryId)
+    }
+
+    /** 审查第 1 轮①：新用户气泡已 SENT 但还没写盘（不在 covered）时不参与配对，绝不配到上一条的 entryId。 */
+    @Test
+    fun unpersistedTailBubbleIsNotPairedWithPreviousEntry() {
+        val t = MessageMetaTracker()
+        t.reset(listOf(user("e1", null, "a"), asst("e2", "e1", 1)), leafId = "e2", covered = setOf("u-0", "a-1"))
+        val items = listOf(
+            ChatItem.User("u-0", "a", Delivery.SENT), ChatItem.Assistant("a-1", emptyList(), false, "stop"),
+            ChatItem.User("u-2", "b", Delivery.SENT), // pi 已确认，但 get_entries 快照里还没有
+        )
+        val m = t.compute(items)
+        assertEquals("e1", m.getValue("u-0").entryId)
+        assertNull("尾部未写盘的气泡不能配到 e1", m["u-2"])
+        assertEquals("e2", m.getValue("a-1").entryId)
+    }
+
+    /** 审查第 1 轮②③：轮中 context_edit 把失败的助手消息从投影排除（自动重试），之前助手消息的 usage 不错位。 */
+    @Test
+    fun contextEditOmitsRetriedFailureAndKeepsEarlierAssistantsAligned() {
+        val t = MessageMetaTracker()
+        val failed = o("""{"type":"message","id":"e4","parentId":"e3","message":{"role":"assistant","provider":"deepseek","model":"deepseek-chat","content":[{"type":"text","text":"半截"}],"stopReason":"error","errorMessage":"overloaded","usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0,"totalTokens":2,"cost":{"total":0}}}}""")
+        val edit = o("""{"type":"context_edit","id":"x1","parentId":"e4","targetId":"e4","replacement":null}""")
+        t.reset(
+            listOf(user("e1", null, "a"), asst("e2", "e1", 5), user("e3", "e2", "b"), failed, edit, asst("e5", "x1", 8)),
+            leafId = "e5", covered = setOf("u-0", "a-1", "u-2", "a-3", "a-4"),
+        )
+        // 时间线保留了有内容的失败消息 a-3，随后是重试结果 a-4
+        val items = listOf(
+            ChatItem.User("u-0", "a", Delivery.SENT), ChatItem.Assistant("a-1", emptyList(), false, "stop"),
+            ChatItem.User("u-2", "b", Delivery.SENT),
+            ChatItem.Assistant("a-3", listOf(ContentBlock.Text(0, "半截")), false, "error", "overloaded"),
+            ChatItem.Assistant("a-4", emptyList(), false, "stop"),
+        )
+        val m = t.compute(items)
+        assertEquals("e5", m.getValue("a-4").entryId)
+        assertEquals(8L, m.getValue("a-4").usage!!.output)
+        assertEquals("e2", m.getValue("a-1").entryId)
+        assertEquals(5L, m.getValue("a-1").usage!!.output)
+        assertNull("已重试的失败消息不配对", m["a-3"])
+        assertEquals("e3", m.getValue("u-2").entryId)
+        // 重试中（横幅还在，重试结果未到）：最后一条失败消息同样不配对
+        t.reset(
+            listOf(user("e1", null, "a"), asst("e2", "e1", 5), user("e3", "e2", "b"), failed, edit),
+            leafId = "x1", covered = setOf("u-0", "a-1", "u-2", "a-3"),
+        )
+        val m2 = t.compute(items.take(4), retrying = true)
+        assertNull(m2["a-3"])
+        assertEquals("e2", m2.getValue("a-1").entryId)
+        assertEquals("e3", m2.getValue("u-2").entryId)
+    }
+
+    /** 链断（parentId 指向快照里没有的条目）时只用已知的叶子一侧，不整个清空。 */
+    @Test
+    fun brokenChainUsesKnownSuffix() {
+        val t = MessageMetaTracker()
+        t.reset(listOf(user("e3", "missing", "b"), asst("e4", "e3", 2)), leafId = "e4", covered = setOf("u-0", "a-1"))
+        val m = t.compute(listOf(ChatItem.User("u-0", "b", Delivery.SENT), ChatItem.Assistant("a-1", emptyList(), false, "stop")))
+        assertEquals("e3", m.getValue("u-0").entryId)
+        assertEquals("e4", m.getValue("a-1").entryId)
     }
 }

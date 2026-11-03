@@ -200,28 +200,53 @@ class PiEngineExtrasTest {
         e.close()
     }
 
+    /**
+     * 按 pi 1.5.0 的真实序列：普通消息在 message_end 后写盘、**不发 entry_appended**；自动重试时失败的助手消息留在原始历史，
+     * 由 context_edit（replacement=null，发 entry_appended）从投影排除。get_entries 只返回已写盘的条目，支持 since。
+     */
     @Test
-    fun messageMetaFromEntriesAndEntryAppended() = runBlocking {
-        // 轮末引擎会再全量 get_entries 一次：脚本返回的全量要包含本轮追加的条目。
-        val e3 = """{"type":"message","id":"e3","parentId":"e2","message":{"role":"user","content":"第二句"}}"""
-        val e4 = """{"type":"message","id":"e4","parentId":"e3","message":{"role":"assistant","provider":"p","model":"m","content":[],"usage":{"output":7,"cost":{"total":0.25}}}}"""
-        val appended = java.util.concurrent.atomic.AtomicBoolean(false)
+    fun messageMetaFollowsReal150SequenceWithAutoRetry() = runBlocking {
+        val persisted = java.util.Collections.synchronizedList(mutableListOf(
+            """{"type":"message","id":"e1","parentId":null,"message":{"role":"user","content":"第一句"}}""",
+            """{"type":"message","id":"e2","parentId":"e1","message":{"role":"assistant","provider":"deepseek","model":"deepseek-chat","content":[],"usage":{"input":1,"output":2,"totalTokens":3,"cost":{"total":0.5}}}}""",
+        ))
+        val ids = listOf("e1", "e2", "e3", "e4", "x1", "e5")
+        fun entriesJson(since: String?): String = synchronized(persisted) {
+            val all = persisted.toList()
+            val from = if (since == null) 0 else ids.indexOf(since) + 1
+            """{"entries":[${all.drop(from).joinToString(",")}],"leafId":"${ids[all.size - 1]}"}"""
+        }
+        val failed = """{"role":"assistant","provider":"deepseek","model":"deepseek-chat","content":[{"type":"text","text":"半截"}],"stopReason":"error","errorMessage":"overloaded","usage":{"input":3,"output":1,"totalTokens":4,"cost":{"total":0.01}}}"""
+        val good = """{"role":"assistant","provider":"deepseek","model":"deepseek-chat","content":[{"type":"text","text":"答二"}],"stopReason":"stop","usage":{"input":3,"output":8,"totalTokens":11,"cost":{"total":0.25}}}"""
         val rt = ScriptedRuntime {
             { cmd ->
-                if (cmd.str("type") == "get_entries" && appended.get()) {
-                    ok(cmd, entries.replace("],\"leafId\":\"e2\"", ",$e3,$e4],\"leafId\":\"e4\""))
-                } else if (cmd.str("type") == "prompt") {
-                    appended.set(true)
-                    ok(cmd, """{"disposition":"started"}""")
-                    emit("""{"type":"agent_start"}""")
-                    emit("""{"type":"message_start","message":{"role":"user","content":"第二句"}}""")
-                    emit("""{"type":"entry_appended","entry":{"type":"message","id":"e3","parentId":"e2","message":{"role":"user","content":"第二句"}}}""")
-                    emit("""{"type":"message_start","message":{"role":"assistant","content":[]}}""")
-                    emit("""{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"答二"}],"stopReason":"stop"}}""")
-                    emit("""{"type":"entry_appended","entry":{"type":"message","id":"e4","parentId":"e3","message":{"role":"assistant","provider":"p","model":"m","content":[],"usage":{"output":7,"cost":{"total":0.25}}}}}""")
-                    later(30) { emit("""{"type":"agent_settled","aborted":false}""") }
-                } else {
-                    basics(cmd)
+                when (cmd.str("type")) {
+                    "get_entries" -> ok(cmd, entriesJson(cmd.str("since")))
+                    "prompt" -> {
+                        ok(cmd, """{"disposition":"started"}""")
+                        emit("""{"type":"agent_start"}""")
+                        emit("""{"type":"message_start","message":{"role":"user","content":"第二句"}}""")
+                        emit("""{"type":"message_end","message":{"role":"user","content":"第二句"}}""")
+                        persisted += """{"type":"message","id":"e3","parentId":"e2","message":{"role":"user","content":"第二句"}}"""
+                        later(60) {
+                            emit("""{"type":"message_start","message":{"role":"assistant","content":[]}}""")
+                            emit("""{"type":"message_end","message":$failed}""")
+                            persisted += """{"type":"message","id":"e4","parentId":"e3","message":$failed}"""
+                            emit("""{"type":"auto_retry_start","attempt":1,"maxAttempts":3,"delayMs":50,"errorMessage":"overloaded"}""")
+                            val edit = """{"type":"context_edit","id":"x1","parentId":"e4","targetId":"e4","replacement":null}"""
+                            persisted += edit
+                            emit("""{"type":"entry_appended","entry":$edit}""")
+                            later(80) {
+                                emit("""{"type":"message_start","message":{"role":"assistant","content":[]}}""")
+                                emit("""{"type":"message_end","message":$good}""")
+                                persisted += """{"type":"message","id":"e5","parentId":"x1","message":$good}"""
+                                emit("""{"type":"auto_retry_end","success":true,"attempt":1}""")
+                                emit("""{"type":"agent_end","messages":[]}""")
+                                later(30) { emit("""{"type":"agent_settled","aborted":false}""") }
+                            }
+                        }
+                    }
+                    else -> basics(cmd)
                 }
             }
         }
@@ -230,16 +255,37 @@ class PiEngineExtrasTest {
         waitFor { e.messageMeta.value.size == 2 }
         val (u0, a0) = e.chat.value.items
         assertEquals("e1", e.messageMeta.value.getValue(u0.key).entryId)
-        assertTrue(e.messageMeta.value.getValue(u0.key).forkable)
         assertEquals(0.5, e.messageMeta.value.getValue(a0.key).costUsd!!, 1e-9)
+
+        // 整轮过程中任何一刻：除 u0 外没有气泡配到 e1，除 a0 外没有助手配到 e2；失败消息 e4 永远不被配对。
+        val bad = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val watch = launch(Dispatchers.Default) {
+            e.messageMeta.collect { m ->
+                m.forEach { (k, v) ->
+                    if (v.entryId == "e1" && k != u0.key) bad += "$k→e1"
+                    if (v.entryId == "e2" && k != a0.key) bad += "$k→e2"
+                    if (v.entryId == "e4") bad += "$k→e4"
+                }
+            }
+        }
         e.send("第二句")
-        waitFor { !e.chat.value.running && e.messageMeta.value.size == 4 }
+        waitFor(5_000) { !e.chat.value.running && e.messageMeta.value.values.any { it.entryId == "e5" } }
+        watch.cancel()
+        assertTrue("错配：$bad", bad.isEmpty())
         val items = e.chat.value.items
-        assertEquals("e3", e.messageMeta.value.getValue(items[2].key).entryId)
-        val last = e.messageMeta.value.getValue(items[3].key)
-        assertEquals("e4", last.entryId)
-        assertEquals(7L, last.usage!!.output)
-        assertFalse(last.forkable)
+        val meta = e.messageMeta.value
+        val u1 = items.filterIsInstance<ChatItem.User>().last()
+        assertEquals("e3", meta.getValue(u1.key).entryId)
+        assertTrue(meta.getValue(u1.key).forkable)
+        val ok = items.filterIsInstance<ChatItem.Assistant>().last()
+        assertEquals("e5", meta.getValue(ok.key).entryId)
+        assertEquals(8L, meta.getValue(ok.key).usage!!.output)
+        assertEquals(0.25, meta.getValue(ok.key).costUsd!!, 1e-9)
+        assertEquals("e2", meta.getValue(a0.key).entryId)
+        // 增量：首次全量后，后续 get_entries 都带 since
+        val gets = rt.last.received.filter { it.str("type") == "get_entries" }
+        assertTrue(gets.size >= 2)
+        assertTrue(gets.drop(1).any { it.str("since") != null })
         e.close()
     }
 
