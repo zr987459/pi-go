@@ -2,7 +2,7 @@
 
 # feat/engine-rpc（W1）状态
 
-> **审查第 3 轮修复：修复3 进行中**（2026-11-03 19:30 CST）：截断恢复（length + context_edit）对齐、不重试的 error 正常配对、Oversized 全量失败后按 epoch 退避。
+> **审查第 3 轮修复：修复3 已完成**（2026-11-03 19:55 CST）：截断恢复（length + context_edit）对齐、不重试的 error 正常配对、Oversized 全量失败后按 epoch 退避。
 
 > **修复1 已完成**（2026-11-03 17:10 CST）：PR #13 审查第 1 轮 Important 4 条、Nit 4 条已修，明细与测试结果见下文与 PR 描述。
 
