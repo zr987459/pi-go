@@ -21,3 +21,7 @@
 - Nit 7 条全修：状态页措辞、git 入口不扩大允许范围、非 JPEG 的 EXIF、diff 截断提示、GitParse O(n²)、空文件 diff、分享缓存清理与 inbox 限额
 - 单测：core/workspace 36、feature/files 16，本地全过；CI 只编译
 - 未完成：androidTest 本机（aarch64，aapt2 不可用）无法编译和运行，CI 也不跑，**尚未在任何模拟器或真机上跑过**；Share 加真实处理器加真实工作区的端到端需 W5 接线后在 app 测
+
+## 审查第 2 轮修复（2026-11-03 16:25 CST，进行中）
+- **修复2 进行中**：正在 `merge origin/main`（已含 UI 改版 PR#11）并处理第 2 轮意见（回归 1、仪器编译、UTF-8 字节截断、roots→refreshGit 时序等）。
+- 每修好一条即提交推送，最长 15 分钟推送一次。
