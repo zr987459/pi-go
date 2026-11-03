@@ -24,6 +24,9 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlinx.coroutines.flow.first
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.put
 
 /**
  * ChatController + Fake 引擎回放（JVM，虚拟时间）。覆盖 S6、Q1–Q4 的界面逻辑与扩展对话框应答路径。
@@ -37,6 +40,7 @@ class ChatControllerTest {
         val answers = mutableListOf<Triple<String, String?, Boolean>>()
         var failNext: Outcome.Err? = null
         var stopDelayMs = 0L
+        var sendDelayMs = 0L
 
         override suspend fun stop(): Outcome<io.github.zr987459.pigo.contract.QueueSnapshot> {
             if (stopDelayMs > 0) kotlinx.coroutines.delay(stopDelayMs)
@@ -45,6 +49,7 @@ class ChatControllerTest {
 
         override suspend fun send(text: String, mode: SendMode): Outcome<Disposition> {
             sends += text to mode
+            if (sendDelayMs > 0) kotlinx.coroutines.delay(sendDelayMs)
             failNext?.let {
                 failNext = null
                 return it
@@ -55,6 +60,16 @@ class ChatControllerTest {
         override suspend fun answerUi(id: String, value: String?, confirmed: Boolean?, cancelled: Boolean) {
             answers += Triple(id, value ?: confirmed?.toString(), cancelled)
             fake.answerUi(id, value, confirmed, cancelled)
+        }
+    }
+
+    /** 状态可由测试直接设置的引擎（模拟重启进入 Starting）。 */
+    private class StatusEngine(val fake: FakeEngineClient) : EngineClient by fake {
+        val st = kotlinx.coroutines.flow.MutableStateFlow(fake.status.value)
+        override val status: kotlinx.coroutines.flow.StateFlow<io.github.zr987459.pigo.contract.EngineStatus> get() = st
+        val answers = mutableListOf<String>()
+        override suspend fun answerUi(id: String, value: String?, confirmed: Boolean?, cancelled: Boolean) {
+            answers += id
         }
     }
 
@@ -372,5 +387,92 @@ class ChatControllerTest {
         e.controller.setThinking("high")
         runCurrent()
         assertEquals("high", e.controller.state.value.chat.thinkingLevel)
+    }
+
+    private fun req(id: String, m: String, b: kotlinx.serialization.json.JsonObjectBuilder.() -> Unit = {}) =
+        ExtUiRequest(id = id, method = m, raw = kotlinx.serialization.json.buildJsonObject(b))
+
+    @Test
+    fun switchingSessionClearsPerSessionLocalState() = runTest {
+        val e = env()
+        e.engine.fake.openSession("/root/.pi/agent/sessions/a.jsonl", "/root")
+        runCurrent()
+        e.engine.fake.emitUiRequest(req("t", "setTitle") { put("title", JsonPrimitive("旧会话标题")) })
+        e.engine.fake.emitUiRequest(req("s", "setStatus") { put("statusKey", JsonPrimitive("git")); put("statusText", JsonPrimitive("main")) })
+        e.engine.fake.emitUiRequest(ExtUiRequest(id = "d1", method = "confirm", title = "继续？"))
+        e.engine.failNext = Outcome.Err(ErrCode.RPC_TIMEOUT, "")
+        e.controller.setDraft("我的草稿")
+        e.controller.submit()
+        runCurrent()
+        var s = e.controller.state.value
+        assertEquals("旧会话标题", s.title)
+        assertEquals(listOf("main"), s.statusLines)
+        assertNotNull(s.dialog)
+        assertTrue(s.rows.any { it is ChatRow.User && it.delivery == Delivery.FAILED })
+        e.controller.setDraft("新草稿")
+        e.engine.fake.emitUiRequest(req("o3", "set_editor_text") { put("text", JsonPrimitive("扩展草稿")) })
+        runCurrent()
+        assertNotNull(e.controller.state.value.replaceDraftOffer)
+
+        e.engine.fake.openSession("/root/.pi/agent/sessions/b.jsonl", "/root")
+        runCurrent()
+        s = e.controller.state.value
+        assertEquals("新会话", s.title)
+        assertTrue(s.statusLines.isEmpty())
+        assertNull(s.dialog)
+        assertNull(s.replaceDraftOffer)
+        assertTrue("旧会话的气泡不能出现在新会话里", s.rows.none { it is ChatRow.User })
+        // 草稿保留；失败气泡的文本不丢，以撤回芯片退回
+        assertEquals("新草稿", s.composer.draft)
+        assertEquals(listOf("我的草稿"), s.composer.withdrawn)
+        // 同一进程内切会话：阻塞类对话框补发 cancelled，pi 不会一直等
+        assertTrue(e.engine.answers.contains(Triple("d1", null, true)))
+    }
+
+    @Test
+    fun engineRestartClearsDialogsWithoutAnsweringOldIds() = runTest {
+        val fake = FakeEngineClient(backgroundScope, stepDelayMs = 100)
+        val engine = StatusEngine(fake)
+        val c = ChatController(engine, backgroundScope)
+        runCurrent()
+        fake.emitUiRequest(ExtUiRequest(id = "d1", method = "select", options = listOf("a", "b")))
+        fake.emitUiRequest(req("t", "setTitle") { put("title", JsonPrimitive("旧标题")) })
+        runCurrent()
+        assertNotNull(c.state.value.dialog)
+        assertEquals("旧标题", c.state.value.title)
+        engine.st.value = io.github.zr987459.pigo.contract.EngineStatus.Starting
+        runCurrent()
+        assertNull(c.state.value.dialog)
+        assertEquals("新会话", c.state.value.title)
+        assertTrue("新进程不认识旧 id，不应答", engine.answers.isEmpty())
+    }
+
+    @Test
+    fun messagesProducedWhileChatHiddenAreDeliveredLater() = runTest {
+        val e = env()
+        e.engine.fake.emitUiRequest(ExtUiRequest(id = "n", method = "notify", message = "后台提示"))
+        runCurrent()
+        // 页面之后才开始收集，仍能收到
+        assertEquals("后台提示", kotlinx.coroutines.withTimeout(1_000) { e.controller.messages.first() })
+    }
+
+    @Test
+    fun stopWaitsForInFlightSendSoItIsWithdrawnNotSent() = runTest {
+        val e = env()
+        warmUp(e)
+        startRunning(e)
+        e.engine.sendDelayMs = 300
+        e.say("这条要撤回")
+        runCurrent()
+        e.controller.stop()
+        runCurrent()
+        // 停止期间发送键不可用
+        e.controller.setDraft("停止中又写的")
+        e.controller.submit()
+        drain()
+        assertEquals(1, e.engine.sends.count { it.first == "这条要撤回" })
+        assertEquals("停止中又写的不应被发送", 0, e.engine.sends.count { it.first == "停止中又写的" })
+        assertTrue("撤回的消息不能在停止后照样发出", e.users.none { it == "这条要撤回" })
+        assertEquals(listOf("这条要撤回"), e.controller.state.value.composer.withdrawn)
     }
 }

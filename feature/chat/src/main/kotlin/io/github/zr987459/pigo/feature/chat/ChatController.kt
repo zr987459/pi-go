@@ -25,23 +25,30 @@ import io.github.zr987459.pigo.feature.chat.logic.Outbox
 import io.github.zr987459.pigo.feature.chat.logic.PrimaryAction
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.ConcurrentHashMap
 
 /** 聊天界面的可调参数。 */
 data class ChatConfig(
     /** 停止请求超过这个时长仍未完成时，提示「仍在停止，正在强制结束…」（§3.7：20 s 后引擎强杀重启）。 */
     val stopSlowHintMs: Long = 20_000,
+    /** 停止前最多等这么久，让正在发出的消息先拿到 pi 的响应（防止它在 clear_queue 之后才入队、停止后照样发出）。 */
+    val stopWaitSendMs: Long = 5_000,
 )
 
 /** 正在显示（或排队等待显示）的扩展对话框。 */
@@ -88,13 +95,19 @@ class ChatController(
         val status: Map<String, String> = emptyMap(),
         val title: String? = null,
         val statsPercent: Double? = null,
+        /** 会话代数：切换会话或引擎重启时递增，按会话缓存的本地状态（思考计时等）随之作废。 */
+        val generation: Int = 0,
     )
 
     private val local = MutableStateFlow(Local())
-    private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 16)
+    /**
+     * 带缓冲的一次性提示：聊天页不在前台（没人收集）时产生的提示先存着，回到聊天页再显示，每条只显示一次。
+     * 缓冲满时丢最旧的。
+     */
+    private val _messages = Channel<String>(capacity = 16, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
     /** 一次性提示（Snackbar）：扩展 notify、命令失败、停止失败等。 */
-    val messages: SharedFlow<String> = _messages.asSharedFlow()
+    val messages: Flow<String> = _messages.receiveAsFlow()
 
     /** App 在后台时收到对话类请求，用通知提醒（由页面注入 Android 实现）。 */
     @Volatile
@@ -104,6 +117,9 @@ class ChatController(
     private var foreground = false
     private var seq = 0
     private var stopJob: Job? = null
+
+    /** 已调用 engine.send() 但还没拿到响应的发送；停止前要等它们返回。 */
+    private val inflightSends: MutableSet<Job> = ConcurrentHashMap.newKeySet()
 
     /** 思考块计时：key = "assistantKey#index" → (开始, 结束)。只在合成协程里读写。 */
     private val thinkingStart = HashMap<String, Long?>()
@@ -117,7 +133,11 @@ class ChatController(
         scope.launch { engine.uiRequests.collect { onUiRequest(it) } }
         scope.launch {
             var wasRunning = engine.chat.value.running
+            var lastFile = engine.chat.value.sessionFile
             engine.chat.collect { chat ->
+                // 切到了另一个会话（null → 文件只是首次得知会话文件，不算切换）。
+                if (lastFile != null && chat.sessionFile != lastFile) resetSessionLocal(sameProcess = true)
+                lastFile = chat.sessionFile
                 local.update { l ->
                     val sends = Outbox.reconcile(l.sends, chat)
                     if (sends === l.sends) l else l.copy(sends = sends)
@@ -126,12 +146,64 @@ class ChatController(
                 wasRunning = chat.running
             }
         }
+        scope.launch {
+            var prev = engine.status.value
+            engine.status.collect { st ->
+                val restarting = st is EngineStatus.Starting || st is EngineStatus.Crashed
+                val wasRestarting = prev is EngineStatus.Starting || prev is EngineStatus.Crashed
+                if (restarting && !wasRestarting) resetSessionLocal(sameProcess = false)
+                prev = st
+            }
+        }
         scope.launch { refreshStats() }
+    }
+
+    /**
+     * 切换会话或引擎重启（进入 Starting / Crashed）时，清掉只属于原会话或原进程的本地状态，
+     * 避免新会话显示旧标题、旧状态行、旧对话框和旧气泡：
+     * - 扩展写的标题、状态行、替换草稿询问、折叠展开记录、上下文统计、思考计时；
+     * - 扩展对话框（同时取消对应通知）。同一进程内切会话时，对阻塞类对话框补发 cancelled，pi 不会一直等；
+     *   引擎重启后旧 id 新进程不认识，不再应答；
+     * - 发送中 / 已排队的乐观气泡丢弃（结果以引擎为准）；发送失败的气泡不显示到新会话里，
+     *   其文本按撤回规则退回输入框（输入框为空时放回，否则进「已撤回」芯片），不丢、不覆盖草稿。
+     * 草稿本身保留。
+     */
+    private fun resetSessionLocal(sameProcess: Boolean) {
+        var dropped: List<DialogEntry> = emptyList()
+        local.update { s ->
+            dropped = s.dialogs
+            val failedTexts = s.sends.filter { it.status == Delivery.FAILED }.map { it.text }
+            s.copy(
+                composer = ComposerLogic.onWithdrawn(s.composer, failedTexts),
+                sends = emptyList(),
+                expanded = emptySet(),
+                dialogs = emptyList(),
+                replaceDraftOffer = null,
+                status = emptyMap(),
+                title = null,
+                statsPercent = null,
+                generation = s.generation + 1,
+            )
+        }
+        for (d in dropped) {
+            notifier?.cancel(d.request.id)
+            if (sameProcess && d.request.needsResponse) {
+                scope.launch { engine.answerUi(d.request.id, cancelled = true) }
+            }
+        }
     }
 
     // ---------------- 合成 ----------------
 
+    /** 思考计时所属的会话代数；变化时清空计时缓存（跨会话 assistant key 可能相同）。 */
+    private var thinkingGeneration = 0
+
     private fun compose(chat: ChatState, status: EngineStatus, l: Local): ChatScreenState {
+        if (l.generation != thinkingGeneration) {
+            thinkingStart.clear()
+            thinkingEnd.clear()
+            thinkingGeneration = l.generation
+        }
         trackThinking(chat)
         val rows = ChatRows.build(
             items = chat.items,
@@ -200,6 +272,7 @@ class ChatController(
 
     /** 失败气泡上的「重试」：只在用户点击时重发，绝不自动重发。 */
     fun retry(localId: String) {
+        if (local.value.composer.stopping) return
         val l = local.value.sends.firstOrNull { it.id == localId && it.status == Delivery.FAILED } ?: return
         sendText(l.text, SendMode.FOLLOW_UP, reuseId = l.id)
     }
@@ -225,7 +298,7 @@ class ChatController(
         val id = reuseId ?: "s${seq++}"
         val pending = LocalSend(id = id, text = text, status = Delivery.SENDING, baselineUserCount = Outbox.userCount(chat, text))
         local.update { s -> s.copy(sends = s.sends.filterNot { it.id == id } + pending) }
-        scope.launch {
+        val job = scope.launch(start = CoroutineStart.LAZY) {
             val r = try {
                 engine.send(text, mode)
             } catch (e: CancellationException) {
@@ -247,8 +320,15 @@ class ChatController(
                 val sends = s.sends.map { if (it.id == id) next else it }.filterNotNull()
                 s.copy(sends = Outbox.reconcile(sends, now))
             }
-            if (r is Outcome.Ok && r.value == Disposition.HANDLED) _messages.tryEmit("已由扩展命令处理")
+            if (r is Outcome.Ok && r.value == Disposition.HANDLED) emitMessage("已由扩展命令处理")
         }
+        inflightSends += job
+        job.invokeOnCompletion { inflightSends.remove(job) }
+        job.start()
+    }
+
+    private fun emitMessage(text: String) {
+        _messages.trySend(text)
     }
 
     private fun sendErrorText(e: Outcome.Err): String = when (e.code) {
@@ -276,6 +356,10 @@ class ChatController(
                 local.update { it.copy(composer = it.composer.copy(stopSlow = true)) }
             }
             val r = try {
+                // 停止期间发送键不可用；先等已经发出的消息拿到响应，再 clear_queue → abort，
+                // 否则它可能在 clear_queue 之后才入队，停止后照样发出。
+                val pendingSends = inflightSends.toList()
+                if (pendingSends.isNotEmpty()) withTimeoutOrNull(config.stopWaitSendMs) { pendingSends.joinAll() }
                 engine.stop()
             } catch (e: CancellationException) {
                 slow.cancel()
@@ -291,7 +375,7 @@ class ChatController(
                 // 排队中的本地气泡已随队列一起撤回（文本在撤回结果里），不再显示。
                 s.copy(composer = c, sends = s.sends.filterNot { it.status == Delivery.QUEUED })
             }
-            if (r is Outcome.Err) _messages.tryEmit("停止失败：" + r.message.ifBlank { "未知错误" })
+            if (r is Outcome.Err) emitMessage("停止失败：" + r.message.ifBlank { "未知错误" })
         }
     }
 
@@ -328,7 +412,7 @@ class ChatController(
                     "warning" -> "注意："
                     else -> ""
                 }
-                _messages.tryEmit(prefix + a.text)
+                emitMessage(prefix + a.text)
             }
             is ExtUiAction.Status -> local.update { s ->
                 s.copy(status = if (a.text.isNullOrBlank()) s.status - a.key else s.status + (a.key to a.text))
@@ -373,10 +457,19 @@ class ChatController(
 
     // ---------------- 顶栏：模型 / 思考 / 统计 ----------------
 
+    /** 顶栏模型菜单用：失败时返回错误，让菜单区分「读取失败」和「确实没有模型」。 */
+    suspend fun loadModels(): Outcome<List<ModelInfo>> = try {
+        engine.models()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (t: Throwable) {
+        Outcome.Err(ErrCode.UNKNOWN, t.message ?: t::class.simpleName.orEmpty(), t)
+    }
+
     suspend fun models(): List<ModelInfo> = when (val r = engine.models()) {
         is Outcome.Ok -> r.value
         is Outcome.Err -> {
-            _messages.tryEmit("读取模型列表失败：${r.message}")
+            emitMessage("读取模型列表失败：${r.message}")
             emptyList()
         }
     }
@@ -385,10 +478,10 @@ class ChatController(
         scope.launch {
             when (val r = engine.setModel(m.provider, m.id)) {
                 is Outcome.Ok -> {
-                    _messages.tryEmit("已切换到 ${r.value.name ?: r.value.id}")
+                    emitMessage("已切换到 ${r.value.name ?: r.value.id}")
                     refreshStats()
                 }
-                is Outcome.Err -> _messages.tryEmit("切换模型失败：${r.message}")
+                is Outcome.Err -> emitMessage("切换模型失败：${r.message}")
             }
         }
     }
@@ -396,7 +489,7 @@ class ChatController(
     suspend fun thinkingLevels(): List<String> = when (val r = engine.thinkingLevels()) {
         is Outcome.Ok -> r.value
         is Outcome.Err -> {
-            _messages.tryEmit("读取思考级别失败：${r.message}")
+            emitMessage("读取思考级别失败：${r.message}")
             emptyList()
         }
     }
@@ -404,7 +497,7 @@ class ChatController(
     fun setThinking(level: String) {
         scope.launch {
             val r = engine.setThinking(level)
-            if (r is Outcome.Err) _messages.tryEmit("切换思考级别失败：${r.message}")
+            if (r is Outcome.Err) emitMessage("切换思考级别失败：${r.message}")
         }
     }
 
@@ -422,7 +515,7 @@ class ChatController(
     fun restartEngine() {
         scope.launch {
             val r = engine.restart("用户在聊天页点击「重启引擎」")
-            if (r is Outcome.Err) _messages.tryEmit("重启失败：${r.message}")
+            if (r is Outcome.Err) emitMessage("重启失败：${r.message}")
         }
     }
 }

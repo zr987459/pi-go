@@ -25,6 +25,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.zr987459.pigo.contract.ModelInfo
+import io.github.zr987459.pigo.contract.Outcome
+import io.github.zr987459.pigo.feature.chat.logic.ModelMenu
 import kotlinx.coroutines.launch
 
 /** 思考级别的中文名（取值以模型实际支持为准，§3.4）。 */
@@ -48,7 +50,7 @@ fun ChatTopBar(
     thinkingLevel: String?,
     contextPercent: Double?,
     running: Boolean,
-    loadModels: suspend () -> List<ModelInfo>,
+    loadModels: suspend () -> Outcome<List<ModelInfo>>,
     onPickModel: (ModelInfo) -> Unit,
     loadThinkingLevels: suspend () -> List<String>,
     onPickThinking: (String) -> Unit,
@@ -56,6 +58,7 @@ fun ChatTopBar(
 ) {
     val scope = rememberCoroutineScope()
     var models by remember { mutableStateOf<List<ModelInfo>?>(null) }
+    var modelsError by remember { mutableStateOf<String?>(null) }
     var levels by remember { mutableStateOf<List<String>?>(null) }
     var modelMenu by remember { mutableStateOf(false) }
     var levelMenu by remember { mutableStateOf(false) }
@@ -74,7 +77,14 @@ fun ChatTopBar(
                     AssistChip(
                         onClick = {
                             modelMenu = true
-                            scope.launch { models = loadModels() }
+                            models = null
+                            modelsError = null
+                            scope.launch {
+                                when (val r = loadModels()) {
+                                    is Outcome.Ok -> models = r.value
+                                    is Outcome.Err -> modelsError = r.message
+                                }
+                            }
                         },
                         label = {
                             Text(
@@ -87,9 +97,10 @@ fun ChatTopBar(
                     )
                     DropdownMenu(expanded = modelMenu, onDismissRequest = { modelMenu = false }) {
                         val list = models
+                        val placeholder = ModelMenu.placeholder(list, modelsError)
                         when {
-                            list == null -> DropdownMenuItem(text = { Text("正在读取…") }, onClick = {}, enabled = false)
-                            list.isEmpty() -> DropdownMenuItem(text = { Text("没有可用的模型，请先到「设置」配置") }, onClick = {}, enabled = false)
+                            placeholder != null -> DropdownMenuItem(text = { Text(placeholder) }, onClick = {}, enabled = false)
+                            list == null -> Unit
                             else -> list.forEach { m ->
                                 DropdownMenuItem(
                                     text = {

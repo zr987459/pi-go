@@ -82,3 +82,13 @@ object ExtUi {
     private fun JsonObject.lines(key: String): List<String>? =
         (this[key] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
 }
+
+/** 顶栏模型菜单的占位文案：区分「正在读取」「读取失败」「确实没有模型」。返回 null 表示有列表可显示。 */
+object ModelMenu {
+    fun placeholder(models: List<*>?, error: String?): String? = when {
+        error != null -> "读取模型列表失败" + error.takeIf { it.isNotBlank() }?.let { "：$it" }.orEmpty() + "（点「模型」重试）"
+        models == null -> "正在读取…"
+        models.isEmpty() -> "没有可用的模型，请先到「设置」配置"
+        else -> null
+    }
+}

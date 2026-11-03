@@ -12,6 +12,9 @@ import io.github.zr987459.pigo.feature.chat.logic.ChatRow
 import io.github.zr987459.pigo.feature.chat.logic.ChatRows
 import io.github.zr987459.pigo.feature.chat.logic.ErrorKind
 import io.github.zr987459.pigo.feature.chat.logic.LocalSend
+import io.github.zr987459.pigo.feature.chat.logic.ModelMenu
+import io.github.zr987459.pigo.feature.chat.logic.ToolPhase
+import io.github.zr987459.pigo.feature.chat.logic.ToolText
 import io.github.zr987459.pigo.feature.chat.logic.text
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -142,5 +145,85 @@ class ChatRowsTest {
         assertEquals("b", last.text)
         assertEquals(Delivery.FAILED, last.delivery)
         assertEquals("s1", last.localId)
+    }
+
+    private fun failedTurn() = listOf(
+        ChatItem.User("u", "读不存在的文件"),
+        ChatItem.Assistant(
+            "a1",
+            blocks = listOf(ContentBlock.ToolCall(0, "t1", "read", "{}"), ContentBlock.ToolCall(1, "t2", "bash", "{}")),
+            streaming = false,
+            stopReason = "toolUse",
+        ),
+        ChatItem.Tool("tool-t1", "t1", "read", status = ToolStatus.ERROR, result = kotlinx.serialization.json.JsonPrimitive("ENOENT: no such file"), durationMs = 5),
+        ChatItem.Tool("tool-t2", "t2", "bash", status = ToolStatus.OK, durationMs = 5),
+        ChatItem.Assistant("a2", blocks = listOf(ContentBlock.Text(0, "文件不存在。")), streaming = false, stopReason = "stop"),
+    )
+
+    @Test
+    fun failedToolCardStaysVisibleAfterTurnEnds() {
+        // T2：回合结束（running=false）折叠后，失败工具卡仍在折叠区外显示，状态为 ERROR（红色、默认展开）。
+        val rows = ChatRows.build(failedTurn(), running = false)
+        assertEquals(listOf("User", "TurnSummary", "Tool", "Assistant"), rows.map { it::class.simpleName })
+        val tool = rows.filterIsInstance<ChatRow.Tool>().single()
+        assertEquals("t1", tool.tool.toolCallId)
+        assertEquals(ToolPhase.ERROR, tool.phase)
+        assertEquals("2 个工具 · 1 失败", rows.filterIsInstance<ChatRow.TurnSummary>().single().label)
+    }
+
+    @Test
+    fun expandingFailedTurnShowsEachToolOnce() {
+        val key = ChatRows.build(failedTurn(), running = false).filterIsInstance<ChatRow.TurnSummary>().single().key
+        val rows = ChatRows.build(failedTurn(), running = false, expanded = setOf(key))
+        assertEquals(listOf("t1", "t2"), rows.filterIsInstance<ChatRow.Tool>().map { it.tool.toolCallId })
+        assertEquals(rows.size, rows.map { it.key }.toSet().size)
+    }
+
+    @Test
+    fun unfinishedToolsAfterSettleAreNotShownAsRunning() {
+        // 模型发出 toolCall 后这一轮被停止：工具从未执行（PENDING）或执行中断（RUNNING），settled 后不能再转圈。
+        val items = listOf(
+            ChatItem.User("u", "跑一下测试"),
+            ChatItem.Assistant(
+                "a1",
+                blocks = listOf(ContentBlock.ToolCall(0, "t1", "bash", "{}"), ContentBlock.ToolCall(1, "t2", "read", "{}")),
+                streaming = false,
+                stopReason = "aborted",
+            ),
+            ChatItem.Tool("tool-t1", "t1", "bash", status = ToolStatus.RUNNING, startedAtMillis = 1),
+            ChatItem.Tool("tool-t2", "t2", "read", status = ToolStatus.PENDING),
+            ChatItem.Notice("n", NoticeKind.STOPPED, "已停止"),
+        )
+        val folded = ChatRows.build(items, running = false)
+        val summary = folded.filterIsInstance<ChatRow.TurnSummary>().single()
+        assertTrue(summary.label, summary.label.contains("2 中断"))
+        val expanded = ChatRows.build(items, running = false, expanded = setOf(summary.key))
+        val phases = expanded.filterIsInstance<ChatRow.Tool>().associate { it.tool.toolCallId to it.phase }
+        assertEquals(mapOf("t1" to ToolPhase.INTERRUPTED, "t2" to ToolPhase.NOT_RUN), phases)
+        assertTrue(phases.values.none { it.spinning })
+
+        // 仍在生成中时照常转圈
+        val live = ChatRows.build(items, running = true).filterIsInstance<ChatRow.Tool>()
+        assertTrue(live.all { it.phase == ToolPhase.RUNNING && it.phase.spinning })
+    }
+
+    @Test
+    fun toolPhaseMapping() {
+        assertEquals(ToolPhase.RUNNING, ToolPhase.of(ToolStatus.PENDING, live = true))
+        assertEquals(ToolPhase.NOT_RUN, ToolPhase.of(ToolStatus.PENDING, live = false))
+        assertEquals(ToolPhase.INTERRUPTED, ToolPhase.of(ToolStatus.RUNNING, live = false))
+        assertEquals(ToolPhase.OK, ToolPhase.of(ToolStatus.OK, live = false))
+        assertEquals(ToolPhase.ERROR, ToolPhase.of(ToolStatus.ERROR, live = true))
+        assertEquals("未执行", ToolText.phaseLabel(ToolPhase.NOT_RUN))
+        assertEquals("已中断", ToolText.phaseLabel(ToolPhase.INTERRUPTED))
+        assertEquals(null, ToolText.phaseLabel(ToolPhase.OK))
+    }
+
+    @Test
+    fun modelMenuDistinguishesFailureFromEmpty() {
+        assertEquals("正在读取…", ModelMenu.placeholder(null, null))
+        assertEquals("没有可用的模型，请先到「设置」配置", ModelMenu.placeholder(emptyList<Any>(), null))
+        assertEquals("读取模型列表失败：超时（点「模型」重试）", ModelMenu.placeholder(null, "超时"))
+        assertEquals(null, ModelMenu.placeholder(listOf("m"), null))
     }
 }

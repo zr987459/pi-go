@@ -121,7 +121,7 @@ fun ChatScreen(
                 thinkingLevel = state.chat.thinkingLevel,
                 contextPercent = state.contextPercent,
                 running = state.chat.running,
-                loadModels = controller::models,
+                loadModels = controller::loadModels,
                 onPickModel = controller::setModel,
                 loadThinkingLevels = controller::thinkingLevels,
                 onPickThinking = controller::setThinking,

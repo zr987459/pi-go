@@ -39,8 +39,13 @@ sealed interface ChatRow {
         val thinkingMs: Map<Int, Long?> = emptyMap(),
     ) : ChatRow
 
+    /** [phase] 为界面实际显示的状态：回合已结束但工具停在 PENDING/RUNNING 时显示「未执行 / 已中断」，不再转圈计时。 */
     @Immutable
-    data class Tool(override val key: String, val tool: ChatItem.Tool) : ChatRow
+    data class Tool(
+        override val key: String,
+        val tool: ChatItem.Tool,
+        val phase: ToolPhase = ToolPhase.of(tool.status, live = true),
+    ) : ChatRow
 
     @Immutable
     data class Notice(override val key: String, val notice: ChatItem.Notice) : ChatRow
@@ -66,14 +71,44 @@ sealed interface ChatRow {
         val failedTools: Int,
         val steps: Int,
         val expanded: Boolean,
+        /** 回合结束时仍未走到终态的工具（未执行或被中断）。 */
+        val interruptedTools: Int = 0,
     ) : ChatRow {
         val label: String
             get() = buildList {
                 if (thinkingBlocks > 0) add(if (thinkingMs > 0) "思考 ${formatSeconds(thinkingMs)}" else "已思考")
                 if (toolCount > 0) add("$toolCount 个工具")
                 if (failedTools > 0) add("$failedTools 失败")
+                if (interruptedTools > 0) add("$interruptedTools 中断")
                 if (isEmpty() && steps > 0) add("$steps 步过程")
             }.joinToString(" · ")
+    }
+}
+
+/** 工具卡在界面上的状态（T1/T2）。 */
+enum class ToolPhase {
+    /** 生成中，尚未开始执行（PENDING）或正在执行（RUNNING）：转圈 + 计时。 */
+    RUNNING,
+    OK,
+    ERROR,
+
+    /** 回合已结束，但工具从未开始执行（模型发出了 toolCall，这一轮随后被停止或出错）。 */
+    NOT_RUN,
+
+    /** 回合已结束，但工具开始执行后没有收到结束事件。 */
+    INTERRUPTED,
+    ;
+
+    val spinning: Boolean get() = this == RUNNING
+
+    companion object {
+        /** @param live 该工具所在回合是否仍在生成（以 `agent_settled` 为准）。 */
+        fun of(status: ToolStatus, live: Boolean): ToolPhase = when (status) {
+            ToolStatus.OK -> OK
+            ToolStatus.ERROR -> ERROR
+            ToolStatus.PENDING -> if (live) RUNNING else NOT_RUN
+            ToolStatus.RUNNING -> if (live) RUNNING else INTERRUPTED
+        }
     }
 }
 
@@ -182,7 +217,7 @@ object ChatRows {
                         if (hasVisibleContent(it)) out += ChatRow.Assistant(it.key, it, thinkingMs = durations(it))
                         emitError(it)
                     }
-                    is ChatItem.Tool -> out += ChatRow.Tool(it.key, it)
+                    is ChatItem.Tool -> out += ChatRow.Tool(it.key, it, ToolPhase.of(it.status, live = true))
                     else -> emitTail(it)
                 }
             }
@@ -225,7 +260,12 @@ object ChatRows {
             failedTools = tools.count { it.status == ToolStatus.ERROR },
             steps = processSteps,
             expanded = isExpanded,
+            interruptedTools = tools.count { it.status == ToolStatus.PENDING || it.status == ToolStatus.RUNNING },
         )
+        if (!isExpanded) {
+            // T2：失败的工具卡不随折叠隐藏，红色、默认展开，用户不用点开摘要就能看到错误文本。
+            for (t in tools) if (t.status == ToolStatus.ERROR) out += ChatRow.Tool(t.key, t, ToolPhase.ERROR)
+        }
         if (isExpanded) {
             for (it in body) {
                 when {
@@ -235,7 +275,7 @@ object ChatRows {
                     it is ChatItem.Assistant -> if (hasVisibleContent(it)) {
                         out += ChatRow.Assistant(it.key, it, thinkingMs = durations(it))
                     }
-                    it is ChatItem.Tool -> out += ChatRow.Tool(it.key, it)
+                    it is ChatItem.Tool -> out += ChatRow.Tool(it.key, it, ToolPhase.of(it.status, live = false))
                 }
             }
         }

@@ -55,6 +55,13 @@ object MarkdownSegments {
 
 /** 从工具结果 / partialResult 中取出给人看的文本（`content[].text`），取不到时显示原始 JSON。 */
 object ToolText {
+    /** 回合结束但工具没走到终态时，卡片上代替耗时显示的文字。 */
+    fun phaseLabel(phase: ToolPhase): String? = when (phase) {
+        ToolPhase.NOT_RUN -> "未执行"
+        ToolPhase.INTERRUPTED -> "已中断"
+        else -> null
+    }
+
     fun of(e: JsonElement?): String? = when (e) {
         null, JsonNull -> null
         is JsonPrimitive -> e.contentOrNull

@@ -104,7 +104,8 @@ fun RetryBar(retry: RetryBanner, onStop: () -> Unit) {
                     Text(it, style = MaterialTheme.typography.labelSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
             }
-            TextButton(onClick = onStop) { Text("放弃并停止") }
+            // 契约暂无 abortRetry()（§3.5 abort_retry），这里走的是 stop()：clear_queue + abort，会一并撤回排队消息，文案写明。
+            TextButton(onClick = onStop, modifier = Modifier.testTag("retry:stop")) { Text("停止并撤回排队") }
         }
     }
 }

@@ -48,9 +48,9 @@ import io.github.zr987459.pigo.contract.ChatItem
 import io.github.zr987459.pigo.contract.ContentBlock
 import io.github.zr987459.pigo.contract.Delivery
 import io.github.zr987459.pigo.contract.NoticeKind
-import io.github.zr987459.pigo.contract.ToolStatus
 import io.github.zr987459.pigo.core.ui.MonoStyle
 import io.github.zr987459.pigo.feature.chat.logic.ChatRow
+import io.github.zr987459.pigo.feature.chat.logic.ToolPhase
 import io.github.zr987459.pigo.feature.chat.logic.ToolText
 import io.github.zr987459.pigo.feature.chat.logic.formatSeconds
 import kotlinx.coroutines.delay
@@ -70,7 +70,7 @@ fun ChatRowView(row: ChatRow, isLatestUser: Boolean, actions: RowActions, modifi
     when (row) {
         is ChatRow.User -> UserBubble(row, isLatestUser, actions, modifier)
         is ChatRow.Assistant -> AssistantMessage(row, modifier)
-        is ChatRow.Tool -> ToolCard(row.tool, modifier)
+        is ChatRow.Tool -> ToolCard(row.tool, row.phase, modifier)
         is ChatRow.Notice -> NoticeLine(row.notice, modifier)
         is ChatRow.Raw -> RawCard(row.raw, modifier)
         is ChatRow.Error -> ErrorCard(row, actions, modifier)
@@ -204,11 +204,15 @@ private fun ThinkingBlock(text: String, active: Boolean, durationMs: Long?) {
 
 // ---------------- 工具卡 ----------------
 
-/** T1/T2：运行中转圈+计时；结束显示耗时；失败红色、默认展开并显示错误文本。 */
+/**
+ * T1/T2：运行中转圈+计时；结束显示耗时；失败红色、默认展开并显示错误文本。
+ * 回合已结束但工具没走到终态（[ToolPhase.NOT_RUN] / [ToolPhase.INTERRUPTED]）时不再转圈计时，显示「未执行 / 已中断」。
+ */
 @Composable
-fun ToolCard(tool: ChatItem.Tool, modifier: Modifier = Modifier) {
-    val failed = tool.status == ToolStatus.ERROR
-    val running = tool.status == ToolStatus.RUNNING || tool.status == ToolStatus.PENDING
+fun ToolCard(tool: ChatItem.Tool, phase: ToolPhase = ToolPhase.of(tool.status, live = true), modifier: Modifier = Modifier) {
+    val failed = phase == ToolPhase.ERROR
+    val running = phase.spinning
+    val halted = phase == ToolPhase.NOT_RUN || phase == ToolPhase.INTERRUPTED
     var userExpanded by rememberSaveable(tool.key) { mutableStateOf<Boolean?>(null) }
     val expanded = userExpanded ?: failed
     val firstSeen = remember(tool.key) { System.currentTimeMillis() }
@@ -236,6 +240,7 @@ fun ToolCard(tool: ChatItem.Tool, modifier: Modifier = Modifier) {
                 when {
                     running -> CircularProgressIndicator(Modifier.size(16.dp).testTag("tool:spinner"), strokeWidth = 2.dp)
                     failed -> Icon(Icons.Filled.Close, contentDescription = "失败", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
+                    halted -> Icon(Icons.Filled.Warning, contentDescription = ToolText.phaseLabel(phase), tint = MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(18.dp).testTag("tool:halted"))
                     else -> Icon(Icons.Filled.Check, contentDescription = "完成", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
                 }
                 Column(Modifier.weight(1f)) {
@@ -256,6 +261,7 @@ fun ToolCard(tool: ChatItem.Tool, modifier: Modifier = Modifier) {
                 }
                 val timeText = when {
                     running -> formatSeconds((now - (tool.startedAtMillis ?: firstSeen)).coerceAtLeast(0))
+                    halted -> ToolText.phaseLabel(phase)
                     tool.durationMs != null -> "耗时 " + formatDuration(tool.durationMs!!)
                     else -> null
                 }
@@ -280,7 +286,12 @@ fun ToolCard(tool: ChatItem.Tool, modifier: Modifier = Modifier) {
                     Text(if (failed) "错误信息" else if (running) "输出（进行中）" else "输出", style = MaterialTheme.typography.labelSmall, color = onContainer)
                     Box(Modifier.horizontalScroll(rememberScrollState())) {
                         Text(
-                            output?.let { ToolText.clip(it) } ?: if (running) "等待输出…" else "（无输出）",
+                            output?.let { ToolText.clip(it) } ?: when {
+                                running -> "等待输出…"
+                                phase == ToolPhase.NOT_RUN -> "（这一轮已结束，工具没有执行）"
+                                phase == ToolPhase.INTERRUPTED -> "（工具执行被中断，没有收到结果）"
+                                else -> "（无输出）"
+                            },
                             style = MonoStyle,
                             color = onContainer,
                             modifier = Modifier.testTag("tool:output"),

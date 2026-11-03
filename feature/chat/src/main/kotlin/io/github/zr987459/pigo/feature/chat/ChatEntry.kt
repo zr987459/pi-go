@@ -45,7 +45,9 @@ fun ChatRoute(
 
 /**
  * scaffold 导航（`:app` 的 PiGoNavHost）仍以这个名字调用聊天页；占位内容已替换为真正的聊天界面。
- * mvp/integration 可改为直接调用 [ChatRoute] 并传入 `onOpenModelSettings`。
+ *
+ * 待办（交给 mvp/integration，见 PR #4 说明）：这里没有 `onOpenModelSettings`，错误卡上的「去设置模型」（§3.9）
+ * 暂时不会出现。integration 接导航时改为直接调用 [ChatRoute] 并传入跳转设置页的回调。
  */
 @Composable
 fun ChatPlaceholder(engine: EngineClient, modifier: Modifier = Modifier) {
