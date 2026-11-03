@@ -5,6 +5,7 @@ import java.time.Instant
 import java.time.ZoneId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SessionFormatTest {
@@ -49,5 +50,49 @@ class SessionFormatTest {
     @Test fun sizeFormatting() {
         assertEquals("512 B", SessionFormat.size(512))
         assertEquals("2 KB", SessionFormat.size(2048))
+    }
+
+    // ---------------- 删除保护（§5.6 L4） ----------------
+
+    private fun at(path: String, minutesAgo: Long) = s(null, "x", updated = now.minusSeconds(minutesAgo * 60), path = path)
+
+    @Test fun unknownCurrentBlocksNewestAndRecentSessions() {
+        val newest = at("/a", 120)
+        val recent = at("/b", 3)
+        val old = at("/c", 600)
+        // 最近修改的排第一：/b（3 分钟前）
+        val all = listOf(newest, recent, old)
+        val g1 = SessionFormat.deleteGuard(recent, all, null, canStartNewSession = false, now = now)
+        assertTrue(g1 is SessionFormat.DeleteGuard.Blocked)
+        assertTrue((g1 as SessionFormat.DeleteGuard.Blocked).reason.contains("最近修改"))
+        // 不是最新、也不在 10 分钟内 → 可删
+        assertEquals(SessionFormat.DeleteGuard.Allowed, SessionFormat.deleteGuard(old, all, null, false, now))
+        assertEquals(SessionFormat.DeleteGuard.Allowed, SessionFormat.deleteGuard(newest, all, null, false, now))
+    }
+
+    @Test fun unknownCurrentBlocksNewestEvenIfOld() {
+        val a = at("/a", 600)
+        val b = at("/b", 900)
+        val g = SessionFormat.deleteGuard(a, listOf(a, b), null, canStartNewSession = true, now = now)
+        assertTrue(g is SessionFormat.DeleteGuard.Blocked)
+        assertEquals(SessionFormat.DeleteGuard.Allowed, SessionFormat.deleteGuard(b, listOf(a, b), null, true, now))
+    }
+
+    @Test fun unknownCurrentBlocksRecentNonNewest() {
+        val a = at("/a", 1)
+        val b = at("/b", 5)
+        val g = SessionFormat.deleteGuard(b, listOf(a, b), null, canStartNewSession = true, now = now)
+        assertTrue(g is SessionFormat.DeleteGuard.Blocked)
+        assertTrue((g as SessionFormat.DeleteGuard.Blocked).reason.contains("10 分钟"))
+    }
+
+    @Test fun knownCurrentNeedsNewSessionOrIsBlocked() {
+        val cur = at("/cur", 1)
+        val other = at("/other", 2)
+        val all = listOf(cur, other)
+        assertEquals(SessionFormat.DeleteGuard.NewSessionFirst, SessionFormat.deleteGuard(cur, all, "/cur", true, now))
+        assertTrue(SessionFormat.deleteGuard(cur, all, "/cur", false, now) is SessionFormat.DeleteGuard.Blocked)
+        // 知道当前会话时，其他会话即使刚改过也能删
+        assertEquals(SessionFormat.DeleteGuard.Allowed, SessionFormat.deleteGuard(other, all, "/cur", false, now))
     }
 }

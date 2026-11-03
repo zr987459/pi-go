@@ -58,8 +58,9 @@ object SessionFileParser {
             ?: timestampFromFileName(file.name)
             ?: Instant.ofEpochMilli(file.lastModified())
 
-        // 名称：自尾向前找最后一个 session_info；尾部没有时再看头部（小文件两者相同）。
-        val name = findLastName(tailLines) ?: if (size > 2L * CHUNK) findLastName(headLines) else null
+        // 名称：自尾向前找最后一个 session_info；尾部一条都没有时才看头部（小文件两者相同）。
+        // 尾部最后一条 session_info 的 name 为空表示「已清除名称」，此时不能回退到头部的旧名。
+        val name = (findLastName(tailLines) ?: if (size > 2L * CHUNK) findLastName(headLines) else null)?.name
 
         var preview = findPreview(headLines)
         if (preview == null && size > 2L * CHUNK) {
@@ -132,13 +133,17 @@ object SessionFileParser {
             null
         }
 
-    private fun findLastName(lines: List<String>): String? {
+    /** 找到的最后一条 session_info；[name] 为 null 表示该条把名称清除了。 */
+    private data class NameEntry(val name: String?)
+
+    /** 没有任何 session_info 时返回 null（与「名称已清除」区分开）。 */
+    private fun findLastName(lines: List<String>): NameEntry? {
         for (line in lines.asReversed()) {
             if (!line.contains("\"session_info\"")) continue
             val o = parseObject(line) ?: continue
             if (o.str("type") != "session_info") continue
-            // 最后一条 session_info 为准；name 为空表示已清除名称。
-            return o.str("name")?.trim()?.takeIf { it.isNotEmpty() }
+            // 最后一条 session_info 为准；name 为空或缺失表示已清除名称。
+            return NameEntry(o.str("name")?.trim()?.takeIf { it.isNotEmpty() })
         }
         return null
     }

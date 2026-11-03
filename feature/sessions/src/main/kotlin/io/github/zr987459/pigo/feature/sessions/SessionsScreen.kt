@@ -50,8 +50,11 @@ import java.time.Instant
 import kotlinx.coroutines.launch
 
 /**
- * 导航层（`:app` 的 `PiGoNavHost`）当前调用的入口：只有仓库，没有引擎，
- * 因此「打开会话 / 新建 / 删除当前会话前先新建」这些需要引擎的动作由 [SessionsScreen] 的回调接入（mvp/integration）。
+ * 导航层（`:app` 的 `PiGoNavHost`）当前调用的入口：只有仓库，没有引擎，**也不知道当前会话路径**。
+ * 因此这里不能删除「可能正在使用」的会话（最近修改的、10 分钟内改过的，见 [SessionFormat.deleteGuard]），
+ * 确认框会说明原因；其他会话照常移入回收站。
+ * 打开 / 新建 / 删除当前会话前先 `new_session` 需要引擎，由 mvp/integration 改为直接调用 [SessionsScreen]
+ * 并传入 `currentGuestPath`、`onOpen`、`onNewSession`、`onBeforeDeleteCurrent`。
  */
 @Composable
 fun SessionsPlaceholder(repository: SessionRepository, modifier: Modifier = Modifier) {
@@ -62,9 +65,11 @@ fun SessionsPlaceholder(repository: SessionRepository, modifier: Modifier = Modi
  * 会话列表 + 回收站（DESIGN.md §3.8、§5.6 L1、L4）。
  *
  * @param currentGuestPath 当前打开的会话；删除它时会先调用 [onBeforeDeleteCurrent]（引擎 `new_session`）。
+ *   为 null 表示「不知道当前会话」，此时最近修改的会话与 10 分钟内改过的会话禁止删除（[SessionFormat.deleteGuard]）。
  * @param onOpen 点击会话（引擎 `openSession`，同 cwd 切换、不同 cwd 重启）。为 null 时点击只提示。
  * @param onNewSession 新建会话；为 null 时不显示「新建」按钮。
  * @param onBeforeDeleteCurrent 删除当前会话前调用；返回失败原因（null 表示成功），失败则不删除。
+ *   为 null 时当前会话不能删除。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -187,30 +192,38 @@ fun SessionsScreen(
     }
 
     pendingDelete?.let { s ->
-        val isCurrent = s.guestPath == currentGuestPath
+        val guard = SessionFormat.deleteGuard(
+            target = s,
+            all = sessions.orEmpty(),
+            currentGuestPath = currentGuestPath,
+            canStartNewSession = onBeforeDeleteCurrent != null,
+            now = Instant.now(),
+        )
+        val isCurrent = guard is SessionFormat.DeleteGuard.NewSessionFirst
         AlertDialog(
             onDismissRequest = { pendingDelete = null },
-            title = { Text("删除这个会话？") },
+            title = { Text(if (guard is SessionFormat.DeleteGuard.Blocked) "暂时不能删除" else "删除这个会话？") },
             text = {
                 Text(
-                    "「${SessionFormat.title(s)}」会移到回收站，之后可以在「回收站」里恢复。" +
-                        if (isCurrent) "\n\n这是正在使用的会话，删除前会先为你新建一个空会话。" else "",
+                    when (guard) {
+                        is SessionFormat.DeleteGuard.Blocked -> guard.reason
+                        else -> "「${SessionFormat.title(s)}」会移到回收站，之后可以在「回收站」里恢复。" +
+                            if (isCurrent) "\n\n这是正在使用的会话，删除前会先为你新建一个空会话。" else ""
+                    },
+                    modifier = Modifier.testTag("sessions:deleteMessage"),
                 )
             },
             confirmButton = {
                 TextButton(
                     modifier = Modifier.testTag("sessions:confirmDelete"),
+                    enabled = guard !is SessionFormat.DeleteGuard.Blocked,
                     onClick = {
                         pendingDelete = null
                         busy = true
                         scope.launch {
                             try {
                                 if (isCurrent) {
-                                    val before = onBeforeDeleteCurrent
-                                    if (before == null) {
-                                        toast("正在使用的会话需要先新建一个会话才能删除")
-                                        return@launch
-                                    }
+                                    val before = onBeforeDeleteCurrent ?: return@launch // deleteGuard 已保证非 null
                                     val err = before()
                                     if (err != null) {
                                         toast("没能先新建会话：$err")
@@ -228,7 +241,11 @@ fun SessionsScreen(
                     },
                 ) { Text("删除") }
             },
-            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("取消") } },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) {
+                    Text(if (guard is SessionFormat.DeleteGuard.Blocked) "知道了" else "取消")
+                }
+            },
         )
     }
 }

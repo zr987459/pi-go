@@ -74,6 +74,12 @@ class PiProviderConfigStore(
                 val file = paths.modelsJson
                 val root = JsonFiles.readObject(file)
                 val providers = root["providers"] as? JsonObject ?: JsonObject(emptyMap())
+                // 不同 id 可能规范化成同一个环境变量（如 my-api 与 my_api 都是 PIGO_KEY_MY_API），
+                // 两个端点会互相顶掉 Key，必须拒绝。
+                val clash = conflictingId(providers, cid, envVar)
+                require(clash == null) {
+                    "「$cid」和已添加的「$clash」会用同一个环境变量 $envVar，请换一个 id，或直接修改「$clash」"
+                }
                 val old = providers[cid] as? JsonObject ?: JsonObject(emptyMap())
                 val oldModels = (old["models"] as? JsonArray).orEmpty()
                     .filterIsInstance<JsonObject>()
@@ -96,6 +102,12 @@ class PiProviderConfigStore(
             if (key.isNotEmpty()) secrets.put(alias, key)
         }
     }
+
+    /** models.json 里除 [cid] 外，`apiKey` 也是 `$envVar` 的 provider id；没有则为 null。 */
+    internal fun conflictingId(providers: JsonObject, cid: String, envVar: String): String? =
+        providers.entries.firstOrNull { (id, v) ->
+            id != cid && ((v as? JsonObject)?.get("apiKey") as? JsonPrimitive)?.content == "$$envVar"
+        }?.key
 
     override suspend fun setDefault(provider: String, modelId: String, thinking: String?) {
         require(provider.isNotBlank() && modelId.isNotBlank()) { "请选择模型" }

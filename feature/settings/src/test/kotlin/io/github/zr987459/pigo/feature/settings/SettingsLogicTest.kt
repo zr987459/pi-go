@@ -18,6 +18,12 @@ class SettingsLogicTest {
         assertFalse(KeyText.preview("sk-abcdef1234WXYZ")!!.contains("abcdef"))
     }
 
+    @Test fun maskFromLast4OnlyNeverNeedsPlaintext() {
+        assertEquals("••••WXYZ", KeyText.maskLast4("WXYZ"))
+        assertEquals("••••", KeyText.maskLast4(null)) // 短 Key：SecretStore.last4 返回 null
+        assertEquals("••••", KeyText.maskLast4(""))
+    }
+
     @Test fun envVarAndModels() {
         assertEquals("PIGO_KEY_BAILIAN", KeyText.envVarFor("bailian"))
         assertEquals("PIGO_KEY_MY_API", KeyText.envVarFor(" My API "))

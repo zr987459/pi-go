@@ -51,7 +51,9 @@ import io.github.zr987459.pigo.contract.ProviderConfigStore
 import io.github.zr987459.pigo.contract.ProviderPreset
 import io.github.zr987459.pigo.contract.RuntimeStatus
 import io.github.zr987459.pigo.contract.SecretStore
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 导航层（`:app` 的 `PiGoNavHost`）当前调用的入口，只传了 [ProviderConfigStore]。
@@ -62,12 +64,19 @@ fun SettingsPlaceholder(providers: ProviderConfigStore, modifier: Modifier = Mod
     SettingsScreen(providers = providers, modifier = modifier)
 }
 
+/** 编辑已有自定义端点时预填的内容（不含 Key；Key 留空表示保持原 Key）。 */
+data class CustomEndpointPrefill(val baseUrl: String, val modelIds: List<String>)
+
 /**
  * 设置页：模型与 Key（§3.10、§5.2 C1–C5）、后台运行（§5.7 N5）、运行环境与关于。
+ *
+ * 线程：Key 的读取（只取末 4 位）与保存都走挂起的 `SecretStore` / `ProviderConfigStore`，其实现内部切到 IO；
+ * 保存后重启引擎在 [NonCancellable] 里完成，对话框在重启结束后才关闭，离开页面也不会把 pi 停在半路。
  *
  * @param secrets 用于显示 Key 末 4 位（别名约定 `key.<provider>` / `key.custom.<id>`）；为 null 时只显示「已配置」。
  * @param engine 有引擎时：保存 Key 后自动重启引擎；「默认模型」从 `get_available_models` 里选并 `set_model`。
  * @param runtimeStatus 运行环境版本信息。
+ * @param loadCustom 读取已有自定义端点（id → 接口地址与模型），用于编辑时预填；为 null 时编辑需要重新填写。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -78,6 +87,7 @@ fun SettingsScreen(
     engine: EngineClient? = null,
     runtimeStatus: RuntimeStatus? = null,
     onRepairRuntime: (() -> Unit)? = null,
+    loadCustom: (suspend (id: String) -> CustomEndpointPrefill?)? = null,
 ) {
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
@@ -91,15 +101,20 @@ fun SettingsScreen(
 
     LaunchedEffect(providers, version) {
         configured = runCatching { providers.configured() }.getOrDefault(emptyList())
+        // 只取末 4 位（SecretStore 实现内部在 IO 线程解密），明文不进界面层。
         masks = if (secrets == null) emptyMap() else configured.associateWith { id ->
             val builtIn = presets.any { it.provider == id && it.kind != PresetKind.CUSTOM_OPENAI }
-            KeyText.mask(secrets.get(if (builtIn) KeyText.builtInAlias(id) else KeyText.customAlias(id)))
+            KeyText.maskLast4(runCatching { secrets.last4(if (builtIn) KeyText.builtInAlias(id) else KeyText.customAlias(id)) }.getOrNull())
         }
     }
 
     fun toast(msg: String) = scope.launch { snackbar.showSnackbar(msg) }
 
-    /** 保存后：刷新状态；有引擎就重启，让 pi 读到新的环境变量 / models.json（C4）。 */
+    /**
+     * 保存后：刷新状态；有引擎就重启，让 pi 读到新的环境变量 / models.json（C4）。
+     * 由对话框在关闭**之前**等待它完成；重启放在 [NonCancellable] 里，调用方的协程被取消（例如离开页面）
+     * 也会把重启做完，不会出现 pi 停了没拉起。提示用页面级 [scope] 发出，不依赖对话框。
+     */
     suspend fun afterSave(what: String) {
         version++
         val e = engine
@@ -107,7 +122,8 @@ fun SettingsScreen(
             toast("已保存$what。重新启动 pi 后生效。")
             return
         }
-        when (val r = e.restart("模型配置已更新")) {
+        val r = withContext(NonCancellable) { e.restart("模型配置已更新") }
+        when (r) {
             is Outcome.Ok -> toast("已保存$what，pi 已重新启动")
             is Outcome.Err -> toast("已保存$what，但重启 pi 失败：${r.message}")
         }
@@ -136,13 +152,20 @@ fun SettingsScreen(
             }
             PresetKind.entries.forEach { kind ->
                 item(key = "h-$kind") { Group(kindLabel(kind), kindHint(kind)) }
-                items(presets.filter { it.kind == kind }, key = { "p-${it.provider}" }) { p ->
+                val rows = presets.filter { it.kind == kind } + if (kind == PresetKind.CUSTOM_OPENAI) {
+                    // 用户自己添加的端点各占一行，点开可修改（id 固定，地址与模型预填）。
+                    configured.filter { id -> presets.none { it.provider == id } }.map { id ->
+                        ProviderPreset(id, "自定义：$id", PresetKind.CUSTOM_OPENAI, KeyText.envVarFor(id), null, "")
+                    }
+                } else {
+                    emptyList()
+                }
+                items(rows, key = { "p-${it.provider}" }) { p ->
                     val isOn = configured.contains(p.provider)
                     PresetRow(
                         preset = p,
                         status = when {
-                            p.provider == CUSTOM_OTHER -> configured.filter { id -> presets.none { it.provider == id } }
-                                .takeIf { it.isNotEmpty() }?.let { "已添加：" + it.joinToString("、") } ?: "可添加任意 OpenAI 兼容服务"
+                            p.provider == CUSTOM_OTHER -> "添加新的 OpenAI 兼容服务"
                             isOn -> "已配置 " + (masks[p.provider] ?: "")
                             else -> "未配置"
                         },
@@ -197,12 +220,14 @@ fun SettingsScreen(
         if (p.kind == PresetKind.CUSTOM_OPENAI) {
             CustomDialog(
                 preset = p,
+                existing = configured.contains(p.provider),
+                loadCustom = loadCustom,
                 onDismiss = { editing = null },
                 onSave = { id, url, key, models ->
                     val err = runCatching { providers.upsertCustom(id, url, key, models) }.exceptionOrNull()
                     if (err == null) {
+                        afterSave("「$id」") // 先等重启完成，再关闭对话框
                         editing = null
-                        afterSave("「$id」")
                     }
                     err?.message ?: err?.let { "保存失败" }
                 },
@@ -215,8 +240,8 @@ fun SettingsScreen(
                 onSave = { key ->
                     val err = runCatching { providers.setBuiltInKey(p.provider, key) }.exceptionOrNull()
                     if (err == null) {
+                        afterSave("${p.label} 的 Key") // 先等重启完成，再关闭对话框
                         editing = null
-                        afterSave("${p.label} 的 Key")
                     }
                     err?.message ?: err?.let { "保存失败" }
                 },
@@ -323,10 +348,11 @@ private fun KeyDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (preset.note.isNotBlank()) Text(preset.note, style = MaterialTheme.typography.bodySmall)
+                if (alreadySet) Text("已配置过 Key。不想修改就点「取消」。", style = MaterialTheme.typography.bodySmall)
                 OutlinedTextField(
                     value = key,
                     onValueChange = { key = it; error = null },
-                    label = { Text(if (alreadySet) "新的 API Key（留空不修改）" else "API Key") },
+                    label = { Text(if (alreadySet) "新的 API Key（会替换原来的 Key）" else "API Key") },
                     placeholder = { Text("粘贴 Key，例如 sk-…") },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
@@ -347,16 +373,21 @@ private fun KeyDialog(
                         saving = false
                     }
                 },
-            ) { Text(if (saving) "保存中…" else "保存") }
+            ) { Text(if (saving) "保存并重启 pi…" else "保存") }
         },
         dismissButton = { TextButton(onClick = onDismiss, enabled = !saving) { Text("取消") } },
     )
 }
 
-/** 自定义 OpenAI 兼容端点。 */
+/**
+ * 自定义 OpenAI 兼容端点。
+ * [existing] 为 true 表示修改已有配置：id 固定，Key 可留空（保持原 Key），接口地址与模型由 [loadCustom] 预填。
+ */
 @Composable
 private fun CustomDialog(
     preset: ProviderPreset,
+    existing: Boolean,
+    loadCustom: (suspend (id: String) -> CustomEndpointPrefill?)?,
     onDismiss: () -> Unit,
     onSave: suspend (id: String, baseUrl: String, key: String, models: List<String>) -> String?,
 ) {
@@ -367,6 +398,14 @@ private fun CustomDialog(
     var models by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var saving by remember { mutableStateOf(false) }
+
+    LaunchedEffect(preset.provider, existing) {
+        if (!existing || loadCustom == null) return@LaunchedEffect
+        val pre = runCatching { loadCustom(preset.provider) }.getOrNull() ?: return@LaunchedEffect
+        // 用户还没动过才预填，避免覆盖正在输入的内容
+        if (url.isBlank() || url == preset.defaultBaseUrl.orEmpty()) url = pre.baseUrl.ifBlank { url }
+        if (models.isBlank()) models = pre.modelIds.joinToString(", ")
+    }
     AlertDialog(
         onDismissRequest = { if (!saving) onDismiss() },
         title = { Text(preset.label) },
@@ -387,7 +426,7 @@ private fun CustomDialog(
                 )
                 OutlinedTextField(
                     value = key, onValueChange = { key = it; error = null },
-                    label = { Text("API Key（修改已有配置时可留空）") }, singleLine = true,
+                    label = { Text(if (existing) "API Key（留空 = 保持原来的 Key）" else "API Key") }, singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false),
                     modifier = Modifier.fillMaxWidth(),
@@ -409,7 +448,7 @@ private fun CustomDialog(
                     error = onSave(id, url, key, KeyText.splitModels(models))
                     saving = false
                 }
-            }) { Text(if (saving) "保存中…" else "保存") }
+            }) { Text(if (saving) "保存并重启 pi…" else "保存") }
         },
         dismissButton = { TextButton(onClick = onDismiss, enabled = !saving) { Text("取消") } },
     )

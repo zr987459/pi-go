@@ -83,6 +83,25 @@ class SessionRepositoryTest {
         assertNull(SessionFileParser.parse(f).name)
     }
 
+    @Test fun clearedNameInTailDoesNotFallBackToOldNameInHead() {
+        // 大文件：头部有旧名，尾部最后一条 session_info 把名称清除 → 应为 null，不能回退到旧名
+        val filler = assistant("x".repeat(1000))
+        val lines = mutableListOf(header("g"), user("hi"), info("旧名字"))
+        repeat(300) { lines += filler }
+        lines += info("")
+        val f = writeSession("--x--", "t_g.jsonl", *lines.toTypedArray())
+        assertTrue(f.length() > 4L * SessionFileParser.CHUNK)
+        assertNull(SessionFileParser.parse(f).name)
+    }
+
+    @Test fun nameOnlyInHeadOfLargeFileIsStillFound() {
+        val filler = assistant("x".repeat(1000))
+        val lines = mutableListOf(header("h"), user("hi"), info("头部名字"))
+        repeat(300) { lines += filler }
+        val f = writeSession("--x--", "t_h.jsonl", *lines.toTypedArray())
+        assertEquals("头部名字", SessionFileParser.parse(f).name)
+    }
+
     @Test fun badLinesAreSkipped() {
         val f = writeSession(
             "--x--", "2026-11-03T06-40-00-000Z_d.jsonl",

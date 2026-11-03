@@ -151,6 +151,26 @@ class ProviderConfigStoreTest {
         assertEquals(mapOf("PIGO_KEY_MY_API" to fullKey), s.env())
     }
 
+    @Test fun customIdsMappingToSameEnvVarAreRejected() = runTest {
+        val s = store()
+        s.upsertCustom("my-api", "https://api.example.com/v1", fullKey, listOf("m1"))
+        val e = assertThrows(IllegalArgumentException::class.java) {
+            kotlinx.coroutines.runBlocking {
+                PiProviderConfigStore(secrets, paths).upsertCustom("my_api", "https://other.example.com/v1", "sk-other-key-0000", listOf("m2"))
+            }
+        }
+        assertTrue(e.message!!.contains("PIGO_KEY_MY_API"))
+        assertTrue(e.message!!.contains("my-api"))
+        // 原条目与原 Key 不受影响，也没有写入冲突条目
+        val providers = readJson(paths.modelsJson)["providers"]!!.jsonObject
+        assertEquals(setOf("my-api"), providers.keys)
+        assertEquals(fullKey, secrets.map["key.custom.my-api"])
+        assertNull(secrets.map["key.custom.my_api"])
+        // 同一个 id 再次保存（编辑）不算冲突
+        s.upsertCustom("my-api", "https://api.example.com/v2", "", listOf("m1", "m3"))
+        assertEquals(mapOf("PIGO_KEY_MY_API" to fullKey), s.env())
+    }
+
     @Test fun customValidation() = runTest {
         val s = store()
         fun bad(block: suspend () -> Unit) =

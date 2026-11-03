@@ -22,6 +22,9 @@ object KeyText {
         else -> DOTS + key.takeLast(4)
     }
 
+    /** 由 `SecretStore.last4()` 的结果显示：只拿末 4 位，明文不进界面层；短 Key（last4 为 null）只显示圆点。 */
+    fun maskLast4(last4: String?): String = if (last4.isNullOrEmpty()) DOTS else DOTS + last4
+
     /** 输入框下方的「将保存为 ••••abcd」；没有输入时为 null。 */
     fun preview(raw: String): String? = clean(raw).takeIf { it.isNotEmpty() }?.let(::mask)
 

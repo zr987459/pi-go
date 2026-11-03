@@ -12,6 +12,7 @@ import io.github.zr987459.pigo.core.store.FileSessionRepository
 import io.github.zr987459.pigo.core.store.GuestPaths
 import io.github.zr987459.pigo.core.store.KeystoreSecretStore
 import io.github.zr987459.pigo.core.store.PiProviderConfigStore
+import io.github.zr987459.pigo.feature.settings.CustomEndpointPrefill
 import java.io.File
 
 /**
@@ -44,6 +45,21 @@ object StoreBindings {
     fun launchEnv(mode: Mode, ctx: BindingContext, secrets: SecretStore): LaunchEnvProvider = when (mode) {
         Mode.FAKE -> FakeLaunchEnvProvider()
         Mode.REAL -> realConfig(ctx, secrets)
+    }
+
+    /**
+     * 设置页编辑已有自定义端点时的预填（`SettingsScreen(loadCustom = …)`）。FAKE 模式没有 models.json，返回 null。
+     * 需要 mvp/integration 在 PiGoNavHost 里传给 SettingsScreen。
+     */
+    fun customPrefill(
+        mode: Mode,
+        ctx: BindingContext,
+        secrets: SecretStore,
+    ): (suspend (String) -> CustomEndpointPrefill?)? = when (mode) {
+        Mode.FAKE -> null
+        Mode.REAL -> { id ->
+            realConfig(ctx, secrets).customProviders()[id]?.let { CustomEndpointPrefill(it.baseUrl, it.modelIds) }
+        }
     }
 
     fun sessions(mode: Mode, ctx: BindingContext): SessionRepository = when (mode) {
