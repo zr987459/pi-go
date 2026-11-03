@@ -1,6 +1,7 @@
 package io.github.zr987459.pigo.core.engine
 
 import android.app.Activity
+import android.app.ActivityManager
 import android.app.Application
 import android.app.PendingIntent
 import android.content.Context
@@ -13,9 +14,32 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import java.util.concurrent.atomic.AtomicInteger
 
-/** 以 Activity 的 started 计数判断 App 是否在前台（不依赖 lifecycle-process）。在 Application 创建时注册。 */
+/**
+ * 前台判定（纯逻辑，JVM 可测）：Activity started 计数 > 0，**或**进程重要性为 IMPORTANCE_FOREGROUND（100）。
+ *
+ * 只靠计数不够：引擎（及本类）在 `AppGraph` 里 `by lazy` 创建，首次是在 MainActivity 已 onStart 之后，
+ * 回调注册得晚，计数会停在 0（审查第 1 轮 Important#3）。进程重要性随时可读，不受注册时机影响；
+ * App 退到后台、只剩 EngineService 前台服务时重要性是 FOREGROUND_SERVICE（125），不会误判为前台。
+ */
+class ForegroundDecider(private val started: () -> Int, private val importance: () -> Int?) {
+    fun isForeground(): Boolean = started() > 0 || importance() == IMPORTANCE_FOREGROUND
+
+    companion object {
+        /** = `ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND`。 */
+        const val IMPORTANCE_FOREGROUND = 100
+    }
+}
+
+/** Android 实现：注册 Activity 生命周期回调计数，并用 `ActivityManager.getMyMemoryState` 兜底（见 [ForegroundDecider]）。不依赖 lifecycle-process。 */
 class ActivityVisibility(app: Application) : AppVisibility {
     private val started = AtomicInteger(0)
+    private val decider = ForegroundDecider(started::get) {
+        try {
+            ActivityManager.RunningAppProcessInfo().also { ActivityManager.getMyMemoryState(it) }.importance
+        } catch (e: Exception) {
+            null
+        }
+    }
 
     init {
         app.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
@@ -35,7 +59,7 @@ class ActivityVisibility(app: Application) : AppVisibility {
         })
     }
 
-    override fun isForeground(): Boolean = started.get() > 0
+    override fun isForeground(): Boolean = decider.isForeground()
 }
 
 /**
