@@ -133,6 +133,21 @@ class RpcChannelTest {
         assertTrue(errors.any { it is RpcChannel.ProtocolError.Orphan && it.response.command == "weird" })
     }
 
+    /** 审查第 1 轮 Nit：等待中的请求，其 response 因嵌套过深解析失败时立即以 RPC_REJECTED 结束，不空等超时。 */
+    @Test
+    fun malformedResponseFailsItsRequestImmediately() = runBlocking {
+        val pending = async { channel.request(RpcCommand.GetState("c-7"), timeoutMs = 30_000) }
+        nextCommand()
+        val deep = "[".repeat(3_000_000) + "]".repeat(3_000_000)
+        val started = System.currentTimeMillis()
+        piWrites("""{"id":"c-7","type":"response","command":"get_tree","success":true,"data":{"tree":$deep}}""")
+        val r = pending.await()
+        assertTrue(r is Outcome.Err)
+        assertEquals(ErrCode.RPC_REJECTED, (r as Outcome.Err).code)
+        assertTrue(r.message.contains("会话太大"))
+        assertTrue("不应等到超时", System.currentTimeMillis() - started < 10_000)
+    }
+
     @Test
     fun eofFailsAllPendingRequestsImmediately() = runBlocking {
         val a = async { channel.request(RpcCommand.GetState("c-1"), timeoutMs = 30_000) }
