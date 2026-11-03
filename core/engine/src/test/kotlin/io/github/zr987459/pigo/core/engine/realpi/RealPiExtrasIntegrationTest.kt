@@ -24,6 +24,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
@@ -124,6 +125,58 @@ class RealPiExtrasIntegrationTest {
         val e = entries.entries.single { it.id == secondEntry }
         assertTrue("配到的条目应是「第二句」：${e.preview}", e.preview.contains("第二句"))
     }
+
+    /** 让自动重试的退避足够长（10 s），测试在退避期间停止 / 放弃重试。 */
+    private fun slowRetry() {
+        File(sb.agentDir, "settings.json").writeText(
+            """{"defaultProvider":"mock","defaultModel":"mock-model","defaultThinkingLevel":"medium","retry":{"enabled":true,"maxRetries":3,"baseDelayMs":10000}}""",
+        )
+    }
+
+    /**
+     * 审查第 2 轮 Important 1：真 pi 1.5.0 + 半截后断流（stopReason=error、有部分内容 → 时间线保留失败气泡），
+     * 在 [cancel] 退避期间结束重试（pi 写 context_edit 排除失败条目，发 auto_retry_end{success:false} + agent_settled）。
+     * 之后失败气泡不得有 meta，上一条助手仍配自己的条目，再发一轮也不错位。
+     */
+    private fun stopOrAbortDuringRetryKeepsMetaAligned(cancel: suspend () -> Unit) = runBlocking {
+        slowRetry()
+        engine.start()
+        turn("第一句 #text")
+        until { engine.messageMeta.value.size >= 2 }
+        val a1 = engine.chat.value.items.last { it is ChatItem.Assistant }
+        val a1Entry = engine.messageMeta.value.getValue(a1.key).entryId
+
+        assertTrue(engine.send("第二句 #halfdrop") is Outcome.Ok)
+        until { engine.chat.value.retry != null }
+        cancel()
+        until { !engine.chat.value.running && engine.chat.value.retry == null }
+        val failed = engine.chat.value.items.last { it is ChatItem.Assistant } as ChatItem.Assistant
+        assertEquals("error", failed.stopReason)
+        // 等 pi 把 context_edit 写盘、增量 get_entries 拉到它
+        until { engine.messageMeta.value.size >= 3 }
+        delay(800)
+        var meta = engine.messageMeta.value
+        assertNull("失败气泡不应有 meta：${meta[failed.key]}", meta[failed.key])
+        assertEquals("上一条助手仍配自己的条目", a1Entry, meta[a1.key]?.entryId)
+
+        turn("第三句 #text")
+        val a3 = engine.chat.value.items.last { it is ChatItem.Assistant }
+        until { engine.messageMeta.value[a3.key] != null }
+        meta = engine.messageMeta.value
+        assertEquals(a1Entry, meta[a1.key]?.entryId)
+        assertNull(meta[failed.key])
+        val ids = meta.values.map { it.entryId }
+        assertEquals("meta 不得重复配同一条目：$meta", ids.size, ids.toSet().size)
+        val entries = (engine.entries(null) as Outcome.Ok).value.entries
+        val a3Entry = entries.single { it.id == meta.getValue(a3.key).entryId }
+        assertTrue("新助手应配到「你好，世界」：${a3Entry.preview}", a3Entry.preview.contains("你好"))
+    }
+
+    @Test
+    fun stopDuringRetryBackoffKeepsMetaAligned() = stopOrAbortDuringRetryKeepsMetaAligned { assertTrue(engine.stop() is Outcome.Ok) }
+
+    @Test
+    fun abortRetryDuringBackoffKeepsMetaAligned() = stopOrAbortDuringRetryKeepsMetaAligned { assertTrue(engine.abortRetry() is Outcome.Ok) }
 
     @Test
     fun treeHasAtLeastTwoLevels() = runBlocking {

@@ -209,6 +209,12 @@ class MockOpenAiServer : AutoCloseable {
             )
             lastUser.contains("#retry") && counters.getOrPut(lastUser) { AtomicInteger() }.getAndIncrement() == 0 ->
                 respondJson(ex, 503, """{"error":{"message":"The server is overloaded, please retry","type":"overloaded"}}""")
+            // 流出半截正文后掐断连接：pi 得到带部分内容的 stopReason=error（errorMessage 如 "terminated"），按可重试错误进入自动重试。
+            lastUser.contains("#halfdrop") -> sse(ex) {
+                text("半截")
+                Thread.sleep(50)
+                throw IOException("mock: drop mid-stream")
+            }
             lastUser.contains("#think") -> sse(ex) {
                 reasoning("先想一想")
                 reasoning("：用户要问候。")

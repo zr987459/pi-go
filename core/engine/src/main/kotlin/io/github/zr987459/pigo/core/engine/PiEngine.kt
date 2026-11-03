@@ -639,6 +639,7 @@ class PiEngine(
         c: Conn,
         carry: List<ChatItem.User> = snapshotPendingCarry(),
         live: Boolean = false,
+        sessionReplaced: Boolean = false,
     ): Outcome<Unit> {
         val r = c.channel.request(RpcCommand.GetMessages(ids.next()), config.getMessagesTimeoutMs)
         return if (r is Outcome.Ok) {
@@ -653,7 +654,15 @@ class PiEngine(
             // 不悄悄留下一个空的 / 旧的聊天：明确告诉用户历史没加载出来，以及怎么重试。
             // 崩溃前没送达的消息（carry）此时仍以「发送失败」留在时间线上。
             // 反复重试失败时只留一条提示，不叠加。
-            mutate { reducer.addNotice(withoutHistoryFailed(it), NoticeKind.ERROR, HISTORY_FAILED) }
+            // 同一次归约里作废 messageMeta 簿记（与 openSession 失败一致）：
+            // - sessionReplaced（fork / clone 后）：pi 已是新会话，旧时间线与旧 entryId 都不能再用，清空时间线 + resetMeta，
+            //   界面不会再按旧 entryId 允许「从这里分叉」，下次 message_end 也不会拿旧 lastId 增量、把新会话 entry 配到旧气泡；
+            // - 同一会话（重启后重建、reloadSame）：时间线保留，但簿记重置后全量重拉，不沿用重建前的配对。
+            mutate {
+                val base = withoutHistoryFailed(it)
+                val next = if (sessionReplaced) clearedAll(base) else base.also { s -> resetMeta(s) }
+                reducer.addNotice(next, NoticeKind.ERROR, HISTORY_FAILED)
+            }
             err
         }
     }
@@ -1121,7 +1130,7 @@ class PiEngine(
         refreshState()
         val c = conn ?: return
         clearPendingCarry()
-        rebuildFromMessages(c, carry = emptyList(), live = false)
+        rebuildFromMessages(c, carry = emptyList(), live = false, sessionReplaced = true)
         scope.launch(io) { stats() }
     }
 
