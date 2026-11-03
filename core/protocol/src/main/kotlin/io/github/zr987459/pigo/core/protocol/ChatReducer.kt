@@ -40,6 +40,12 @@ class ChatReducer {
     private var streamingKey: String? = null
     /** 发出后尚未被 pi 的 `message_start(user)` 确认的乐观气泡，按发送顺序。 */
     private val unconfirmed = LinkedHashSet<String>()
+
+    /** 当前会话的工作目录（引擎在启动 / 切换后设置），轮末汇总据此把相对路径转成绝对路径。 */
+    @Volatile var cwd: String? = null
+
+    /** 本轮 agent_start 时时间线最后一条的 key：轮末汇总以它之后为本轮。 */
+    private var turnStartAfterKey: String? = null
     /** 被扩展命令消费（`disposition:"handled"`）的用户气泡：标「已发送」，但不会写入会话文件。 */
     private val notPersisted = HashSet<String>()
 
@@ -81,7 +87,10 @@ class ChatReducer {
     }
 
     private fun reduceEvent(state: ChatState, event: EngineEvent, nowMillis: Long): ChatState = when (event) {
-        is EngineEvent.AgentStart -> state.copy(running = true)
+        is EngineEvent.AgentStart -> {
+            if (!state.running) turnStartAfterKey = state.items.lastOrNull()?.key
+            state.copy(running = true)
+        }
         is EngineEvent.AgentEnd -> state
         is EngineEvent.AgentSettled -> onSettled(state, event.aborted).also { if (!event.aborted) addTurnSummary(it, nowMillis) }
         is EngineEvent.TurnStart, is EngineEvent.TurnEnd -> state
@@ -463,7 +472,7 @@ class ChatReducer {
 
     /** `agent_settled`（未中止）后附加轮末汇总：本轮写过的文件、耗时、输出 token 与速率。没有可显示的内容时不加。 */
     private fun addTurnSummary(state: ChatState, now: Long) {
-        val st = TurnStats.derive(state, turnClock.snapshot(), now)
+        val st = TurnStats.derive(state, turnClock.snapshot(), now, cwd, turnStartAfterKey)
         if (st.startedAtMillis == null) return
         if (st.writtenFiles.isEmpty() && st.durationMs == null && st.outputTokens == null) return
         extras += TimelineExtra.TurnSummary(

@@ -32,8 +32,8 @@ data class TurnStats(
         val EMPTY = TurnStats(false, null, null, null, null, emptyList())
 
         /** 由 [ChatState]（写过的文件）与 [TurnClock] 的计时派生。 */
-        fun derive(state: ChatState, clock: TurnClock.Snapshot, now: Long, cwd: String? = null): TurnStats {
-            val files = TurnFiles.written(state, cwd)
+        fun derive(state: ChatState, clock: TurnClock.Snapshot, now: Long, cwd: String? = null, turnStartAfterKey: String? = null): TurnStats {
+            val files = TurnFiles.written(state, cwd, turnStartAfterKey)
             val start = clock.startedAt
             val end = clock.settledAt
             val running = clock.running
@@ -177,10 +177,15 @@ object TurnFiles {
     private val WRITE_TOOLS = setOf("write", "edit", "multiedit", "multi_edit", "str_replace_editor", "create_file")
     private val PATCH_TOOLS = setOf("apply_patch", "applypatch")
 
-    /** 最后一条用户消息之后（即本轮或上一轮）成功的写文件工具调用的路径；[cwd] 不为空时把相对路径解析成绝对路径。 */
-    fun written(state: ChatState, cwd: String? = null): List<String> {
-        val lastUser = state.items.indexOfLast { it is ChatItem.User }
-        val turn = if (lastUser < 0) state.items else state.items.subList(lastUser + 1, state.items.size)
+    /**
+     * 本轮成功的写文件工具调用的路径；[cwd] 不为空时把相对路径解析成绝对路径。
+     * 本轮起点：[turnStartAfterKey]（agent_start 时时间线最后一条的 key）之后；没有或找不到时退回「最后一条用户消息之后」。
+     * 以 agent_start 为界，轮中 steer 进来的用户消息之前写过的文件不会漏（审查第 1 轮 Nit）。
+     */
+    fun written(state: ChatState, cwd: String? = null, turnStartAfterKey: String? = null): List<String> {
+        val anchor = turnStartAfterKey?.let { k -> state.items.indexOfFirst { it.key == k } } ?: -1
+        val from = if (anchor >= 0) anchor + 1 else state.items.indexOfLast { it is ChatItem.User } + 1
+        val turn = state.items.subList(from.coerceIn(0, state.items.size), state.items.size)
         val seen = LinkedHashSet<String>()
         for (item in turn) {
             val t = item as? ChatItem.Tool ?: continue

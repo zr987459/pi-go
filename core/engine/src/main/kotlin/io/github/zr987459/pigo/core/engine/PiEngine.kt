@@ -258,7 +258,8 @@ class PiEngine(
     private val entriesSignal = Channel<Unit>(Channel.CONFLATED)
 
     /** `bash_execution_update` 的增量，按命令 id 分发给正在收集的 [bash] 流。 */
-    private val bashDeltas = MutableSharedFlow<Pair<String?, String>>(extraBufferCapacity = 1024)
+    /** 每个 [bash] 调用一条无界通道（审查第 1 轮 Nit：共享缓冲满时会丢块）。key 为命令 id。 */
+    private val bashSinks = java.util.concurrent.ConcurrentHashMap<String, Channel<String>>()
 
     /** 最近一次 `set_auto_retry` 成功的值（1.5.0 的 get_state 不返回 autoRetry）。 */
     @Volatile private var autoRetryKnown: Boolean? = null
@@ -319,7 +320,10 @@ class PiEngine(
                 when (event) {
                     // 1.5.0 只为 custom / context_edit / compaction 等发 entry_appended；普通消息不发。一律改为增量拉 get_entries。
                     is EngineEvents.EntryAppended -> { metaEndSeq++; requestEntries() }
-                    is EngineEvents.BashExecutionUpdate -> bashDeltas.tryEmit(event.id to event.delta)
+                    is EngineEvents.BashExecutionUpdate -> {
+                        val id = event.id
+                        if (id == null) bashSinks.values.forEach { it.trySend(event.delta) } else bashSinks[id]?.trySend(event.delta)
+                    }
                     else -> Unit
                 }
                 try {
@@ -557,6 +561,7 @@ class PiEngine(
         lastPiState = st
         sessionFile = st.sessionFile ?: session
         currentCwd = cwd
+        reducer.cwd = cwd
         c.ready = true
         mutate { reducer.applyPiState(it, st) }
         if (rebuild) rebuildFromMessages(c, carry = snapshotPendingCarry(), live = st.isStreaming)
@@ -1291,11 +1296,18 @@ class PiEngine(
         }
         val id = ids.next()
         mutate { reducer.startBash(it, id, command, excludeFromContext) }
-        val relay = launch(start = CoroutineStart.UNDISPATCHED) {
-            bashDeltas.collect { (deltaId, chunk) -> if (deltaId == null || deltaId == id) send(BashEvent.Output(chunk)) }
+        val sink = Channel<String>(Channel.UNLIMITED)
+        bashSinks[id] = sink
+        val relay = launch(start = CoroutineStart.UNDISPATCHED) { for (chunk in sink) send(BashEvent.Output(chunk)) }
+        val r = try {
+            withContext(NonCancellable) { callCmd(RpcCommands.Bash(id, command, excludeFromContext)) }
+        } finally {
+            // 已入队的增量先归约完，再关通道；relay 把剩下的块全部转发后自然结束。
+            withContext(NonCancellable) { mutate { it } }
+            bashSinks.remove(id)
+            sink.close()
         }
-        val r = withContext(NonCancellable) { callCmd(RpcCommands.Bash(id, command, excludeFromContext)) }
-        relay.cancel()
+        relay.join()
         when (r) {
             is Outcome.Ok -> {
                 val rec = ExtraResponses.bash(r.value.data)

@@ -107,4 +107,19 @@ class TurnStatsTest {
         val long = ok.copy(items = listOf(ChatItem.Assistant("a", listOf(ContentBlock.Text(0, "字".repeat(500))), false, "stop")))
         assertEquals(RunResults.PREVIEW_MAX, RunResults.onSettled(long, false, 0, null).lastTextPreview!!.length)
     }
+
+    /** 审查第 1 轮 Nit：以 agent_start 为本轮起点，steer 进来的用户消息之前写过的文件不漏；相对路径按 cwd 转绝对。 */
+    @Test
+    fun turnFilesStartAtAgentStartAndResolveCwd() {
+        fun args(p: String) = RecordCodec.json.parseToJsonElement("""{"path":"$p"}""") as kotlinx.serialization.json.JsonObject
+        val items = listOf(
+            io.github.zr987459.pigo.contract.ChatItem.User("u-0", "改", io.github.zr987459.pigo.contract.Delivery.SENT),
+            io.github.zr987459.pigo.contract.ChatItem.Tool("tool-1", "1", "write", args("a.txt"), io.github.zr987459.pigo.contract.ToolStatus.OK),
+            io.github.zr987459.pigo.contract.ChatItem.User("u-2", "顺便", io.github.zr987459.pigo.contract.Delivery.SENT),
+            io.github.zr987459.pigo.contract.ChatItem.Tool("tool-3", "3", "edit", args("/abs/b.txt"), io.github.zr987459.pigo.contract.ToolStatus.OK),
+        )
+        val st = io.github.zr987459.pigo.contract.ChatState(items = items)
+        assertEquals(listOf("/root/p/a.txt", "/abs/b.txt"), TurnFiles.written(st, "/root/p", turnStartAfterKey = "u-0"))
+        assertEquals("无起点时退回最后一条用户消息之后", listOf("/abs/b.txt"), TurnFiles.written(st, "/root/p"))
+    }
 }
