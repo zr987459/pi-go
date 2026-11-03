@@ -11,5 +11,5 @@
 
 ## 进度
 - 已推（0b14b64）：CI 改为 instr-find + instrumented 两个 job，instr.sh 首行 `set -euo pipefail`，没有测试类时 instrumented 显示「已跳过」并在汇总写明「未运行任何仪器测试」；契约 `SessionHost.runAction` 统一压栈一次、`PiActions.run` 只返回；新增 `PiSettings`、`SessionCatalog` 契约与 `FakePiSettings`、`FakeSessionCatalog`，`SessionHost` 补 `extras/settings/sessions`；FakeScriptedEngine 排队消息按 pi 语义投递、再次 startStream 取消旧流、uiRequests replay=0；sendDraft 保留图片/@引用/!模式、不记空串；DraftState 安全选区与 isEmpty。
-- 正在：本地编译与单测（新增 FakeSessionHostTest 7 条、DraftStateTest 4 条）。
-- 下一步：修编译/测试问题 → 推送 → 等 CI 绿 → status 写完成。
+- 本地：`:core:contract:test` 全过（含新增 FakeSessionHostTest 7 条、DraftStateTest 4 条），`:feature:term:compileDebugKotlin` 通过。
+- 下一步：等 CI 绿 → status 写完成。
