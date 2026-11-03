@@ -9,7 +9,7 @@
 ## 结果
 - core/workspace：WorkspaceFs / AttachmentProcessor / SessionExporter 的真实实现 + WorkspaceServices 装配入口
 - feature/files：文件页、预览、Git 改动与 diff、附件弹层、输出查看器、导出弹层、系统分享入口、系统选择器中转
-- 单测：core/workspace 30 条、feature/files 12 条，本地与 CI 全过
+- 单测：core/workspace 30 条、feature/files 12 条，本地全过；CI 只编译（assembleDebug），不跑单测
 - 仪器测试 / Compose 测试：5 条，已编译出 androidTest APK；本机无 KVM，未能运行
 
 ## 遗留

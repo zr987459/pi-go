@@ -70,6 +70,12 @@ interface ImageCodec<B : Any> {
     fun transform(img: B, orientation: Int, outW: Int, outH: Int): B
     fun encode(img: B, png: Boolean, quality: Int): ByteArray
     fun release(img: B) {}
+
+    /**
+     * 非 JPEG（HEIC/HEIF、WebP、PNG 等）的 EXIF 方向（1–8）；读不到返回 null（按 1 处理）。
+     * JPEG 由 [ExifOrientation] 解析，不经这里。Android 实现用 `androidx.exifinterface`。
+     */
+    fun orientation(bytes: ByteArray): Int? = null
 }
 
 class ImagePrepException(message: String) : Exception(message)
@@ -95,7 +101,8 @@ class ImagePrep<B : Any>(
         val (w0, h0) = codec.bounds(bytes) ?: throw ImagePrepException("无法识别的图片格式")
         if (w0 <= 0 || h0 <= 0) throw ImagePrepException("无法识别的图片格式")
         val mime = sniffMime(bytes) ?: mimeHint
-        val orientation = if (mime == "image/jpeg") ExifOrientation.read(bytes) else 1
+        val orientation = if (mime == "image/jpeg") ExifOrientation.read(bytes)
+        else (runCatching { codec.orientation(bytes) }.getOrNull()?.takeIf { it in 1..8 } ?: 1)
         val swap = ExifOrientation.swapsAxes(orientation)
         val ow = if (swap) h0 else w0
         val oh = if (swap) w0 else h0

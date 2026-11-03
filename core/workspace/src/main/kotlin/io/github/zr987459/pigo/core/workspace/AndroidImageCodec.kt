@@ -5,9 +5,11 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Paint
+import androidx.exifinterface.media.ExifInterface
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 
-/** [ImageCodec] 的 Android 实现（Bitmap）。EXIF 方向由 [ExifOrientation] 读出后在这里一次性旋转 + 缩放。 */
+/** [ImageCodec] 的 Android 实现（Bitmap）。EXIF 方向（JPEG 由 [ExifOrientation]、其他格式由 [orientation]）读出后在这里一次性旋转 + 缩放。 */
 object AndroidImageCodec : ImageCodec<Bitmap> {
     override fun bounds(bytes: ByteArray): Pair<Int, Int>? {
         val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -67,6 +69,13 @@ object AndroidImageCodec : ImageCodec<Bitmap> {
         c.drawBitmap(img, 0f, 0f, null)
         return b
     }
+
+    /** HEIC/HEIF、WebP、PNG 等的 EXIF 方向（JPEG 走 [ExifOrientation]）。 */
+    override fun orientation(bytes: ByteArray): Int? = runCatching {
+        ExifInterface(ByteArrayInputStream(bytes))
+            .getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_UNDEFINED)
+            .takeIf { it in 1..8 }
+    }.getOrNull()
 
     override fun release(img: Bitmap) {
         if (!img.isRecycled) img.recycle()

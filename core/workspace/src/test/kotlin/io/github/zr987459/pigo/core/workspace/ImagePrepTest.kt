@@ -208,6 +208,28 @@ class ImagePrepTest {
         assertEquals(784, r.height)
     }
 
+    /** 审查第 1 轮：非 JPEG（HEIC/HEIF 等）的方向经 codec.orientation 读取并摆正。 */
+    @Test
+    fun nonJpegOrientationComesFromCodec() {
+        // TestCodec 的格式以 FFD8FF 开头会被识别成 JPEG；前面加 4 字节 "ftyp" 模拟 HEIC 文件头（sniffMime 识别不出 → 用 mimeHint）。
+        val prefix = "ftyp".toByteArray()
+        fun strip(b: ByteArray) = b.copyOfRange(prefix.size, b.size)
+        fun heicCodec(o: Int?) = object : ImageCodec<Raster> by TestCodec {
+            override fun bounds(bytes: ByteArray) = TestCodec.bounds(strip(bytes))
+            override fun decode(bytes: ByteArray, sampleSize: Int) = TestCodec.decode(strip(bytes), sampleSize)
+            override fun orientation(bytes: ByteArray): Int? = o
+        }
+        val heic = prefix + TestCodec.write(Raster(400, 200, IntArray(400 * 200), alpha = false))
+        assertEquals(null, ImagePrep.sniffMime(heic))
+        val r = ImagePrep(heicCodec(6)).prepare(heic, "image/heic")
+        assertEquals(200, r.width)
+        assertEquals(400, r.height)
+        // 读不到方向（null）时按 1 处理，不旋转
+        val plain = ImagePrep(heicCodec(null)).prepare(heic, "image/heic")
+        assertEquals(400, plain.width)
+        assertEquals(200, plain.height)
+    }
+
     @Test
     fun garbageIsRejectedWithChineseMessage() {
         try {
