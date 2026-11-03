@@ -66,12 +66,12 @@ class TermScreenSnapshotTest {
                 cost = 0.042, latestCacheHitRate = 85.1, contextPercent = 38.0, contextWindow = 200000, modelId = "claude-sonnet-4.5", provider = "anthropic",
                 reasoning = true, thinkingLevel = "high", availableProviderCount = 2,
             ),
-            cols - 5,
+            cols, reserveFirstLine = 5,
         )
-        out += TermLine(f[0])
-        out += TermLine(f[1] + Span(" [UI]", "accent", bold = true))
+        out += TermLine(f[0] + Span(" ".repeat(cols - 4 - CellWidth.width(f[0].joinToString("") { it.text }))) + Span("[UI]", "accent", bold = true))
+        out += TermLine(f[1])
         out += TermLine(emptyList())
-        out += TermLine(listOf(Span(" Esc  Tab  ⇣  ↑队  ^C  ⌃O  ⌕  ⇞⇟  ⤢  /  @  !  📎  ⇄UI  ⏎", "muted")))
+        out += TermLine(listOf(Span(CellWidth.clip(" Esc  Tab  ⇣  ↑队  ^C  ⌃O  ⌕  ⇞⇟  ⤢  /  @  !  📎  ⇄UI  ⏎", cols), "muted"))) // 键条可横滑，快照只画首屏
         return out
     }
 

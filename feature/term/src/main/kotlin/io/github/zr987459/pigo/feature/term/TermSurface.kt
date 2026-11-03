@@ -405,7 +405,7 @@ private fun TermScreen(
                 thinkingLevel = chat.thinkingLevel, availableProviderCount = 2,
                 extensionStatuses = surfaceExt.statuses,
             )
-            val lines = Footer.render(input, cols - 5)
+            val lines = Footer.render(input, cols, reserveFirstLine = 5)
             Column(Modifier.testTag("term:footer")) {
                 lines.forEachIndexed { i, l ->
                     Row {
@@ -420,8 +420,8 @@ private fun TermScreen(
                             }
                             Text(spansToAnnotated(listOf(s), tokens), style = monoStyle(fontSp.sp, tokens), softWrap = false, maxLines = 1, modifier = m)
                         }
-                        if (i == 1) Text(
-                            spansToAnnotated(listOf(Span(" [UI]", "accent", bold = true)), tokens), style = monoStyle(fontSp.sp, tokens),
+                        if (i == 0) Text(
+                            spansToAnnotated(listOf(Span(" ".repeat((cols - 4 - CellWidth.width(l.joinToString("") { it.text })).coerceAtLeast(1)) + "[UI]", "accent", bold = true)), tokens), style = monoStyle(fontSp.sp, tokens),
                             modifier = Modifier.clickable { toggleForm() }.testTag("term:footer:ui"),
                         )
                     }

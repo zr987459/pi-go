@@ -40,7 +40,7 @@ data class FooterInput(
 /**
  * 页脚（DESIGN-r3 §3.1、§7.3 FooterSnapshotTest）：逐行移植 pi 1.5.0 `modes/interactive/components/footer.js` 的 `render(width)`，
  * 排版、数字格式、截断顺序一致；另外给 cwd 段与模型段打上可点标记（`cwd` / `model`），并在右端加 `[UI]` 键帽（形态切换，§5.2）。
- * `[UI]` 键帽不计入 pi 的排版宽度：调用方把 [width] 设为可用列数减去键帽宽度。
+ * `[UI]` 键帽放在第一行（cwd 行）末尾：[reserveFirstLine] 列从 cwd 行扣除，第二行（统计 + 模型）仍按 pi 的整宽排版。
  */
 object Footer {
     fun formatTokens(count: Long): String = when {
@@ -69,7 +69,7 @@ object Footer {
 
     private fun sanitize(t: String) = t.replace(Regex("[\r\n\t]"), " ").replace(Regex(" +"), " ").trim()
 
-    fun render(i: FooterInput, width: Int): List<Line> {
+    fun render(i: FooterInput, width: Int, reserveFirstLine: Int = 0): List<Line> {
         var pwd = formatCwd(i.cwd, i.home)
         if (!i.gitBranch.isNullOrEmpty()) pwd = "$pwd (${i.gitBranch})"
         if (!i.sessionName.isNullOrEmpty()) pwd = "$pwd • ${i.sessionName}"
@@ -128,7 +128,7 @@ object Footer {
         if (rightShown.isNotEmpty()) line2 += Span(rightShown, "dim", segment = "model")
 
         val lines = mutableListOf<Line>(
-            listOf(Span(CellWidth.truncate(pwd, width, "..."), "dim", segment = "cwd")),
+            listOf(Span(CellWidth.truncate(pwd, (width - reserveFirstLine).coerceAtLeast(4), "..."), "dim", segment = "cwd")),
             line2,
         )
         if (i.extensionStatuses.isNotEmpty()) {
