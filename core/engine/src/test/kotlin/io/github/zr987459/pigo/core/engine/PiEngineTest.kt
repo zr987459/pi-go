@@ -844,6 +844,9 @@ class PiEngineTest {
         assertEquals(ErrCode.RPC_TIMEOUT, (e.send("慢") as Outcome.Err).code)
         assertEquals(Delivery.FAILED, (e.chat.value.items.single() as ChatItem.User).delivery)
         waitFor { e.chat.value.running }
+        // agent_start 与 user message_start 由同一个脚本任务先后发出：running 变真时 message_start 可能还没归约完
+        // （CI 上偶发 expected SENT but was FAILED）。等确认到达再断言「只有一条且已发送」。
+        waitFor { e.chat.value.items.filterIsInstance<ChatItem.User>().any { it.delivery == Delivery.SENT } }
         val users = e.chat.value.items.filterIsInstance<ChatItem.User>()
         assertEquals(1, users.size)
         assertEquals(Delivery.SENT, users.single().delivery)
