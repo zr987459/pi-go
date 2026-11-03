@@ -10,22 +10,42 @@ import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import io.github.zr987459.pigo.core.ui.AppBackdrop
+import io.github.zr987459.pigo.core.ui.AppIcons
+import io.github.zr987459.pigo.core.ui.ChromeIconButton
+import io.github.zr987459.pigo.core.ui.DshTheme
+import io.github.zr987459.pigo.core.ui.GlassTier
+import io.github.zr987459.pigo.feature.settings.ui.DshFilledButton
+import io.github.zr987459.pigo.feature.settings.ui.DshOutlinedButton
+import io.github.zr987459.pigo.feature.settings.ui.ExpandRow
+import io.github.zr987459.pigo.feature.settings.ui.LargeTitle
+import io.github.zr987459.pigo.feature.settings.ui.SettingsHues
+import io.github.zr987459.pigo.feature.settings.ui.SettingsSection
+import io.github.zr987459.pigo.feature.settings.ui.SettingsTile
+import io.github.zr987459.pigo.feature.settings.ui.StepRow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
@@ -37,6 +57,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
  *
  * 「首次进入聊天时引导」：聊天页（mvp/chat-ui）或 mvp/integration 在进入聊天时调用
  * `if (BackgroundGuide.shouldShow(context)) 显示 BackgroundGuideDialog`，关闭后自动记为已提示。
+ * 界面照 dsh-Go `app/lib/ui/settings/background_guide_page.dart`：分组卡 + 编号步骤 + 可展开的其他品牌说明。
  */
 object BackgroundGuide {
     private const val PREFS = "pigo_background_guide"
@@ -91,7 +112,10 @@ object BackgroundGuide {
     }
 }
 
-/** 引导内容（设置页与首次弹窗共用）。 */
+/**
+ * 引导内容（设置页的后台运行页与首次弹窗共用），dsh-Go 后台引导页的分组：
+ * 「你的手机」厂商自启动入口 →「系统」电池优化状态 →「保持在线」分步说明 → 其他品牌（可展开）→ Android 12+ 子进程限制。
+ */
 @Composable
 fun BackgroundGuideContent(modifier: Modifier = Modifier) {
     val context = LocalContext.current
@@ -103,33 +127,43 @@ fun BackgroundGuideContent(modifier: Modifier = Modifier) {
         ignoring = BackgroundGuide.isIgnoringBatteryOptimizations(context)
     }
 
-    Column(modifier.testTag("settings:backgroundGuide"), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(
-            "pi 在后台跑任务时，手机系统可能为了省电把它关掉。按下面两步设置后，切到其他 App 或锁屏也能继续运行。",
-            style = MaterialTheme.typography.bodyMedium,
-        )
-        Text("你的手机：${vendor.label}", style = MaterialTheme.typography.labelMedium)
-
-        Text("第一步：关闭电池优化", style = MaterialTheme.typography.titleSmall)
-        if (ignoring) {
-            Text("✓ 已关闭，pi-go 不受电池优化限制。", color = MaterialTheme.colorScheme.primary)
-        } else {
-            Button(onClick = { BackgroundGuide.requestIgnoreBatteryOptimizations(context) }, modifier = Modifier.fillMaxWidth()) {
-                Text("允许 pi-go 在后台运行")
-            }
+    Column(modifier.testTag("settings:backgroundGuide")) {
+        SettingsSection(vendor.label, footer = autostartHint) {
+            SettingsTile(
+                title = "允许自启动 / 后台活动",
+                icon = AppIcons.autostart,
+                tint = SettingsHues.GENERAL,
+                subtitle = RomGuide.steps(vendor).first(),
+                chevron = true,
+                onTap = {
+                    val ok = BackgroundGuide.openAutostart(context)
+                    autostartHint = if (ok) null else "没找到厂商的自启动页面，已打开应用详情，请按下面的说明手动设置。"
+                },
+                modifier = Modifier.testTag("settings:openAutostart"),
+            )
         }
-
-        Text("第二步：允许自启动 / 后台活动", style = MaterialTheme.typography.titleSmall)
-        RomGuide.steps(vendor).forEachIndexed { i, s -> Text("${i + 1}. $s", style = MaterialTheme.typography.bodySmall) }
-        OutlinedButton(
-            onClick = {
-                val ok = BackgroundGuide.openAutostart(context)
-                autostartHint = if (ok) null else "没找到厂商的自启动页面，已打开应用详情，请按上面的说明手动设置。"
-            },
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text("打开自启动设置") }
-        autostartHint?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
-
+        SettingsSection("系统") {
+            SettingsTile(
+                title = "电池优化",
+                icon = AppIcons.keepAlive,
+                tint = SettingsHues.GENERAL,
+                value = if (ignoring) "已关闭" else "未关闭",
+                valueColor = if (ignoring) DshTheme.colors.success else DshTheme.colors.warning,
+                onTap = if (ignoring) {
+                    null
+                } else {
+                    { BackgroundGuide.requestIgnoreBatteryOptimizations(context); Unit }
+                },
+                modifier = Modifier.testTag("settings:batteryOptimization"),
+            )
+        }
+        SettingsSection("保持在线") {
+            RomGuide.steps(vendor).forEachIndexed { i, s -> StepRow(i + 1, s) }
+        }
+        val others = RomGuide.Vendor.entries.filter { it != vendor && it != RomGuide.Vendor.OTHER }
+        SettingsSection(if (vendor == RomGuide.Vendor.OTHER) "手机品牌" else "其他品牌") {
+            others.forEach { v -> ExpandRow(v.label, RomGuide.steps(v)) }
+        }
         if (RomGuide.needsPhantomNotice(Build.VERSION.SDK_INT)) {
             PhantomProcessNotice()
         }
@@ -139,9 +173,40 @@ fun BackgroundGuideContent(modifier: Modifier = Modifier) {
 /** Android 12+ 幻影进程限制说明（诊断页也可以直接复用）。 */
 @Composable
 fun PhantomProcessNotice(modifier: Modifier = Modifier) {
-    Column(modifier.testTag("settings:phantomNotice"), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(RomGuide.PHANTOM_TITLE, style = MaterialTheme.typography.titleSmall)
-        Text(RomGuide.PHANTOM_TEXT, style = MaterialTheme.typography.bodySmall)
+    SettingsSection(RomGuide.PHANTOM_TITLE, modifier.testTag("settings:phantomNotice")) {
+        Text(
+            RomGuide.PHANTOM_TEXT,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+        )
+    }
+}
+
+/**
+ * 「后台运行」整页（dsh-Go `BackgroundGuidePage` 的 AppPage.list：返回圆钮 + 大标题 + 副标题 + 分组）。
+ * 设置页没有自己的导航，所以用全屏 Dialog 承载；[footer] 放首次弹窗的按钮。
+ */
+@Composable
+fun BackgroundGuidePage(onClose: () -> Unit, footer: (@Composable () -> Unit)? = null) {
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        AppBackdrop(Modifier.testTag("page:backgroundGuide")) {
+            Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+                Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    ChromeIconButton(AppIcons.back, "返回", onClose, size = 44.dp, tier = GlassTier.Pill)
+                }
+                Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+                    LargeTitle(
+                        "后台运行",
+                        subtitle = "pi 在后台跑任务时，手机系统可能为了省电把它关掉。按下面的设置后，切到其他 App 或锁屏也能继续运行。",
+                    )
+                    BackgroundGuideContent()
+                }
+                if (footer != null) {
+                    Box(Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 16.dp)) { footer() }
+                }
+            }
+        }
     }
 }
 
@@ -153,11 +218,10 @@ fun BackgroundGuideDialog(onDismiss: () -> Unit) {
         BackgroundGuide.markShown(context)
         onDismiss()
     }
-    AlertDialog(
-        onDismissRequest = close,
-        title = { Text("让 pi 在后台也能继续干活") },
-        text = { BackgroundGuideContent(Modifier.verticalScroll(rememberScrollState())) },
-        confirmButton = { TextButton(onClick = close) { Text("设置好了") } },
-        dismissButton = { TextButton(onClick = close) { Text("以后再说（可在设置里找到）") } },
-    )
+    BackgroundGuidePage(onClose = close) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            DshFilledButton("设置好了", close, Modifier.fillMaxWidth())
+            DshOutlinedButton("以后再说（可在设置里找到）", close, Modifier.fillMaxWidth())
+        }
+    }
 }
