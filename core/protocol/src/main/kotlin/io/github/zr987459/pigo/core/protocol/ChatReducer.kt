@@ -305,7 +305,15 @@ class ChatReducer {
         val confirmedCount = base.items.count { it is ChatItem.User && it.delivery == Delivery.SENT && it.key !in notPersisted }
         reset()
         // 队列与上下文占用属于进程 / 旧会话：重建后以新的 queue_update、get_session_stats 为准。
-        var s = base.copy(items = emptyList(), running = false, retry = null, queue = QueueSnapshot.EMPTY, contextPercent = null)
+        // 例外：live（同一进程里仍在生成）时保留 running 与队列，否则会被当成「这一轮结束」（释放唤醒锁、停止键消失）。
+        val keepRun = live && base.running
+        var s = base.copy(
+            items = emptyList(),
+            running = keepRun,
+            retry = null,
+            queue = if (keepRun) base.queue else QueueSnapshot.EMPTY,
+            contextPercent = null,
+        )
         for (m in messages) {
             val o = m as? JsonObject ?: continue
             s = when (val role = o.str("role")) {

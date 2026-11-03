@@ -1133,4 +1133,56 @@ class PiEngineTest {
         assertTrue(e.chat.value.items.filterIsInstance<ChatItem.User>().none { it.text == "旧会话的消息" })
         e.close()
     }
+
+    @Test
+    fun reopeningSameSessionWhileGeneratingDoesNotEndTheTurn() = runBlocking {
+        // 定点核实：生成中在抽屉里点当前会话，不能把这一轮当成结束（running、唤醒锁、队列、流式中的消息都保留）。
+        val rt = ScriptedRuntime { _ ->
+            { cmd ->
+                when (cmd.str("type")) {
+                    "prompt" -> if (cmd.str("streamingBehavior") == null) {
+                        ok(cmd, """{"disposition":"started"}""")
+                        emit("""{"type":"agent_start"}""")
+                        emit("""{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"${cmd.str("message")}"}]}}""")
+                        emit("""{"type":"message_start","message":{"role":"assistant","content":[],"stopReason":"pending"}}""")
+                        emit("""{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"输出到一半"}}""")
+                    } else {
+                        ok(cmd, """{"disposition":"queued"}""")
+                        emit("""{"type":"queue_update","steering":[],"followUp":["${cmd.str("message")}"]}""")
+                    }
+                    else -> basics(cmd)
+                }
+            }
+        }
+        val e = engine(rt)
+        e.send("开始")
+        waitFor { e.chat.value.items.any { it is ChatItem.Assistant } && wake.isHeld }
+        e.send("排队的", SendMode.FOLLOW_UP)
+        waitFor { e.chat.value.queue.followUp == listOf("排队的") }
+        assertTrue(e.openSession(s1, "/root/pi-cwd") is Outcome.Ok)
+        assertTrue(e.reloadHistory() is Outcome.Ok)
+        delay(100)
+        val chat = e.chat.value
+        assertTrue(chat.running)
+        assertTrue(wake.isHeld)
+        assertTrue(e.status.value is EngineStatus.Running)
+        assertEquals(listOf("排队的"), chat.queue.followUp)
+        assertTrue("流式中的消息没被历史快照替换", chat.items.any { it is ChatItem.Assistant })
+        assertEquals("生成中不重建", 0, rt.last.received.count { it.str("type") == "get_messages" })
+        e.close()
+    }
+
+    @Test
+    fun repeatedHistoryFailuresShowOneNotice() = runBlocking {
+        val failHistory = java.util.concurrent.atomic.AtomicBoolean(false)
+        val rt = crashThenHistoryFails(failHistory)
+        val e = engine(rt)
+        e.send("待保留消息")
+        waitFor { e.status.value is EngineStatus.Idle && e.chat.value.items.any { it.isNotice(NoticeKind.ERROR, "历史记录加载失败") } }
+        assertTrue(e.openSession(s1, "/root/pi-cwd") is Outcome.Err)
+        assertTrue(e.reloadHistory() is Outcome.Err)
+        assertEquals(1, e.chat.value.items.count { it.isNotice(NoticeKind.ERROR, "历史记录加载失败") })
+        assertTrue(e.chat.value.items.any { it is ChatItem.User && it.text == "待保留消息" && it.delivery == Delivery.FAILED })
+        e.close()
+    }
 }

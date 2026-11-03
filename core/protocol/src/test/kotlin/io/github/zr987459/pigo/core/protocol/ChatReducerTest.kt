@@ -345,4 +345,19 @@ class ChatReducerTest {
         assertEquals(listOf("继续", "别的", "继续"), users.map { it.text })
         assertEquals(Delivery.FAILED, users.last().delivery)
     }
+
+    @Test
+    fun liveRebuildKeepsRunningAndQueue() {
+        var s = r.addPendingUser(ChatState(), "local-0", "开始")
+        s = r.reduce(s, ev("""{"type":"agent_start"}"""), 0)
+        s = r.reduce(s, userStart("开始"), 0)
+        s = r.reduce(s, ev("""{"type":"queue_update","steering":["插话"],"followUp":["排队"]}"""), 0)
+        val live = r.fromMessages(arr("""{"role":"user","content":"开始"}"""), base = s, live = true)
+        assertTrue(live.running)
+        assertEquals(listOf("插话"), live.queue.steering)
+        assertEquals(listOf("排队"), live.queue.followUp)
+        val idle = r.fromMessages(arr("""{"role":"user","content":"开始"}"""), base = s, live = false)
+        assertFalse(idle.running)
+        assertTrue(idle.queue.isEmpty)
+    }
 }
