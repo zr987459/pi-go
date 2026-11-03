@@ -1,6 +1,8 @@
 # feat/commands（W4）状态
 
-> **审查第 1 轮修复：修复1（带图对账）、修复2（自动命名传 Key 环境变量）、修复3（会话扫描流式读取）、修复4（分叉 A→null→B）完成；Nit 草稿迁移、索引不清标记完成，Nit 汇率改用契约 AppSettingsStore 完成，收尾中**（2026-11-03 15:5x CST 接手，基于 d2ac502）：先 merge origin/main（f1f0e02），再逐条修 Important 1–4、Nit 1–4，每条单独提交。
+> **审查第 1 轮修复：已全部推送，等待 CI**（2026-11-03 CST）：先普通 merge origin/main（f1f0e02，06de1a5），Important 1–4 与 Nit 1–3 已修并补单测，逐条提交：a886619（带图对账）、29fd67d（自动命名传 Key 环境）、e329d33（扫描流式读取）、8db7809（分叉 A→null→B + 新会话草稿迁移）、cfad565（索引不清标记、回收站保留标记）、520e6c9（汇率改用契约 AppSettingsStore）。本地 JVM 单测 chat 90/90、commands 23/23、usage 10/10。
+>
+> Nit 4（androidTest：UsageScreensTest、CommandPaletteTest）**仍未运行**：本环境是 aarch64 云沙盒，没有 Android SDK 和模拟器，CI 也只跑 assembleDebug。同样的逻辑由 JVM 单测 UsageLogicTest 覆盖；建议由 W5 的仪器冒烟测试一并在模拟器上跑。
 
 **状态：实现与单测完成，已推送，等待 CI**（2026-11-03 15:40 CST）
 
