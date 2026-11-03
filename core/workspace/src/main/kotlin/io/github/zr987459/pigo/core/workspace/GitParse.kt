@@ -123,6 +123,8 @@ object GitParse {
         var hHeader = ""
         var hOld = 0; var hOldN = 0; var hNew = 0; var hNewN = 0
         var oldNo = 0; var newNo = 0
+        // 当前 hunk 已读到的旧侧 / 新侧行数（累加计数，避免每行对整个 hunk 重新 count 的 O(n²)）。
+        var seenOld = 0; var seenNew = 0
         var started = false
 
         fun closeHunk() {
@@ -142,16 +144,16 @@ object GitParse {
             val c = cur
             if (c != null) {
                 // 按 hunk 头里的行数判断是否还在 hunk 内：内容以 "+++ "/"--- " 开头的行也不会被误认成文件头。
-                val o = c.count { it.type == LineType.DEL || it.type == LineType.CONTEXT }
-                val n = c.count { it.type == LineType.ADD || it.type == LineType.CONTEXT }
+                val o = seenOld
+                val n = seenNew
                 val inside = o < hOldN || n < hNewN
                 if (line.startsWith("\\")) { c += Line(LineType.NO_NEWLINE, line, null, null); continue }
                 if (inside) {
                     when {
-                        line.startsWith("+") && n < hNewN -> { c += Line(LineType.ADD, line.substring(1), null, newNo++); continue }
-                        line.startsWith("-") && o < hOldN -> { c += Line(LineType.DEL, line.substring(1), oldNo++, null); continue }
+                        line.startsWith("+") && n < hNewN -> { c += Line(LineType.ADD, line.substring(1), null, newNo++); seenNew++; continue }
+                        line.startsWith("-") && o < hOldN -> { c += Line(LineType.DEL, line.substring(1), oldNo++, null); seenOld++; continue }
                         (line.startsWith(" ") || line.isEmpty()) && o < hOldN && n < hNewN -> {
-                            c += Line(LineType.CONTEXT, line.removePrefix(" "), oldNo++, newNo++); continue
+                            c += Line(LineType.CONTEXT, line.removePrefix(" "), oldNo++, newNo++); seenOld++; seenNew++; continue
                         }
                     }
                 }
@@ -176,6 +178,7 @@ object GitParse {
                     hOld = m.groupValues[1].toInt(); hOldN = m.groupValues[2].ifEmpty { "1" }.toInt()
                     hNew = m.groupValues[3].toInt(); hNewN = m.groupValues[4].ifEmpty { "1" }.toInt()
                     oldNo = hOld; newNo = hNew
+                    seenOld = 0; seenNew = 0
                     cur = ArrayList()
                 }
             }
@@ -191,6 +194,8 @@ object GitParse {
 
     /** 未跟踪文件的「全部新增」diff（参考 Pi-Web `createAddedFilePatch`）。 */
     fun addedFilePatch(path: String, content: String): String {
+        // 空文件：与 git 对空的新文件的输出一致，只有文件头、没有 hunk（不显示一行空白新增和「No newline」）。
+        if (content.isEmpty()) return "diff --git a/$path b/$path\nnew file mode 100644"
         val trailing = content.endsWith("\n")
         val lines = content.split('\n').toMutableList()
         if (trailing) lines.removeAt(lines.lastIndex)

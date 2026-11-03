@@ -64,8 +64,9 @@ class WorkspaceAttachments<B : Any>(
     override suspend fun importFile(fileName: String, input: InputStream, cwd: String, maxBytes: Long): Outcome<Attachment.FileRef> =
         withContext(io) {
             try {
-                workspace.allowRoot(cwd)
                 val dir = uploadDir(cwd, LocalDate.now(clock))
+                // 只放行本次的上传目录（<cwd>/.pi/uploads/<日期>），不把整个 cwd 加入允许范围。
+                workspace.allowRoot(dir)
                 Outcome.Ok(Attachment.FileRef(workspace.importInto(fileName, input, dir, maxBytes)))
             } catch (e: TooLargeException) {
                 Outcome.Err(ErrCode.UNKNOWN, "文件超过 ${maxBytes / (1024 * 1024)} MB，无法作为附件", e)

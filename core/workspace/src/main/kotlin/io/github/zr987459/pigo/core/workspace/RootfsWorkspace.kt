@@ -161,7 +161,7 @@ class RootfsWorkspace(
     // ------------------------------------------------------------------ git
 
     override suspend fun gitStatus(cwd: String): Outcome<GitStatus> = guarded {
-        allowRoot(cwd)
+        // 只检查不扩大：cwd 必须已由 roots(sessionCwd) 或装配层 allowRoot 登记过，否则 resolve 抛 PathDenied。
         val dir = paths().resolve(cwd)
         val top = git(dir, "rev-parse", "--show-toplevel")
         if (top.exitCode != 0) return@guarded GitStatus(isRepo = false)
@@ -189,7 +189,6 @@ class RootfsWorkspace(
 
     /** [path]：相对仓库根的路径（GitStatus.files 里的形式）或容器绝对路径。 */
     override suspend fun gitDiff(cwd: String, path: String?, staged: Boolean): Outcome<List<FileDiff>> = guarded {
-        allowRoot(cwd)
         val dir = paths().resolve(cwd)
         val args = ArrayList(listOf("-c", "core.quotepath=off", "diff", "--no-color", "--no-ext-diff", "--unified=3"))
         if (staged) args += "--cached"
@@ -197,18 +196,18 @@ class RootfsWorkspace(
         if (path != null) { args += "--"; args += if (path.startsWith("/")) path else ":(top)$path" }
         val r = git(dir, *args.toTypedArray(), timeoutMs = 30_000)
         if (r.exitCode != 0) throw IOException(gitError(r))
-        var diffs = GitParse.unifiedDiff(r.stdout).map(::toContract)
-        // 未跟踪文件 git diff 不输出：单文件时按「全部新增」生成（参考 Pi-Web createAddedFilePatch）。
+        // GuestRunner 的 stdout 上限为 1 MB（maxOutputBytes），到顶时最后一个文件可能不全：丢掉它并标记截断。
+        val nearLimit = r.stdout.length >= DIFF_TRUNCATE_THRESHOLD
+        var diffs = GitParse.unifiedDiff(r.stdout).let { if (nearLimit && it.isNotEmpty()) it.dropLast(1) else it }.map(::toContract)
+        if (nearLimit) throw DiffTooLargeException(diffs)
+        // 未跟踪文件 git diff 不输出：只有确认「未跟踪且未被忽略」时才按「全部新增」生成（参考 Pi-Web createAddedFilePatch）。
+        // 干净的已跟踪文件、只有暂存改动的文件、被 .gitignore 忽略的文件都返回空表。
         if (diffs.isEmpty() && path != null && !staged) {
-            val top = gitRoot(cwd)
-            val rel = path.removePrefix("/")
-            val guest = when {
-                path.startsWith("/") -> path
-                top != null -> GuestPaths.child(top, rel)
-                else -> GuestPaths.child(dir, rel)
-            }
-            val ps = paths()
-            val f = runCatching { ps.hostFile(guest) }.getOrNull()
+            val top = gitRoot(cwd) ?: return@guarded diffs
+            val rel = repoRelative(top, path) ?: return@guarded diffs
+            val untracked = git(dir, "ls-files", "--others", "--exclude-standard", "-z", "--", ":(top,literal)$rel")
+            if (untracked.exitCode != 0 || untracked.stdout.split('\u0000').none { it == rel }) return@guarded diffs
+            val f = runCatching { paths().hostFile(GuestPaths.child(top, rel)) }.getOrNull()
             if (f != null && f.isFile && f.length() <= WorkspaceFs.DEFAULT_MAX_TEXT_BYTES && !looksBinary(f)) {
                 diffs = GitParse.unifiedDiff(GitParse.addedFilePatch(rel, f.readText())).map(::toContract)
             }
@@ -281,6 +280,23 @@ class RootfsWorkspace(
 
     companion object {
         const val HOME = "/root"
+
+        /** 略低于 GuestRunner 的 1 MB 输出上限（按字符计，多字节内容会更早到顶，宁可多报截断）。 */
+        internal const val DIFF_TRUNCATE_THRESHOLD = (1 shl 20) - 4096
+
+        /**
+         * 把 [path]（相对仓库根，或容器绝对路径）换成相对仓库根 [top] 的路径；在仓库外或含 `..` 返回 null。
+         * diff 头与 `ls-files` 都用这个相对路径。
+         */
+        internal fun repoRelative(top: String, path: String): String? {
+            val rel = if (path.startsWith("/")) {
+                val norm = runCatching { GuestPaths.normalize(path) }.getOrNull() ?: return null
+                val t = top.trimEnd('/')
+                if (t.isEmpty()) norm.removePrefix("/") else if (norm.startsWith("$t/")) norm.removePrefix("$t/") else return null
+            } else path
+            if (rel.isEmpty() || rel.split('/').any { it == ".." || it.isEmpty() }) return null
+            return rel
+        }
 
         /** 读前 [maxBytes]；按 UTF-8 解码，截断处不切开多字节字符。含 NUL 视为二进制，返回空文本。 */
         internal fun readChunk(f: File, maxBytes: Long, language: String?): TextChunk {
@@ -369,5 +385,8 @@ class RootfsWorkspace(
         }
     }
 }
+
+/** diff 输出超过 GuestRunner 上限被截断；[partial] 是完整解析出的前几个文件（已丢掉可能不全的最后一个）。 */
+class DiffTooLargeException(val partial: List<FileDiff>) : IOException("diff 过大，已截断（只显示前 ${partial.size} 个文件）；请按文件查看")
 
 class TooLargeException(val limit: Long) : IOException("文件超过 ${limit / (1024 * 1024)} MB，无法导入")
