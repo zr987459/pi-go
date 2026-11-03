@@ -12,7 +12,9 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodes
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -166,21 +168,43 @@ class FilesDeviceTest {
         secret.delete()
     }
 
-    /** 验收：从 SAF（content://）导入一个文本文件后，它出现在文件树里，预览内容一致。 */
+    /** 其他应用（MediaStore Downloads，authority `media`）提供的文本文件，等同 SAF 选择器返回的外部 content:// Uri。 */
+    private fun mediaStoreText(name: String, text: String): Uri {
+        assumeTrue("MediaStore.Downloads 免权限插入需要 API 29+", Build.VERSION.SDK_INT >= 29)
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+            put(MediaStore.MediaColumns.MIME_TYPE, "text/plain")
+            put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/pigo-test")
+        }
+        val uri = ctx.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)!!
+        inserted += uri
+        ctx.contentResolver.openOutputStream(uri)!!.use { it.write(text.toByteArray()) }
+        return uri
+    }
+
+    /**
+     * 验收：从 SAF（content://）导入一个文本文件后，它出现在文件树里，预览内容一致。
+     * Uri 来自 MediaStore（别的应用的 provider），不是本 App 的 FileProvider。
+     * 工作区仍是 FakeWorkspaceFs：feature/files 不依赖 core/workspace（构建文件不归 W3），
+     * 真实 RootfsWorkspace 经 content:// 导入、列出、预览由 core/workspace 的
+     * WorkspaceDeviceTest.importedThroughContentUriShowsInListAndPreviewMatches 覆盖。
+     */
     @Test
     fun importedTextFileAppearsInTreeAndPreviewMatches() {
-        val dir = File(ctx.cacheDir, FileShare.SHARE_DIR).apply { mkdirs() }
-        val src = File(dir, "notes.txt").apply { writeText("第一行\nsecond line\n") }
-        val uri = FileShare.uriFor(ctx, src)
+        val text = "第一行\nsecond line\n"
+        val name = "pigo-notes-${System.nanoTime()}.txt"
+        val uri = mediaStoreText(name, text)
         assertEquals("content", uri.scheme)
+        assertTrue("应是别的应用的 provider（media），不是本 App 的 FileProvider", uri.authority == MediaStore.AUTHORITY && uri.authority != FileShare.authority(ctx))
         val fs = FakeWorkspaceFs()
         val controller = FilesController(fs, CoroutineScope(Dispatchers.Main), "/root/pi-cwd")
         compose.setContent { FilesBrowserScreen(controller, onOpenFile = {}, onOpenGit = {}, onClose = {}) }
-        compose.runOnIdle { controller.import(listOf("notes.txt" to { ctx.contentResolver.openInputStream(uri) })) }
-        compose.waitUntil(5_000) { controller.state.value.entries.any { it.name == "notes.txt" } }
-        compose.onNodeWithTag("files.row:notes.txt").assertIsDisplayed()
-        val p = runBlocking { (fs.preview("/root/pi-cwd/notes.txt") as Outcome.Ok).value } as FilePreview.Text
-        assertEquals(src.readText(), p.chunk.text)
+        compose.waitUntil(5_000) { !controller.state.value.loading }
+        compose.runOnIdle { controller.import(listOf(name to { ctx.contentResolver.openInputStream(uri) })) }
+        compose.waitUntil(5_000) { controller.state.value.entries.any { it.name == name } }
+        compose.onNodeWithTag("files.row:$name").assertIsDisplayed()
+        val p = runBlocking { (fs.preview("/root/pi-cwd/$name") as Outcome.Ok).value } as FilePreview.Text
+        assertEquals(text, p.chunk.text)
     }
 
     /** 验收：1 万行日志在输出查看器里连续滑动不卡（慢帧 < 5%，且必须真的统计到帧），搜索能定位。 */
