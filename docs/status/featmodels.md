@@ -13,11 +13,12 @@
   - `PiProviderConfigStore`：多字段保存/预填/清除；`env()` 一次注入多变量服务商全部变量；共用 Key 变量的服务商（moonshotai/-cn、opencode/-go、qwen-token-plan/-individual、cloudflare×2）在 auth.json 只写 `$PIGO_PK_<ID>` 引用（不含 Key，加 pi 同款锁）；代理（HTTP(S)_PROXY/NO_PROXY/NODE_USE_ENV_PROXY）；models.json 完整结构（4 种 api、name/reasoning/input/contextWindow/maxTokens/cost/headers，合并不丢字段）、删除端点；
   - `ModelDiscovery.discoverDetailed`：获取模型列表回填上下文/推理/看图；`ModelPrefsStore`（人民币开关、汇率默认 7.1、最近 5 个）；`KeyRedaction` 增加 OAuth 令牌形态脱敏。
 
-## 本地完成、待编译后推送
-- `core/catalog`：容器脚本 `pigo-catalog.mjs`（目录导出）、`pigo-auth.mjs`（调用 pi 自己的 OAuth 登录，JSONL 协议，凭据由 pi 写 auth.json 600）；`CatalogRepository`（按 pi 版本缓存）、`ModelIndex`、`OAuthLoginSession`、`Pkce`、`AuthService` 与契约实现 `RealModelCatalog`/`RealAuthManager`/`RealCustomProviderStore`/`RealAppSettingsStore`、`CatalogGraph`。
-  - 桌面已手工验证：脚本在真 pi 1.5.0 下导出 42 个服务商；Copilot 设备码对 mock 跑通，`pi auth check --provider github-copilot --json --no-refresh` → ready/oauth。
-- `feature/models`：模型选择页、服务商列表、服务商配置（Key/OAuth）、自定义端点编辑、代理与费用设置。
-- `app/di/ModelsBindings.kt`（app 尚未依赖新模块，暂只给 Fake，W5 接线）。
+## 已推送（第二批，c0a0f03）
+- `core/catalog`：容器脚本 `pigo-catalog.mjs`、`pigo-auth.mjs`（调用 pi 自己的 OAuth 登录，JSONL 协议，凭据由 pi 写 auth.json 600）；`CatalogRepository`（按 pi 版本缓存）、`ModelIndex`、`OAuthLoginSession`、`Pkce`、`AuthService`、契约实现 `RealModelCatalog`/`RealAuthManager`/`RealCustomProviderStore`/`RealAppSettingsStore`、`CatalogGraph`。
+- `feature/models`：模型选择页（分组、搜索、未配置跳配置、思考强度只在推理模型显示）、服务商列表与配置（Key、多字段、OAuth 浏览器/设备码/粘贴）、自定义端点编辑（获取模型列表回填）、代理与费用设置。
+- `app/di/ModelsBindings.kt`：app 尚未依赖新模块，暂只给 Fake，真实装配留给 W5。
+- 本地单测：core/store 59 项、core/catalog 18 项（4 项真 pi 集成默认跳过）、feature/models 7 项，全部通过；Compose 仪器测试已写（无模拟器，只编译）。
 
 ## 剩余
-- 编译 `:core:catalog`、`:feature:models` 并跑单测；集成测试（真 pi：目录导出、Copilot 设备码、Anthropic PKCE、DeepSeek 可用组）；Compose 仪器测试（编译，设备上跑）；`docs/notices/feat-models.md`；PR。
+- 真 pi 集成测试（`PIGO_PI_ROOT`）：目录导出 42 个服务商、Copilot 设备码 mock、Anthropic PKCE 回调、DeepSeek 可用组 —— 本机运行中；
+- CI 绿后开 PR；W0 合入 main 后再 `git merge origin/main`。
