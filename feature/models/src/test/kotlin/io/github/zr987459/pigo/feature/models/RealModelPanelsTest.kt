@@ -120,8 +120,14 @@ class RealModelPanelsTest {
         assertEquals("qwen-plus,qwen-max", discovered.values["models"])
         val withModels = """{"id":"my-vllm","baseUrl":"http://10.0.0.2:8000/v1","api":"openai-completions","apiKey":"sk-local-1","models":"qwen-plus,qwen-max"}"""
         val tested = panels.onPanelEvent(open.id, "test", withModels).toast()
-        assertTrue(tested, tested.startsWith("✓ 连接正常"))
+        assertTrue(tested, tested.startsWith("✓ 连接成功"))
+        assertTrue("测试不落盘", custom.list().isEmpty())
+        val saved = panels.onPanelEvent(open.id, "submit", withModels).toast()
+        assertTrue(saved, saved.startsWith("已保存"))
         assertEquals(listOf("qwen-plus", "qwen-max"), custom.list().single().models.map { it.id })
+        // 已保存后、表单未改：用已存配置做完整测试
+        val tested2 = panels.onPanelEvent("${RealModelPanels.ID_CUSTOM}:my-vllm", "test", """{"baseUrl":"http://10.0.0.2:8000/v1","api":"openai-completions","models":"qwen-plus"}""").toast()
+        assertTrue(tested2, tested2.startsWith("✓ 连接正常"))
         val list = panels.providerList() as OverlayModel.SelectList
         assertTrue(list.groups.last().items.any { it.key == "custom:my-vllm" })
         // 无 Key 发现失败给出中文提示

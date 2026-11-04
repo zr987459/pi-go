@@ -14,6 +14,6 @@
 - [ ] 读审查、DESIGN-r3 §6/§8、前任 status
 - [x] 读审查、DESIGN-r3 §6/§8、前任 status（08:35）
 - [x] Important 1：WiredPages.kt 恢复为 main 原样（撤回越界）；NetworkAndCostScreen 恢复（只留代理，删汇率部分），标 @Deprecated，交接 r3/app 删除（08:40）
-- [x] Important 3/4 + Nit 1–3 代码（08:47）：tabOf 容错、键帽 actionId=面板事件 key（value=高亮项）、搜索保持页签、设为默认三键写入失败回滚、Key 字段 secret=true（契约 FormField 加 secret 默认 false，范围外最小改动）、Key 只存内存 pendingKeys 不进表单值、保存时保留原模型能力（mergeModels + 存储层 capability 未指定语义）、测试连接不落盘（改用 discover 临时探测）。**测试待补**
+- [x] Important 3/4 + Nit 1–3 代码（08:47）：tabOf 容错、键帽 actionId=面板事件 key（value=高亮项）、搜索保持页签、设为默认三键写入失败回滚、Key 字段 secret=true（契约 FormField 加 secret 默认 false，范围外最小改动）、Key 只存内存 pendingKeys 不进表单值、保存时保留原模型能力（mergeModels + 存储层 capability 未指定语义）、测试连接不落盘（改用 discover 临时探测）。测试：RealModelPanelsFix1Test（10 条）+ RealModelPanelsTest 同步（08:55）
 - [ ] Important 2（设置页按 §6.1 重做 + 界面测试）
 - [ ] Nit 4 残留文案、PR 描述
