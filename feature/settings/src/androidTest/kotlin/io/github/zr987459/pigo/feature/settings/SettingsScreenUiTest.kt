@@ -3,6 +3,9 @@ package io.github.zr987459.pigo.feature.settings
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -145,5 +148,28 @@ class SettingsScreenUiTest {
         assertEquals("https://example.com/oauth/authorize", opened.single())
         rule.onNodeWithTag(SettingsTags.OPEN_URL).assertIsDisplayed()
         assertTrue(panels.events.count { it == "oauth:anthropic/refresh" } >= 2)
+    }
+
+    /** 审查第 3 轮 Important：OAuth 输入代码面板的「提交」点一次后禁用，连点只发一次；失败面板显示「重试」。 */
+    @Test fun oauthCodeSubmitIsSentOnceAndFailureOffersRetry() {
+        val events = mutableListOf<String>()
+        var model by androidx.compose.runtime.mutableStateOf<io.github.zr987459.pigo.contract.session.OverlayModel>(
+            io.github.zr987459.pigo.contract.session.OverlayModel.Form(
+                "oauth:anthropic", "登录 anthropic",
+                listOf(io.github.zr987459.pigo.contract.session.FormField("code", "粘贴代码", io.github.zr987459.pigo.contract.settings.PiSettingType.Str)),
+                submitLabel = "提交",
+            ),
+        )
+        rule.setContent { PanelDialog(model = model, onDismiss = {}, onEvent = { k, _ -> events += k }) }
+        rule.onNodeWithTag(SettingsTags.cap("submit")).performClick()
+        rule.onNodeWithTag(SettingsTags.cap("submit")).performClick()
+        rule.waitForIdle()
+        assertEquals(listOf("submit"), events)
+        rule.onNodeWithTag(SettingsTags.cap("submit")).assertIsNotEnabled()
+        // 失败：显示原因与「重试」
+        model = io.github.zr987459.pigo.contract.session.OverlayModel.Text("oauth:anthropic", "登录 anthropic", "登录失败：授权码无效\n可点「重试」重新登录")
+        rule.onNodeWithTag(SettingsTags.cap("retry")).assertIsDisplayed().performClick()
+        rule.waitForIdle()
+        assertEquals(listOf("submit", "retry"), events)
     }
 }
