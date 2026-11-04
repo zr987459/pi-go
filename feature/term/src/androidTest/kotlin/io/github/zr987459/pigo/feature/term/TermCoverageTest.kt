@@ -103,7 +103,10 @@ class TermCoverageTest {
                             rule.waitForIdle()
                         }
                         if (t.selector == "slash") { fake.draft.value = fake.draft.value.withText("/"); rule.waitForIdle() }
-                        rule.onNodeWithTag("term:keycap:${t.selector}:${t.key}", useUnmergedTree = true).performScrollTo().performClick()
+                        val node = rule.onNodeWithTag("term:keycap:${t.selector}:${t.key}", useUnmergedTree = true)
+                        // 选择器底部的键帽在可横滑的行里，先滚到可见；编辑器 / 页眉 / 消息上的键帽不在滚动容器里。
+                        if (t.selector in TermInput.SELECTOR_OVERLAY || t.selector == "slash") node.performScrollTo()
+                        node.performClick()
                     }
                     is TermEntry.Explain -> {
                         // 说明条目：终端形态里经 /help 列出；这里直接执行，断言产生 explain 本地块。
