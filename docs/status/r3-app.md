@@ -1,6 +1,8 @@
 # r3/app 状态
 
-> **2026-11-04 11:12 CST 续做开始（PR #21 第 2 轮：接真实 pigo-bridge）**。r3/core 已经由 PR #22 合入 main（d15a637）。计划：
+> **2026-11-04 11:33 CST 完成，PR #21（第 2 轮：接真实 pigo-bridge）。** 代码提交 a02dd60 的 CI 全绿：push run 41766629007（build + 仪器测试（模拟器））、PR run 41766636900、真 pi 桥接集成测试 41766628966 / 41766636904。单测 122 类 831 例 0 失败（含 AppSessionOpsTest 10、AppFileSearchTest 3、RealHostSessionOpsTest 1、PiEngineTest 46）。SessionOps 不再有任何桩；逐项证据见 PR #21 描述「第 2 轮」。本文件这次更新后的最终 head 的 CI 结果也记在 PR 描述里。下一步仍是 PR 2（等 r3/term 合入）。
+>
+> 2026-11-04 11:12 CST 续做开始（PR #21 第 2 轮：接真实 pigo-bridge）**。r3/core 已经由 PR #22 合入 main（d15a637）。计划：
 > 1. 普通 merge main → r3/app（保留 di/EngineBindings.kt 两行桥接）。
 > 2. AppSessionOps 去掉「需要 pigo-bridge」桩：标签 / reload / 树内原地切换 / 取回排队 / 停止引擎 / abortRetry 走 PiBridge / PiEngine；@文件搜索注入 core/workspace FileSearch；每项补测试（FakePiBridge）。
 > 3. 核对单引擎共享；FormToggleNoRpcTest、RealHostFormSwitchTest 仍绿。
