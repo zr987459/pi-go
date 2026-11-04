@@ -15,4 +15,6 @@
 - [x] 10:30 推送 Important 1 第一批与 Important 2（本地没有 JDK 和 Android SDK，靠 CI 编译）：
   - 慢帧：整屏只订阅去掉 items 的 ChatState（derivedStateOf），流式 delta 只让时间线子组合重组；贴底只在行数变化时滚动（行高固定）；流式 Markdown 用「稳定前缀缓存 + 只排最后一段」（Markdown.stableCut、TermFormatter.mdLines），前缀的行对象跨 delta 复用。测试 TermStreamingFormatTest（每个前缀长度都与整段排版逐行相同、行对象复用）。
   - ↑↓：HistoryNav（开始翻时保存草稿、编辑即退出浏览、↓ 越过最新一条恢复草稿），TermSurface 接入；测试 HistoryNavTest（3 条）。
-- [ ] 下一步：看 CI；Nit 1–3、Form.actions、确认框、OAuth 重试
+- [x] 10:18 推送 Nit 1–3 与契约新项（5990613）：@ 补全结果绑定查询词、防抖期间 Enter/Tab 等当前词的结果；autocompleteMaxVisible 照用户值；面板键帽一律发面板事件并带高亮项（动作表键帽也带高亮项）；不在动作表里的面板（provider.form:*、确认框、oauth:*…）的选中、提交、确认走面板事件，表单值为 JSON；Form.actions、确认框、OAuth 刷新与重试；/tree 外接 Enter 选中节点，FullOutput 外接 Enter 关闭；密文字段遮挡。JVM 测试 TermPanelRoutingTest（5 条）。
+- [x] 10:25 androidTest 新增 5 个：historyNeverOverwritesEditedDraft、formActionsConfirmAndOAuthRetryEmitPanelEvents、panelKeyCapWithCatalogIdStillEmitsPanelEvent、treeAndFullOutputHandleExternalEnter、atEnterDuringDebounceUsesCurrentQuery。
+- [ ] 下一步：看 CI（build 与模拟器），红了就修；模拟器连续绿 2 次（re-run）；更新 PR 描述（含「交接 r3/app」：bashRunning）

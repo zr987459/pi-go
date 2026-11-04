@@ -382,6 +382,167 @@ class TermCoverageTest {
         rule.onNodeWithTag("term:toast", useUnmergedTree = true).assertIsDisplayed()
     }
 
+    private class HistHost(val fake: FakeSessionHost, override val promptHistory: MutableStateFlow<List<String>>) : SessionHost by fake
+
+    /** 审查第 2 轮 Important 2：↑ 调出历史后编辑，再按 ↑ / ↓ 不覆盖；↓ 越过最新一条恢复翻历史前的草稿。 */
+    @Test
+    fun historyNeverOverwritesEditedDraft() {
+        val host = HistHost(newFake(), MutableStateFlow(listOf("第一条", "修一下 foo")))
+        rule.setContent { Surface(host) }
+        rule.waitForIdle()
+        host.fake.draft.value = host.fake.draft.value.withText("写到一半")
+        rule.waitForIdle()
+        rule.onNodeWithTag("term:key:↑↓").tap()
+        rule.waitForIdle()
+        assertEquals("修一下 foo", host.fake.draft.value.text)
+        rule.onNodeWithTag("term:key:↑↓:down").tap()
+        rule.waitForIdle()
+        assertEquals("↓ 越过最新一条恢复草稿", "写到一半", host.fake.draft.value.text)
+
+        rule.onNodeWithTag("term:key:↑↓").tap()
+        rule.waitForIdle()
+        host.fake.draft.value = host.fake.draft.value.withText("修一下 foo 和 bar") // 用户编辑调出的历史
+        rule.waitForIdle()
+        rule.onNodeWithTag("term:key:↑↓:down").tap()
+        rule.waitForIdle()
+        assertEquals("编辑后 ↓ 不动草稿", "修一下 foo 和 bar", host.fake.draft.value.text)
+        rule.onNodeWithTag("term:key:↑↓").tap()
+        rule.waitForIdle()
+        assertEquals("修一下 foo", host.fake.draft.value.text)
+        rule.onNodeWithTag("term:key:↑↓:down").tap()
+        rule.waitForIdle()
+        assertEquals("再 ↓ 回到编辑后的草稿", "修一下 foo 和 bar", host.fake.draft.value.text)
+    }
+
+    /** r3/models 合入后的契约：Form.actions、确认框、OAuth 刷新 / 重试都经面板事件回传；表单值为 JSON，密文遮挡。 */
+    @Test
+    fun formActionsConfirmAndOAuthRetryEmitPanelEvents() {
+        val events = mutableListOf<Triple<String, String, String?>>()
+        val host = setUp(
+            TermEnv(onPanelEvent = { id, key, value ->
+                events += Triple(id, key, value)
+                when {
+                    id == "provider.form:anthropic" && key == "clear" ->
+                        io.github.zr987459.pigo.contract.actions.ActionResult.Overlay(OverlayModel.Confirm("confirm.clear:anthropic", "清除凭据", "清除？", "清除", dangerous = true))
+                    else -> io.github.zr987459.pigo.contract.actions.ActionResult.Toast("ok:$key")
+                }
+            }),
+        )
+        val form = OverlayModel.Form(
+            "provider.form:anthropic", "Anthropic",
+            fields = listOf(io.github.zr987459.pigo.contract.session.FormField("key", "API Key", io.github.zr987459.pigo.contract.settings.PiSettingType.Str, secret = true)),
+            values = mapOf("key" to "sk-secret"),
+            actions = listOf(
+                io.github.zr987459.pigo.contract.session.KeyCap("", "测试", "test"),
+                io.github.zr987459.pigo.contract.session.KeyCap("", "清除", "clear"),
+            ),
+        )
+        host.overlay.push(form)
+        rule.waitForIdle()
+        rule.onNodeWithTag("term:keycap:provider.form:anthropic:测试", useUnmergedTree = true).tap()
+        rule.waitForIdle()
+        assertEquals(Triple("provider.form:anthropic", "test", """{"key":"sk-secret"}"""), events.last())
+        assertEquals("「测试」后表单仍在（已填值不丢）", "provider.form:anthropic", host.overlay.top?.id)
+
+        rule.onNodeWithTag("term:keycap:provider.form:anthropic:清除", useUnmergedTree = true).tap()
+        rule.waitForIdle()
+        assertEquals("confirm.clear:anthropic", host.overlay.top?.id)
+        rule.onNodeWithTag("term:keycap:confirm.clear:anthropic:enter 清除", useUnmergedTree = true).tap()
+        rule.waitForIdle()
+        assertEquals(Triple("confirm.clear:anthropic", "confirm", null), events.last())
+        assertEquals("确认框关掉，回到表单", "provider.form:anthropic", host.overlay.top?.id)
+
+        // 外接 Enter 提交表单：面板事件 submit + JSON，提示后关表单
+        rule.onNodeWithTag("term:editor").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("term:editor").performKeyInput { pressKey(Key.Enter) }
+        rule.waitForIdle()
+        assertEquals(Triple("provider.form:anthropic", "submit", """{"key":"sk-secret"}"""), events.last())
+        assertEquals(null, host.overlay.top)
+        assertTrue("键帽不应作为动作 id 交给 runAction", host.fake.fakeActions.ran.none { it.first in setOf("test", "clear", "submit", "provider.form:anthropic") })
+
+        host.overlay.push(OverlayModel.Text("oauth:github-copilot", "登录 github-copilot", "登录失败：超时\n可点「重试」重新登录"))
+        rule.waitForIdle()
+        rule.onNodeWithTag("term:keycap:oauth:github-copilot:enter 重试", useUnmergedTree = true).tap()
+        rule.waitForIdle()
+        assertEquals(Triple("oauth:github-copilot", "retry", null), events.last())
+        rule.onNodeWithTag("term:keycap:oauth:github-copilot:r 刷新", useUnmergedTree = true).tap()
+        rule.waitForIdle()
+        assertEquals(Triple("oauth:github-copilot", "refresh", null), events.last())
+    }
+
+    /** 审查第 2 轮 Nit 2：面板键帽即使 id 恰好在动作表里也发面板事件，并带高亮项。 */
+    @Test
+    fun panelKeyCapWithCatalogIdStillEmitsPanelEvent() {
+        val events = mutableListOf<Triple<String, String, String?>>()
+        val host = setUp(TermEnv(onPanelEvent = { id, key, value -> events += Triple(id, key, value); io.github.zr987459.pigo.contract.actions.ActionResult.Toast("ok") }))
+        host.overlay.push(
+            OverlayModel.SelectList(
+                "model.select", "选择模型",
+                listOf(SelectGroup(null, listOf(SelectItem("model:a/x", "x")))),
+                selectedKey = "model:a/x",
+                keyCaps = listOf(io.github.zr987459.pigo.contract.session.KeyCap("Ctrl+S", "设默认", "model.setDefault")),
+            ),
+        )
+        rule.waitForIdle()
+        val ranBefore = host.fake.fakeActions.ran.size
+        rule.onNodeWithTag("term:keycap:model:Ctrl+S 设默认", useUnmergedTree = true).tap()
+        rule.waitForIdle()
+        assertEquals(Triple("model.select", "model.setDefault", "model:a/x"), events.last())
+        assertTrue(host.fake.fakeActions.ran.drop(ranBefore).none { it.first == "model.setDefault" })
+    }
+
+    /** 审查第 2 轮 Nit 3：/tree 里外接 Enter 选中高亮节点、不往草稿插换行；FullOutput 里 Enter 关闭。 */
+    @Test
+    fun treeAndFullOutputHandleExternalEnter() {
+        val host = setUp()
+        host.fake.draft.value = host.fake.draft.value.withText("")
+        val treeId = host.fake.actions.all.first { it.id == "session.tree" }.id
+        host.overlay.push(
+            OverlayModel.Tree(
+                treeId, "会话树",
+                nodes = listOf(io.github.zr987459.pigo.contract.session.TreeNode("n1", null, "user", "你好"), io.github.zr987459.pigo.contract.session.TreeNode("n2", "n1", "assistant", "好的", isLeaf = true)),
+                selectedId = "n1",
+            ),
+        )
+        rule.waitForIdle()
+        val editor = rule.onNodeWithTag("term:editor")
+        editor.performClick()
+        rule.waitForIdle()
+        editor.performKeyInput { pressKey(Key.Enter) }
+        rule.waitForIdle()
+        assertEquals(treeId to "n1", host.fake.fakeActions.ran.last().let { it.first to it.second })
+        assertEquals("Enter 不往草稿插换行", "", host.fake.draft.value.text)
+
+        host.overlay.clear()
+        host.overlay.push(OverlayModel.FullOutput("full", "完整输出", "/tmp/out.txt"))
+        rule.waitForIdle()
+        editor.performClick()
+        rule.waitForIdle()
+        editor.performKeyInput { pressKey(Key.Enter) }
+        rule.waitForIdle()
+        assertEquals(null, host.overlay.top)
+        assertEquals("", host.fake.draft.value.text)
+    }
+
+    /** 审查第 2 轮 Nit 1：防抖期间按 Enter 不插入旧候选，而是等当前词的结果。 */
+    @Test
+    fun atEnterDuringDebounceUsesCurrentQuery() {
+        val host = setUp(
+            TermEnv(fileSearch = { q ->
+                listOf(FileMatch("src/main.kt", false, "@src/main.kt"), FileMatch("docs/readme.md", false, "@docs/readme.md")).filter { it.path.contains(q) }
+            }),
+        )
+        host.fake.draft.value = host.fake.draft.value.withText("看 @src")
+        rule.waitUntil(5_000) { rule.onAllNodesWithTag("term:at:src/main.kt", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+        // 改成另一个词后立刻 Enter（100ms 防抖还没过）
+        rule.onNodeWithTag("term:editor").performClick()
+        host.fake.draft.value = host.fake.draft.value.withText("看 @readme")
+        rule.onNodeWithTag("term:editor").performKeyInput { pressKey(Key.Enter) }
+        rule.waitUntil(5_000) { host.fake.draft.value.text != "看 @readme" }
+        assertEquals("看 @docs/readme.md ", host.fake.draft.value.text)
+    }
+
     /**
      * §8.5 / §7.3：1000 条流式 delta 下慢帧 < 5%（帧间隔超过 2 个刷新周期计为慢帧，与 JankStats 的默认判定相同）。
      *
