@@ -70,6 +70,17 @@ class SettingsPanelLogicTest {
         assertNull(SettingsPanelLogic.dismissEvent(OverlayModel.Form("provider.form:deepseek", "DeepSeek")))
     }
 
+    /**
+     * PR #19 定向复核 Nit 3 / PR #25 审查第 1 轮 Important 1：本页确认框点「关闭」= 关掉整个面板，发 `dismiss`（不是 `cancel`），
+     * 让面板方清理已填 Key 与待定状态；`cancel` 留给只关确认框、表单还开着的终端 / UI 形态。
+     */
+    @Test fun dismissingModelConfirmSendsDismiss() {
+        assertEquals("dismiss", SettingsPanelLogic.CONFIRM_DISMISS)
+        for (id in listOf("confirm.remove:my", "confirm.clear:deepseek", "confirm.logout:deepseek")) {
+            assertEquals(id, "dismiss", SettingsPanelLogic.dismissEvent(OverlayModel.Confirm(id, "确认", "确定？", "确定", dangerous = true)))
+        }
+    }
+
     @Test fun oauthPollingAndUrl() {
         val start = OverlayModel.Text("oauth:anthropic", "登录", "正在开始登录…")
         val url = OverlayModel.Text("oauth:anthropic", "登录", "在浏览器中打开：\nhttps://example.com/oauth/authorize?provider=anthropic\n在浏览器里完成授权")

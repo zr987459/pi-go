@@ -51,6 +51,8 @@ class OverlayFix1Test {
         val events = mutableListOf<Triple<String, String, String?>>()
         val removed = mutableListOf<String>()
         val loggedOut = mutableListOf<String>()
+        /** 不为 null 时作为 `provider.form:*` 提交的结果（NitsCoreTest 用它验证结构化成败标志）。 */
+        var formSubmit: ActionResult? = null
         override suspend fun modelPicker(tab: ModelPickerTab, query: String) = OverlayModel.SelectList("model.select", "选择模型", listOf(SelectGroup(null, listOf(SelectItem("model:p/m1", "m1")))))
         override suspend fun providerList(query: String) = OverlayModel.SelectList("auth.login", "服务商", listOf(SelectGroup(null, listOf(SelectItem("provider:x", "X")))))
         override suspend fun providerForm(providerId: String) = OverlayModel.Form("provider.form:$providerId", providerId,
@@ -68,7 +70,8 @@ class OverlayFix1Test {
                 overlayId == "auth.logout" && key.startsWith("provider:") -> ActionResult.Overlay(confirm("confirm.logout:" + key.removePrefix("provider:")))
                 overlayId.startsWith("provider.form:") && key == "clear" -> ActionResult.Overlay(confirm("confirm.clear:" + overlayId.removePrefix("provider.form:")))
                 overlayId == "provider.custom" && key == "remove" -> ActionResult.Overlay(confirm("confirm.remove:my"))
-                overlayId == "provider.custom" && key == "submit" -> ActionResult.Toast("保存失败：地址不可用")
+                overlayId == "provider.custom" && key == "submit" -> ActionResult.Toast("保存失败：地址不可用", failed = true)
+                overlayId.startsWith("provider.form:") && key == "submit" && formSubmit != null -> formSubmit!!
                 overlayId.startsWith("confirm.logout:") -> if (key == "confirm") { loggedOut += overlayId; ActionResult.Overlay(logoutPicker()) } else ActionResult.Done
                 overlayId.startsWith("confirm.clear:") -> if (key == "confirm") { loggedOut += overlayId; ActionResult.Overlay(providerForm(overlayId.removePrefix("confirm.clear:"))) } else ActionResult.Done
                 overlayId.startsWith("confirm.remove:") -> if (key == "confirm") { removed += overlayId; ActionResult.Done } else ActionResult.Done

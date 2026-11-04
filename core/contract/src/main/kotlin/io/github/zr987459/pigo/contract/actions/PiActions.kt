@@ -79,7 +79,15 @@ sealed interface ActionResult {
     /** 要打开的面板。由 `SessionHost.runAction` 压栈一次；[PiActions.run] 与形态都不得 push。 */
     data class Overlay(val model: OverlayModel) : ActionResult
 
-    data class Toast(val text: String) : ActionResult
+    /**
+     * 提示。[failed] 是结构化成败标志（PR #24 审查 Nit 1），不要再按 [text] 文案猜成败：
+     * - `true` = 用户请求的这次操作**没有达成**：执行出错（保存 / 删除 / 切换 / 刷新失败）、输入校验不通过（如「请填写名称」）、
+     *   事件无效（未知操作、没选中项）；「测试连接」**没通过**（探测返回不通、超时等）也算 `true`——测试这个操作的目的就是确认能连通。
+     * - `false`（默认，保持旧调用方源码兼容）= 操作已达成，或只是信息提示（如「已保存」「✓ 连接成功」「下一轮生效」）。
+     * - 宿主怎么用：只用来决定**是否保留 / 恢复用户刚填的值**（例如 SessionHost 在 `submit` 失败时把已弹栈的表单按提交值压回，
+     *   密钥字段不回填）。Toast 不论成败都**不关闭面板**；关面板只看 [Done]，宿主不得因 `failed == false` 自行关面板或丢弃表单。
+     */
+    data class Toast(val text: String, val failed: Boolean = false) : ActionResult
 
     /** 本地文本块（`/session` 等）。由 `SessionHost.runAction` 追加到 `localBlocks`，不写会话文件。 */
     data class LocalBlock(val title: String, val text: String) : ActionResult
