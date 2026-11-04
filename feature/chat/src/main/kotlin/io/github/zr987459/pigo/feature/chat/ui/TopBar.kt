@@ -93,6 +93,7 @@ private val HeaderGap = 8.dp
  *   之后接上全量模型选择页时传入即可。
  * @param onNewChat 新建对话；为 null 时不显示该键。
  */
+@Deprecated("r3: r3/calm 删除（DESIGN-r3 X13，改用 ui/calm/CalmSurface；待 r3/app 去掉引用后删文件）")
 @Composable
 fun ChatTopBar(
     title: String,
