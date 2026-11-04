@@ -19,3 +19,7 @@
 
 ## 接手须知
 - 工作副本：/workspace/work/term/src（tarball + 本地 git）；推送用 Git Data API，不 force
+
+## 09:10 CST
+- 6a9a43a：并入调度者裁定（面板键帽→面板事件，TermEnv.onPanelEvent，测试 panelKeyCapsEmitPanelEvents）。
+- CI run 41751100860：build 绿；模拟器 job 剩 2 个失败（escPicksActionByState 的 bash 分支、externalKeyboardMatchesPi），修复中。
