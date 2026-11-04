@@ -1,6 +1,6 @@
 # r3/nits-core：积压 Nit（core/engine + core/session）
 
-状态：进行中（13:20），PR #24。代码与测试已全部推送（c327509），本地单测全绿；等 Android CI（含模拟器）与真 pi 重跑结果。
+状态：完成，PR #24（代码 c327509，CI 绿 @61aa3ad：Android 含模拟器 + 真 pi 连续 5 次）。
 
 ## 已做
 - A1 桥接回复按请求序号认领：命令带 `--req=<序号>`，扩展在回复里带回；reload/switch 的完成信号（新实例 ready）经 globalThis 带回序号。无人认领的回复丢弃并记日志（`桥接回复无人认领…`）。
@@ -14,4 +14,4 @@
 - D 核实：core/contract、core/protocol 的 build.gradle.kts 已自带 `testDebugUnitTest → test`，CI 已覆盖，无需改动。
 
 ## 下一步
-- 等 CI；真 pi 集成测试在 c327509 共跑 ≥3 次；全绿后更新 PR 描述证据并把状态改为「完成，PR #24」。
+- 无。等审查。
