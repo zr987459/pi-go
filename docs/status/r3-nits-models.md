@@ -1,12 +1,12 @@
 # r3/nits-models 状态
 
-**状态：进行中**（2026-11-04 14:22 CST，基于 main@ccee240）
+**状态：完成，PR #25**（2026-11-04 14:23 CST，基于 main@ccee240）
 
 ## 计划（只修已审出的 Nit，每条加测试，不扩功能）
-1. [ ] PR #19：服务商表单保存成功后仍提示“请重新填写 Key” → 成功时不出现
-2. [ ] PR #19：模型确认框“关闭/取消”不发 cancel、残留已填 Key/待定状态 → 关闭等同取消并清理
-3. [ ] PR #19：OAuth 失败后的“重试”按钮 → 核实 UI 与终端 ⌘ 两形态；缺则补在 feature/models 面板模型
-4. [ ] PR #24 审查 Nit 1：isFailureToast 文案判成败 → core/contract 加结构化成败标志（默认兼容），RealModelPanels 填，SessionHostImpl.landModelPanel 改用，删文案判断
+1. [x] PR #19：服务商表单保存成功后仍提示“请重新填写 Key” → 成功时不出现
+2. [x] PR #19：模型确认框“关闭/取消”不发 cancel、残留已填 Key/待定状态 → 关闭等同取消并清理
+3. [x] PR #19：OAuth 失败后的“重试”按钮 → 核实 UI 与终端 ⌘ 两形态；缺则补在 feature/models 面板模型
+4. [x] PR #24 审查 Nit 1：isFailureToast 文案判成败 → core/contract 加结构化成败标志（默认兼容），RealModelPanels 填，SessionHostImpl.landModelPanel 改用，删文案判断
 
 不碰：app/**、feature/usage/**、feature/files/**（r3/app-2 在改）。
 
@@ -17,5 +17,8 @@
 - 4 已改：core/contract `ActionResult.Toast(text, failed = false)`；RealModelPanels 失败提示全用 fail()；SessionHostImpl.landModelPanel 用 r.failed，删 isFailureToast；测试 fake（OverlayFix1Test、TermPanelRouterRealHostTest）标 failed = true。
 - 测试：RealModelPanelsNitsTest（新）、NitsCoreTest（替换文案分类测试）、SettingsPanelLogicTest.dismissingModelConfirmSendsCancel、RealModelPanelsFix3Test 取消断言更新。
 
-## 下一步
-- 推送代码 → 开 PR → 看 CI（含模拟器 job），失败读日志修。
+- PR：https://github.com/zr987459/pi-go/pull/25
+- CI @143909c：build（含全部 JVM 单测）success、真 pi 桥接 success；模拟器 job 运行中（本状态提交会触发新一轮 CI，以最新 SHA 为准）。
+
+## 下一步（若被切断，接手者）
+- 盯 PR #25 最新 SHA 的 CI（build / 查找仪器测试类 / 仪器测试（模拟器）/ realpi），红了读日志修；绿了把 CI 链接补进 PR 描述。
