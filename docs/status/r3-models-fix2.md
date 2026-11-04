@@ -1,6 +1,6 @@
 # r3/models 审查第 2 轮修复（fix2）
 
-状态：**已开始**（2026-11-04 09:00 CST）
+状态：**完成，PR #19**（代码 head 699bbda；2026-11-04 ~10:05 CST）
 
 审查评论：https://github.com/zr987459/pi-go/pull/19#issuecomment-6619560179
 
@@ -15,6 +15,8 @@
 8. Nit 6：RealCustomProviderStore 能力三态。
 
 ## 进度
+- 完成：699bbda CI push 41752334929、PR 41752341595 均 success；模拟器 job 实际运行 SettingsScreenUiTest 8/8（3 条原有 + 5 条交互）与 UiCoverageTest 5/5。PR #19 描述已加「审查第 2 轮修复」逐条表与 .github 改动说明。
+- 未完成 / 交接：r3/app 装配时把 RealModelPanels / PiSettings 传给 SettingsScreen；r3/term 按新的 KeyCap 注释回传面板事件并画 Form.actions；真实 PiSettings 的 schema 需含 thinkingBudgets、modelThinkingLevels（r3/session）。
 - 09:03 已 merge main → e8f7f66（普通 merge，无冲突）。
 - 09:44 本地 JUnit：RealModelPanelsFix2Test 8、Fix1、RealModelPanelsTest（同步「常用保持页签」）、ModelPanelsRenderFixtureTest、SettingsPanelLogicTest 13、CapabilityTriStateTest 3 全过（43/43）。androidTest：SettingsScreenUiTest 修滚动 + 新增 5 条交互测试；android.yml 模拟器名单加 SettingsScreenUiTest（.github 改动）。已推送，等 CI。下一步：看 CI（push/PR/模拟器 job），红了修；更新 PR 描述；写完成。
 - 09:38 本地 kotlinc 编译通过（JVM 部分）；新增单测 RealModelPanelsFix2Test、SettingsPanelLogicTest、CapabilityTriStateTest，正在跑。下一步：跑测试 → androidTest 补交互测试并修 SettingsScreenUiTest 滚动 → 模拟器名单（.github）→ CI → PR 描述。
