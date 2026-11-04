@@ -21,4 +21,10 @@ UI 形态缺少入口或结果标记：[help.powershell（Explain）, help.env�
 - [x] 09:19 CI@9f6bc22（含 413cee8）：powershell、easterEgg 已过，仍剩 `help.env` 失败（偶发，时序相关）。
   第二个根因：CalmMessages 原来写的是「滚动进行中就 follow = atBottom」。程序 scrollToItem 到底的那一帧 layoutInfo 还没更新，atBottom 读成 false，贴底被关掉；之后流式内容在上方长高，就把新出现的结果块挤出视口。
   修法：follow 只在两种情况下改变：用户拖动中跟手（DragInteraction），或一次滚动结束时停在底部才贴底。程序滚到底不会再误关贴底。
-- [ ] 等新 SHA 的 CI（含模拟器 job）全绿 → 补 PR #20 描述 → 状态写「完成，PR #20」。
+- [x] 09:28 CI@b230ae9（原测试）：模拟器 job 仍红，只剩 `help.env`（powershell、easterEgg 已过）。help.env 的根因**未查明**。
+- [x] 09:39 分支头 329cda5（r3-session-fix2 的审查第 2 轮提交，包含本线两次修复）CI 全绿，含模拟器 job：
+  https://github.com/zr987459/pi-go/actions/runs/41754395039/job/126327027473 。
+  **注意**：329cda5 同时改了 `UiCoverageTest.checkExplain`。改法是：先等结果块进入 localBlocks，再在 `calm:messages` 上 performScrollToNode 滚到块，最后 assertIsDisplayed，并附失败原因。
+  所以这次变绿不只来自本线修复。这个测试改动是否算削弱，交审查者判断（本线没有改测试）。
+- 状态：**模拟器 CI 已绿（329cda5），PR #20；help.env 在原测试下偶发失败的根因待查。**
+  下一步：如果审查者认定测试被削弱，就恢复原 checkExplain，再在 CalmMessages 里查 help.env。线索：help.env 的说明文字最长，且紧跟在 powershell 后面。
