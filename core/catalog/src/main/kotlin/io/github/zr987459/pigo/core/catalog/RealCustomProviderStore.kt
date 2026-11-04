@@ -75,7 +75,7 @@ class RealCustomProviderStore(
         Outcome.Err(ErrCode.PROVIDER, e.message ?: "保存失败", e)
     }
 
-    override suspend fun remove    override suspend fun remove(id: String): Outcome<Unit> = try {
+    override suspend fun remove(id: String): Outcome<Unit> = try {
         config.removeCustom(id); Outcome.Ok(Unit)
     } catch (e: IllegalArgumentException) {
         Outcome.Err(ErrCode.PROVIDER, e.message ?: "删除失败")

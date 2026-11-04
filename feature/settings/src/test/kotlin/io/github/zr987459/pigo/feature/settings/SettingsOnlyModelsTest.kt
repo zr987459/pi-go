@@ -39,10 +39,10 @@ class SettingsOnlyModelsTest {
         val m = SettingsModelBuilder.build(panels, settings)
         val d = m.section("default")!!.rows.single()
         assertEquals("anthropic/claude-sonnet-4-5 · high", d.detail)
-        assertEquals(SettingsModel.Open.Picker(ModelPickerTab.ALL), d.open)
+        assertEquals(SettingsModel.Open.Picker(ModelPickerTab.ALL, SettingsPanelLogic.PickMode.DEFAULT), d.open)
         val s = m.section("scoped")!!.rows.single()
         assertEquals("2 个", s.detail)
-        assertEquals(SettingsModel.Open.Picker(ModelPickerTab.SCOPED), s.open)
+        assertEquals(SettingsModel.Open.Picker(ModelPickerTab.ALL, SettingsPanelLogic.PickMode.SCOPED), s.open)
         // 没有 settings.json 时显示「未设置」
         assertEquals("未设置", SettingsModelBuilder.build(panels, null).section("default")!!.rows.single().detail)
     }
@@ -95,7 +95,7 @@ class SettingsOnlyModelsTest {
     }
 
     @Test fun formHelpers() {
-        assertEquals(listOf("test" to "测试"), formActions("provider.form:deepseek"))
+        assertEquals(listOf("test", "oauth", "clear"), formActions("provider.form:deepseek").map { it.first })
         assertEquals(listOf("discover", "test"), formActions("provider.custom:my").map { it.first })
         assertEquals("""{"k":"v"}""", formJson(mapOf("k" to "v")))
     }
