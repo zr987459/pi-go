@@ -90,7 +90,6 @@ import io.github.zr987459.pigo.feature.term.ui.spansToAnnotated
 import io.github.zr987459.pigo.feature.term.ui.overlayEnter
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -477,13 +476,13 @@ private fun TermScreen(
                     host.scrollAnchor.value = ScrollAnchor(key, offPx, followBottom = f)
                 }
             }
-            // 视口高度变化（软键盘、imePadding、键条收起）时仍贴底，同 UI 形态。
-            val localCount by rememberUpdatedState(localRows.size)
-            LaunchedEffect(listState) {
-                snapshotFlow { listState.layoutInfo.viewportSize }.distinctUntilChanged().drop(1).collect {
-                    if (follow && !listState.isScrollInProgress) {
-                        listState.scrollToItem((rowsNow.size + localCount + headerCount).coerceAtLeast(1) - 1, Int.MAX_VALUE)
-                    }
+            // 视口高度变化（软键盘、imePadding、键条收起）时仍贴底，同 UI 形态。以 BoxWithConstraints 的 maxHeight 为键重启效应，
+            // 不在 snapshotFlow 收集里滚动：布局阶段发出的快照通知可能同步恢复收集协程，scrollToItem 的强制重测会嵌套在测量里。
+            var lastViewport by remember { mutableStateOf(maxHeight) }
+            LaunchedEffect(maxHeight) {
+                if (maxHeight != lastViewport) {
+                    lastViewport = maxHeight
+                    if (follow && !listState.isScrollInProgress) scrollToBottom()
                 }
             }
             // 贴底跟随：行数变化且原来贴底时滚到底。每行固定同一高度，末行内容变化不改变内容总高度，
