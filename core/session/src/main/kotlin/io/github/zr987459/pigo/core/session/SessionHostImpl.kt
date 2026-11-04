@@ -100,7 +100,7 @@ class SessionHostImpl(
         if (impl != null && id == "session.tree" && !args.isNullOrBlank()) return panelEvent(impl, OverlayPanels.TREE, args)
         // 2) ModelPanels 产出的面板（/model、/login、/logout、自定义服务商…）：选中项、表单提交、键帽 → onPanelEvent。
         if (impl != null) modelPanelRoute(id, args)?.let { (overlayId, key, value) ->
-            impl.onModelPanel(overlayId, key, value)?.let { return landModelPanel(overlayId, it) }
+            impl.onModelPanel(overlayId, key, value)?.let { return landModelPanel(overlayId, key, value, it) }
         }
         val r = actions.run(id, args)
         when (r) {
@@ -120,6 +120,12 @@ class SessionHostImpl(
     /** 最近一次见到的 ModelPanels 面板（终端形态提交表单前会先弹栈，这时按它的字段解析 `k=v`）。 */
     private val lastModelPanel = mutableMapOf<String, OverlayModel>()
 
+    /** ModelPanels 确认框 → 打开它的那层面板 id（确认后结果是 Done 时一并关闭，例如删掉的自定义服务商表单）。 */
+    private val confirmParent = mutableMapOf<String, String>()
+
+    /** 最近一次见到的 `overlay:*` 表单（终端形态提交前先弹栈；失败时按它把带已填值的表单压回，审查第 1 轮 N2）。 */
+    private val lastOverlayForm = mutableMapOf<String, OverlayModel.Form>()
+
     private val catalogIds: Set<String> by lazy { actions.all.map { it.id }.toSet() }
 
     /**
@@ -129,16 +135,22 @@ class SessionHostImpl(
      * - id 不在动作表里、栈顶是 ModelPanels 面板：面板自带键帽（value = 传入值，否则高亮项 / 表单值 JSON）。
      */
     private fun modelPanelRoute(id: String, args: String?): Triple<String, String, String?>? {
-        val top = overlay.top
-        if (top != null && top.id == id && id in modelPanelIds && args != null) return when (top) {
-            is OverlayModel.Form -> Triple(id, "submit", OverlayPanels.formJson(OverlayPanels.parseForm(args, OverlayPanels.fieldKeys(top)).ifEmpty { top.values }))
-            is OverlayModel.Confirm -> Triple(id, if (args == "confirm") "confirm" else "cancel", null)
-            else -> if (args.startsWith("star:")) Triple(id, "star", args.removePrefix("star:")) else Triple(id, args, null)
-        }
-        if (id in modelPanelIds && args != null && overlay.items.value.none { it.id == id }) {
-            val form = lastModelPanel[id] as? OverlayModel.Form
-            val parsed = form?.let { OverlayPanels.parseForm(args, OverlayPanels.fieldKeys(it)) }
-            if (form != null && !parsed.isNullOrEmpty()) return Triple(id, "submit", OverlayPanels.formJson(parsed))
+        val items = overlay.items.value
+        val top = items.lastOrNull()
+        // 1) 面板仍在栈里（终端形态、或上面压着扩展对话框）：按这个面板的类型解析。
+        val inStack = items.lastOrNull { it.id == id }
+        if (inStack != null && id in modelPanelIds && args != null) return modelPanelEvent(inStack, args)
+        // 2) 面板已被形态先弹栈 / 移除（CalmSheet 的确认框「先 remove 再 runAction」、终端表单先 pop 再提交）：
+        //    按来源（最近一次见到的同 id ModelPanels 面板）路由，两形态得到同一个面板事件（审查第 1 轮 I1）。
+        if (id in modelPanelIds && args != null && inStack == null) {
+            when (val last = lastModelPanel[id]) {
+                is OverlayModel.Confirm -> return modelPanelEvent(last, args)
+                is OverlayModel.Form -> {
+                    val parsed = OverlayPanels.parseForm(args, OverlayPanels.fieldKeys(last))
+                    if (parsed.isNotEmpty()) return Triple(id, "submit", OverlayPanels.formJson(parsed))
+                }
+                else -> Unit
+            }
         }
         if (top != null && top.id in modelPanelIds && id !in catalogIds && !id.startsWith(OverlayPanels.PREFIX)) {
             val value = args ?: when (top) {
@@ -151,52 +163,87 @@ class SessionHostImpl(
         return null
     }
 
-    private fun landModelPanel(sourceId: String, r: ActionResult): ActionResult {
+    private fun modelPanelEvent(panel: OverlayModel, args: String): Triple<String, String, String?> = when (panel) {
+        is OverlayModel.Form -> Triple(panel.id, "submit", OverlayPanels.formJson(OverlayPanels.parseForm(args, OverlayPanels.fieldKeys(panel)).ifEmpty { panel.values }))
+        is OverlayModel.Confirm -> Triple(panel.id, if (args == "confirm") "confirm" else "cancel", null)
+        else -> if (args.startsWith("star:")) Triple(panel.id, "star", args.removePrefix("star:")) else Triple(panel.id, args, null)
+    }
+
+    private fun landModelPanel(sourceId: String, key: String, value: String?, r: ActionResult): ActionResult {
+        val source = lastModelPanel[sourceId]
+        // 确认框不论结果如何都已用完：先移除（终端形态它还在栈里；UI 形态已被 CalmSheet 移除，这里是空操作）。
+        if (source is OverlayModel.Confirm && !(r is ActionResult.Overlay && r.model.id == sourceId)) {
+            val parent = confirmParent.remove(sourceId)
+            val closeParent = r == ActionResult.Done && key == "confirm" && parent != null
+            overlay.update { list -> list.filterNot { it.id == sourceId || (closeParent && it.id == parent) } }
+        }
         when (r) {
             is ActionResult.Overlay -> { modelPanelIds += r.model.id; show(r.model) }
             ActionResult.Done -> overlay.remove(sourceId)
             is ActionResult.LocalBlock -> addLocalBlock(sourceId, r.title, r.text)
-            is ActionResult.Toast -> Unit // 提示不关面板：失败时已填的值不丢
+            // 提示不关面板：失败时已填的值不丢。终端形态提交前已弹栈的表单按提交值压回（审查第 1 轮 N2；密钥字段不回填）。
+            is ActionResult.Toast -> if (key == "submit" && source is OverlayModel.Form && overlay.items.value.none { it.id == sourceId }) {
+                val secret = source.fields.filter { it.secret }.map { it.key }.toSet()
+                val submitted = OverlayPanels.parseForm(value, OverlayPanels.fieldKeys(source)) - secret
+                show(source.copy(values = source.values + submitted))
+            }
         }
         return r
     }
 
     private suspend fun panelEvent(impl: PiActionsImpl, panelId: String, args: String?): ActionResult {
         val panel = overlay.items.value.lastOrNull { it.id == panelId }
-        val res = impl.onPanel(panelId, args, panel)
-        res.close.forEach { overlay.remove(it) }
-        res.replace?.let { m -> if (overlay.items.value.any { it.id == m.id }) replaceById(m) }
+        val form = panel as? OverlayModel.Form ?: lastOverlayForm[panelId]
+        val res = impl.onPanel(panelId, args, panel ?: form)
+        val closeIds = res.close.toSet()
+        val closeRefs = res.closeInstances
+        if (closeIds.isNotEmpty() || closeRefs.isNotEmpty()) {
+            overlay.update { list -> list.filterNot { m -> m.id in closeIds || closeRefs.any { it === m } } }
+        }
+        res.replace?.let { m -> replaceById(m) }
         when (val r = res.result) {
             is ActionResult.Overlay -> show(r.model)
             is ActionResult.LocalBlock -> addLocalBlock(panelId, r.title, r.text)
+            // 失败（面板没被关）且表单已被形态先弹栈（终端形态）：按提交值把表单压回，已填内容不丢（审查第 1 轮 N2）。
+            is ActionResult.Toast -> if (panel == null && form != null && panelId !in closeIds) {
+                show(form.copy(values = form.values + OverlayPanels.parseForm(args, OverlayPanels.fieldKeys(form))))
+            }
             else -> Unit
         }
         return res.result
     }
 
+    /** 扩展阻塞对话框与 editor-text-offer：等用户应答，任何面板替换 / 回退都不能把它们弹掉或压到下面（审查第 1 轮 I2）。 */
+    private fun isPinned(m: OverlayModel) = m is OverlayModel.ExtDialog || m.id == EDITOR_OFFER_ID
+
     /**
-     * 压一个面板：同 id 已在栈顶 → 替换（树的筛选 / 折叠 / 时间不再一层层叠）；在栈里更深处 → 回到它并替换；否则压栈。
+     * 压一个面板（单次原子 update）：
+     * - 同 id 已在栈里（栈顶或更深处）→ 回到它并替换，它上面的普通面板移除；
+     * - 否则压在普通面板之上；
+     * - 扩展对话框 / editor-text-offer 始终保留并留在最上面，不被移除、不被应答。
      */
     private fun show(m: OverlayModel) {
-        when {
-            overlay.top?.id == m.id -> overlay.replaceTop(m)
-            overlay.items.value.any { it.id == m.id } -> {
-                while (overlay.top != null && overlay.top?.id != m.id) overlay.pop()
-                overlay.replaceTop(m)
+        overlay.update { list -> placed(list, m) }
+        if (m.id in modelPanelIds) {
+            val prev = lastModelPanel.put(m.id, m)
+            if (m is OverlayModel.Confirm && prev !is OverlayModel.Confirm) {
+                overlay.items.value.lastOrNull { it.id != m.id && !isPinned(it) && it.id in modelPanelIds }?.let { confirmParent[m.id] = it.id }
             }
-            else -> overlay.push(m)
         }
-        if (m.id in modelPanelIds) lastModelPanel[m.id] = m
+        if (m is OverlayModel.Form && m.id.startsWith(OverlayPanels.PREFIX)) lastOverlayForm[m.id] = m
     }
 
+    private fun placed(list: List<OverlayModel>, m: OverlayModel): List<OverlayModel> {
+        if (isPinned(m)) return list.filterNot { it.id == m.id } + m
+        val i = list.indexOfLast { it.id == m.id }
+        val below = if (i >= 0) list.subList(0, i) else list.filterNot(::isPinned)
+        val pinned = (if (i >= 0) list.subList(i + 1, list.size) else list).filter(::isPinned)
+        return below + m + pinned
+    }
+
+    /** 就地替换栈里同 id 的面板（单次原子 update，不弹不压）；不在栈里则不动。 */
     private fun replaceById(m: OverlayModel) {
-        val items = overlay.items.value
-        val i = items.indexOfFirst { it.id == m.id }
-        if (i < 0) return
-        val tail = items.drop(i + 1)
-        repeat(items.size - i) { overlay.pop() }
-        overlay.push(m)
-        tail.forEach { overlay.push(it) }
+        overlay.update { list -> list.map { if (it.id == m.id) m else it } }
     }
 
     override fun debugEnginePid(): Int? = if (engine.status.value is EngineStatus.Stopped) null else pid()
@@ -240,19 +287,22 @@ class SessionHostImpl(
         chatPort.resolveEditorTextOffer(accept)
     }
 
+    /** 按端口列表同步扩展对话框（单次原子 update：移除已应答的、追加新的，不碰其他面板）。 */
     private fun syncDialogs(list: List<ExtUiRequest>) {
         val wanted = list.associateBy { "ext:${it.id}" }
-        overlay.items.value.filterIsInstance<OverlayModel.ExtDialog>().filter { it.id !in wanted }.forEach { overlay.remove(it.id) }
-        for ((id, r) in wanted) if (overlay.items.value.none { it.id == id }) {
-            overlay.push(OverlayModel.ExtDialog(id = id, title = r.title ?: r.method, request = r, shownAtMillis = System.currentTimeMillis()))
+        val now = System.currentTimeMillis()
+        overlay.update { items ->
+            val kept = items.filterNot { it is OverlayModel.ExtDialog && it.id !in wanted }
+            kept + wanted.filterKeys { id -> kept.none { it.id == id } }.map { (id, r) ->
+                OverlayModel.ExtDialog(id = id, title = r.title ?: r.method, request = r, shownAtMillis = now)
+            }
         }
     }
 
     private fun syncEditorOffer(text: String?) {
         if (text == null) { overlay.remove(EDITOR_OFFER_ID); return }
-        if (overlay.items.value.none { it.id == EDITOR_OFFER_ID }) {
-            overlay.push(OverlayModel.Confirm(EDITOR_OFFER_ID, "扩展要替换输入框", "输入框里已有内容。替换成扩展给的文字吗？\n\n$text", confirmLabel = "替换"))
-        }
+        val offer = OverlayModel.Confirm(EDITOR_OFFER_ID, "扩展要替换输入框", "输入框里已有内容。替换成扩展给的文字吗？\n\n$text", confirmLabel = "替换")
+        overlay.update { items -> if (items.any { it.id == EDITOR_OFFER_ID }) items else items + offer }
     }
 
     companion object {

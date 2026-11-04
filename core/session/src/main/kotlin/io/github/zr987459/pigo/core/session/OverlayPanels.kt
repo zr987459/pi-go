@@ -44,7 +44,13 @@ object OverlayPanels {
 
     /** 面板事件的结果：[result] 交给形态；[close] 是要从栈里移除的面板 id（成功时通常是来源面板）；
      *  [replace] 非空时就地替换栈里同 id 的面板（如改完标签后的分支树）。 */
-    data class Result(val result: ActionResult, val close: List<String> = emptyList(), val replace: OverlayModel? = null)
+    data class Result(
+        val result: ActionResult,
+        val close: List<String> = emptyList(),
+        val replace: OverlayModel? = null,
+        /** 按实例（引用相等）移除的面板：耗时操作开始时那一个实例，期间重新打开的同 id 面板不受影响（审查第 1 轮 N1）。 */
+        val closeInstances: List<OverlayModel> = emptyList(),
+    )
 
     /**
      * 解析表单回传：JSON 对象（终端形态面板事件的格式）或 `k=v` 行（CalmSheet 的格式）。

@@ -421,7 +421,9 @@ class PiActionsImpl(
                     )))))
             }
         }
-        return when (val r = ops.treeNavigate(entryId, summarize)) {
+        if (!navInFlight.compareAndSet(false, true)) return NAV_BUSY
+        val outcome = try { ops.treeNavigate(entryId, summarize) } finally { navInFlight.set(false) }
+        return when (val r = outcome) {
             is Outcome.Ok -> {
                 val nav = r.value
                 if (nav.cancelled) return ActionResult.Toast("已取消切换")
@@ -447,18 +449,25 @@ class PiActionsImpl(
         val P = OverlayPanels
         return when {
             // /tree：选中节点 = 原地切换（必要时先问是否摘要）
-            panelId == P.TREE -> if (v.isEmpty()) keep("先选中一条记录") else treeNav(v).let { r ->
-                when {
-                    r is ActionResult.Overlay -> OverlayPanels.Result(r)
-                    isFailure(r) -> OverlayPanels.Result(r)
-                    else -> OverlayPanels.Result(r, listOf(P.TREE))
+            panelId == P.TREE -> if (v.isEmpty()) keep("先选中一条记录") else {
+                val tree = openTree()
+                treeNav(v).let { r ->
+                    when {
+                        r is ActionResult.Overlay -> OverlayPanels.Result(r)
+                        isFailure(r) || r == NAV_BUSY -> OverlayPanels.Result(r)
+                        else -> OverlayPanels.Result(r, closeInstances = listOfNotNull(tree))
+                    }
                 }
             }
             panelId.startsWith(P.SUMMARIZE) -> {
                 val entry = panelId.removePrefix(P.SUMMARIZE)
                 val summarize = when (v) { P.SUMMARIZE_YES, "confirm" -> true; P.SUMMARIZE_NO -> false; else -> return keep("请选择是否摘要") }
+                if (navInFlight.get()) return OverlayPanels.Result(NAV_BUSY)
+                // 摘要可能要几十秒：先移除这个选择框（不能再点第二次），只关闭开始时打开的那棵树（审查第 1 轮 N1）。
+                val tree = openTree()
+                host.overlay.remove(panelId)
                 val r = treeNav("$entry ${if (summarize) P.SUMMARIZE_YES else P.SUMMARIZE_NO}")
-                if (isFailure(r)) OverlayPanels.Result(r, listOf(panelId)) else OverlayPanels.Result(r, listOf(panelId, P.TREE))
+                if (isFailure(r) || r == NAV_BUSY) OverlayPanels.Result(r) else OverlayPanels.Result(r, closeInstances = listOfNotNull(tree))
             }
             panelId.startsWith(P.LABEL) -> {
                 val entry = panelId.removePrefix(P.LABEL)
@@ -543,14 +552,31 @@ class PiActionsImpl(
                 is PiSettingsCodec.Encoded.Value -> if (enc.value != host.settings.values.value[k]) writes += k to enc.value
             }
         }
-        if (errors.isEmpty()) for ((k, v) in writes) (host.settings.set(k, v) as? Outcome.Err)?.let { errors += it.message }
-        return if (errors.isEmpty()) OverlayPanels.Result(ActionResult.Toast("已保存"), listOf(panelId))
-            else keep("保存失败：" + errors.joinToString("；"))
+        // 侧键（env.* / file.* / flag.*）由 App 处理、不在 settings.json：校验阶段就拒绝，不写任何键（审查第 1 轮 N3）。
+        for ((k, _) in writes) if (isSideKey(k)) errors += "${host.settings.schema.specs.first { it.key == k }.label}：由 App 处理，暂不能在这里保存"
+        if (errors.isNotEmpty()) return keep("保存失败（未保存任何更改）：" + errors.joinToString("；"))
+        // 全部合法才写；中途某键写入失败 → 把已写的键改回原值，并如实说明结果。
+        val before = host.settings.values.value
+        val done = mutableListOf<String>()
+        for ((k, v) in writes) {
+            val r = host.settings.set(k, v)
+            if (r is Outcome.Err) {
+                val notRolledBack = done.asReversed().filter { dk -> host.settings.set(dk, before[dk]) is Outcome.Err }
+                val label = { key: String -> host.settings.schema.specs.firstOrNull { it.key == key }?.label ?: key }
+                return keep(if (notRolledBack.isEmpty()) "保存失败（未保存任何更改）：${r.message}"
+                    else "保存失败：${r.message}；以下已写入、未能撤回：" + notRolledBack.joinToString("、") { label(it) })
+            }
+            done += k
+        }
+        return OverlayPanels.Result(ActionResult.Toast("已保存"), listOf(panelId))
     }
 
-    private fun labelForm(entryId: String): ActionResult {
-        val current = (host.overlay.items.value.firstOrNull { it.id == OverlayPanels.TREE } as? OverlayModel.Tree)
-            ?.nodes?.firstOrNull { it.id == entryId }?.label.orEmpty()
+    private suspend fun labelForm(entryId: String): ActionResult {
+        // 树打开时取树上的标签；从消息长按进来（树没开）时读 get_tree 里该节点的标签（审查第 1 轮 N4），保存前不会清掉已有标签。
+        val fromTree = (host.overlay.items.value.firstOrNull { it.id == OverlayPanels.TREE } as? OverlayModel.Tree)
+            ?.nodes?.firstOrNull { it.id == entryId }
+        val current = fromTree?.label ?: if (fromTree != null) "" else
+            ((host.extras.tree() as? Outcome.Ok)?.value?.find(entryId)?.label).orEmpty()
         return ActionResult.Overlay(OverlayModel.Form(OverlayPanels.LABEL + entryId, "设置标签",
             listOf(FormField("label", "标签（留空 = 清除）", io.github.zr987459.pigo.contract.settings.PiSettingType.Str)),
             values = mapOf("label" to current), submitLabel = "保存"))
@@ -578,6 +604,12 @@ class PiActionsImpl(
     }
 
     private fun keep(msg: String) = OverlayPanels.Result(ActionResult.Toast(msg))
+
+    /** 原地切换（`tree_nav`）进行中：重复点击不再发第二次（审查第 1 轮 N1）。 */
+    private val navInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /** 当前打开的分支树实例（按引用关闭用）。 */
+    private fun openTree(): OverlayModel? = host.overlay.items.value.lastOrNull { it.id == OverlayPanels.TREE }
 
     private fun closeOnOk(r: Outcome<*>, panelId: String, okText: String) = when (r) {
         is Outcome.Ok -> OverlayPanels.Result(ActionResult.Toast(okText), listOf(panelId))
@@ -617,6 +649,8 @@ class PiActionsImpl(
     }
 
     companion object {
+        /** 原地切换进行中时再次选择的提示（不发第二次 `tree_nav`）。 */
+        internal val NAV_BUSY = ActionResult.Toast("正在切换，请稍候…")
         const val CONFIRM_PREFIX = "confirm "
         private const val SHARE_TMP = "/tmp/pigo-share.html"
         private val PACKAGE_VERBS = setOf("install", "remove", "update", "list", "config")
