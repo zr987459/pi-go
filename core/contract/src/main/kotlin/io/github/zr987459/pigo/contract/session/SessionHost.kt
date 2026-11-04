@@ -6,7 +6,9 @@ import io.github.zr987459.pigo.contract.EngineExtras
 import io.github.zr987459.pigo.contract.actions.ActionResult
 import io.github.zr987459.pigo.contract.actions.PiActions
 import io.github.zr987459.pigo.contract.settings.PiSettings
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.StateFlow
 
 /**
@@ -65,9 +67,32 @@ interface SessionHost {
     /** 当前会话是否临时会话（`--no-session` 近似，§5.7）。 */
     val ephemeral: StateFlow<Boolean>
 
+    /**
+     * 要写进系统剪贴板的文字（`/copy`、长按复制）。两种形态都收集它并真正写剪贴板（审查第 1 轮 I4）。
+     * 默认空流：r3/session 加的最小契约改动，旧实现（含 FakeSessionHost）不用改。
+     */
+    val clipboardRequests: Flow<String> get() = emptyFlow()
+
+    /**
+     * 外发消息的送达状态（审查第 2 轮 I1）：发送中、已排队、失败可重试。按发出顺序；被引擎接管
+     * （出现在对话里）后移除。默认空列表：r3/session 加的最小契约改动，旧实现不用改。
+     */
+    val outgoing: StateFlow<List<OutgoingMessage>> get() = NO_OUTGOING
+
+    /** 重发一条失败的消息（只在用户要求时，绝不自动重发）。 */
+    fun retryOutgoing(id: String) {}
+
+    /** 把一条失败的消息退回草稿（草稿为空时放进输入框，否则进「已撤回」芯片，不覆盖草稿）。 */
+    fun editOutgoing(id: String) {}
+
+    /** 丢弃一条失败的消息。 */
+    fun discardOutgoing(id: String) {}
+
     /** pi 进程 PID（经 ProcessTree 读取，仪器测试 B 档用）；引擎未运行时为 null。 */
     fun debugEnginePid(): Int?
 }
+
+private val NO_OUTGOING: StateFlow<List<OutgoingMessage>> = MutableStateFlow(emptyList())
 
 /** 首个可见块的 `ChatItem.key` 与像素偏移；[followBottom] 为真表示原来贴底。 */
 data class ScrollAnchor(val itemKey: String, val offsetPx: Int = 0, val followBottom: Boolean = false)

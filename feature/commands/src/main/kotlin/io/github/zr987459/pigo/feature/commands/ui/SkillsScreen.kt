@@ -35,6 +35,7 @@ import io.github.zr987459.pigo.feature.commands.skills.SkillsUiState
 import kotlinx.coroutines.launch
 
 /** 技能与提示模板管理（C4）。页面外壳由 W5 的导航提供。 */
+@Deprecated("r3: feature/commands/ui 由 r3/session 删除；UI 形态的 / 面板与技能页由 r3/calm 重画（CalmSheet）。r3/app 去掉 app 里的引用后删除本文件")
 @Composable
 fun SkillsContent(
     state: SkillsUiState,

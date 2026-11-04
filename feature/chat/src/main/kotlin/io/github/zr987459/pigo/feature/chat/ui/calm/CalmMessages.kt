@@ -6,6 +6,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -90,15 +91,42 @@ internal fun CalmMessages(
         }
     }
     var follow by remember { mutableStateOf(host.scrollAnchor.value?.followBottom ?: true) }
+    // 是否贴底跟随只由「用户拖动」和「一次滚动结束时停在哪」决定。
+    // 原来是「滚动进行中就 follow = atBottom」：程序自己滚到底（scrollToItem）的那一帧 layoutInfo 还没更新，
+    // atBottom 会读成 false，于是贴底被意外关掉。之后流式输出在上方长高，就会把刚出现的结果块挤出视口。
+    var dragging by remember { mutableStateOf(false) }
     LaunchedEffect(list) {
-        snapshotFlow { list.isScrollInProgress to atBottom }.distinctUntilChanged().collect { (scrolling, bottom) ->
-            if (scrolling) follow = bottom
+        list.interactionSource.interactions.collect {
+            when (it) {
+                is DragInteraction.Start -> dragging = true
+                is DragInteraction.Stop, is DragInteraction.Cancel -> dragging = false
+                else -> Unit
+            }
+        }
+    }
+    LaunchedEffect(list) {
+        var wasScrolling = false
+        snapshotFlow { Triple(list.isScrollInProgress, atBottom, dragging) }.distinctUntilChanged().collect { (scrolling, bottom, drag) ->
+            if (drag) follow = bottom // 手指拖动中：跟手
+            else if (wasScrolling && !scrolling) follow = bottom // 惯性、无障碍或程序滚动停下：停在底部才贴底
+            wasScrolling = scrolling
         }
     }
     // 贴底跟随：新内容（含流式增长）到来时滚到底。
     val lastSize = (chat.items.lastOrNull() as? ChatItem.Assistant)?.blocks?.fold(0) { acc, b -> acc + if (b is ContentBlock.Text) b.text.length else 0 } ?: 0
     LaunchedEffect(rows.size, lastSize, follow) {
         if (follow && rows.isNotEmpty()) list.scrollToItem(rows.lastIndex, Int.MAX_VALUE / 2)
+    }
+    // 新的本地结果块（「说明」条目、/session、/hotkeys 等）是用户刚触发的动作结果：滚到它并恢复贴底跟随。
+    // 否则先用过「跳到上一条提示」或手动上滑（follow = false）后，结果追加在视口外，用户看不到任何反应。
+    // 初值取进入时的条数，所以切换形态回来不会强行滚动，阅读位置照常恢复（§5.3）。
+    var seenLocals by remember { mutableStateOf(locals.size) }
+    LaunchedEffect(locals.size) {
+        if (locals.size > seenLocals && rows.isNotEmpty()) {
+            follow = true
+            list.scrollToItem(rows.lastIndex, Int.MAX_VALUE / 2)
+        }
+        seenLocals = locals.size
     }
     LaunchedEffect(view.jumpTick) {
         if (view.jumpTick == 0) return@LaunchedEffect

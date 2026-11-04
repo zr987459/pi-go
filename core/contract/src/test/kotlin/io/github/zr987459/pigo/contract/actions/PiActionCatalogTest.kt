@@ -21,6 +21,8 @@ class PiActionCatalogTest {
         "provider.custom", "model.thinkingAdvanced", "model.setDefault", "model.refreshCatalog", "editor.clear",
         "help.suspend", "editor.expand", "attach.image", "thinking.toggle", "tools.expandAll", "editor.history",
         "transcript.search", "transcript.jump",
+        // r3/session（目录移交后）补齐：DESIGN-r3 §2.5 扩展命令、§2.6 powershell、§2.10 help.env、§2.13 彩蛋的说明条目。
+        "ext.commands", "help.powershell", "help.env", "help.easterEgg",
     )
 
     private val all = PiActionCatalog.all
