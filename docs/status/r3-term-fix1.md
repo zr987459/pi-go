@@ -46,6 +46,7 @@
 - 下一步：等这次 CI；绿了补 PR #18 描述。
 
 ## 09:55 CST — 完成，PR #18
+- **更正（修复第 2 轮，10:30 CST）**：下面的「全绿」只适用于 7ef0de9。head 9ea2633（只改了本文件）的模拟器 job 是红的：slowFramesUnder5PercentWith1000Deltas 两次失败（run 41757177576、41757183985），说明慢帧结果不稳定，由修复第 2 轮处理。
 - 7ef0de9：run 41756143567（pull_request）与 41756136675（push）全绿；模拟器 11 个仪器用例失败 0（含 slowFrames、externalKeyboard、readingPosition）。
 - PR #18 描述已补“慢帧与外接键盘”处理表、暂缓项原因、Form.actions 说明、CI 链接；未改 .github。
 - 更正：上两节标题时间“09:46”“09:50”实为 09:30、09:44。

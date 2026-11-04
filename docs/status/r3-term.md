@@ -24,3 +24,8 @@
 ## 下一步（接手者看这里）
 1. CI 若在 assembleDebugAndroidTest 报 androidTest 编译错误，就改 `feature/term/src/androidTest/**`。
 2. 遗留：慢帧门槛（1000 条 delta）未做；`fullscreenCopyOnSelect` 选中即复制未做；`@` 文件模糊搜索的候选源没有（SessionHost 没有暴露 workspace），只做了插入 `@`；外接键盘仪器测试未写。
+
+## 修复记录（审查第 1、2 轮；主状态以本文件为准）
+- 修复第 1 轮细节：`docs/status/r3-term-fix1.md`。**更正**：其中「全绿」只适用于 7ef0de9；head 9ea2633（代码相同）的模拟器 job 红，原因是慢帧不稳定（run 41757177576、41757183985），见审查第 2 轮。
+- 修复第 2 轮细节：`docs/status/r3-term-fix2.md`（调度者指定的文件名）。完成情况、CI 运行链接以那里的最新一节为准。
+- 上面「下一步」一节的遗留已经处理：慢帧门槛、`@` 文件模糊搜索、外接键盘仪器测试已完成；`fullscreenCopyOnSelect`、Mermaid 字符画暂缓（调度者已同意）。
