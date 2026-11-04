@@ -47,6 +47,7 @@ class RealCustomProviderStore(
     }
 
     override suspend fun upsert(provider: CustomProvider, rawKey: String?): Outcome<Unit> = try {
+        val old = config.customProviders()[provider.id]?.models.orEmpty().associateBy { it.id }
         config.upsertCustomProvider(
             id = provider.id,
             baseUrl = provider.baseUrl,
@@ -56,8 +57,8 @@ class RealCustomProviderStore(
                 PiProviderConfigStore.CustomModel(
                     id = m.id,
                     name = m.name,
-                    reasoning = m.reasoning,
-                    supportsImages = "image" in m.input,
+                    reasoning = capability(m.reasoning, old[m.id]?.reasoning),
+                    supportsImages = capability("image" in m.input, old[m.id]?.supportsImages),
                     contextWindow = m.contextWindow,
                     maxTokens = m.maxTokens,
                     cost = m.cost?.let { BuiltinCatalog.Cost(it.input, it.output, it.cacheRead, it.cacheWrite) },
@@ -70,6 +71,17 @@ class RealCustomProviderStore(
         Outcome.Err(ErrCode.PROVIDER, e.message ?: "保存失败")
     } catch (e: IllegalStateException) {
         Outcome.Err(ErrCode.PROVIDER, e.message ?: "保存失败", e)
+    }
+
+    /**
+     * 能力字段的「未指定」语义：契约里 `CustomModel.reasoning` / `input` 不能为空，false / 只有 text 既可能是
+     * 「明确关闭」也可能是「没填」。原来就有值（true 或 false）时照写新值；原来没写、新值又是 false 时写 null
+     * （不写该字段），避免每次保存都把未指定的能力写成关闭（PR #19 审查 Important 4）。
+     */
+    private fun capability(new: Boolean, old: Boolean?): Boolean? = when {
+        new -> true
+        old != null -> false
+        else -> null
     }
 
     override suspend fun remove(id: String): Outcome<Unit> = try {

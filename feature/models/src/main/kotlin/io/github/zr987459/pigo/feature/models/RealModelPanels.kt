@@ -34,6 +34,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -45,7 +46,9 @@ import kotlinx.serialization.json.jsonPrimitive
  * 终端形态（TermSelectList）各自渲染；`/model`、`/scoped-models`、`/login`、`/logout`、`provider.custom` 共用。
  *
  * 面板 id 与事件（[onPanelEvent] 的 overlayId / key / value）：
- * - [ID_MODEL]：`tab:<ALL|SCOPED|RECENT>`、`query`（value = 搜索词）、`model:<provider/id>`（选择；未配置 → 服务商表单，
+ * - 键帽（[KeyCap.actionId]）就是本面板的事件 key（`select` / `default` / `star` / `refresh` / `providers`），渲染器回传时以
+ *   **当前高亮项的 key** 作 value（如 `model:anthropic/claude-sonnet-4-5`）；也接受带面板前缀的写法 `model.select:default`。
+ * - [ID_MODEL]：`tab:<ALL|SCOPED|RECENT 或页签标签 全部|常用|最近>`（未知值回到 ALL，不抛异常）、`query`（value = 搜索词，保持当前页签）、`model:<provider/id>`（选择；未配置 → 服务商表单，
  *   配好后自动选回）、`star:<ref>`（常用 = `enabledModels`）、`default:<ref>`（写 default*）、`refresh`、`providers`。
  * - [ID_PROVIDERS]：`query`、`provider:<id>`、`custom`（新建自定义服务商）。
  * - `provider.form:<id>`：`submit`（value = 表单值 JSON 对象）、`oauth`、`test`、`clear`。
@@ -77,12 +80,22 @@ class RealModelPanels(
     val oauthSteps: StateFlow<Map<String, OAuthStep>> = _oauth.asStateFlow()
     private val oauthJobs = mutableMapOf<String, Job>()
 
-    /** 自定义服务商表单的已填值（发现模型后回填）。 */
+    /** 自定义服务商表单的已填值（发现模型后回填）；**不含 API Key**。 */
     private val customDrafts = mutableMapOf<String, Map<String, String>>()
+
+    /** 发现到的模型（含推理 / 看图等能力），保存时用它们而不是只按 id 重建。 */
+    private val discoveredModels = mutableMapOf<String, List<CustomModel>>()
+
+    /** 表单里填了但还没保存的 Key：只在内存里，不进 [OverlayModel.Form.values]，也就不进 OverlayStack。 */
+    private val pendingKeys = mutableMapOf<String, String>()
+
+    /** 模型面板当前页签（搜索时保持）。 */
+    @Volatile private var modelTab: ModelPickerTab = ModelPickerTab.ALL
 
     // ---------------------------------------------------------------- 模型面板
 
     override suspend fun modelPicker(tab: ModelPickerTab, query: String): OverlayModel {
+        modelTab = tab
         val entries = catalog.entries().okOr(emptyList())
         val providers = catalog.providers().okOr(emptyList())
         val names = providers.associate { it.id to it.displayName }
@@ -123,11 +136,11 @@ class RealModelPanels(
             tab = TAB_LABELS.getValue(tab),
             selectedKey = current?.let { "model:$it" },
             keyCaps = listOf(
-                KeyCap("Enter", "选择", "$ID_MODEL:select"),
-                KeyCap("Ctrl+S", "设为默认", "$ID_MODEL:default"),
-                KeyCap("Space", "常用", "$ID_MODEL:star"),
-                KeyCap("R", "刷新", "$ID_MODEL:refresh"),
-                KeyCap("P", "管理服务商", "$ID_MODEL:providers"),
+                KeyCap("Enter", "选择", CAP_SELECT),
+                KeyCap("Ctrl+S", "设为默认", CAP_DEFAULT),
+                KeyCap("Space", "常用", CAP_STAR),
+                KeyCap("R", "刷新", CAP_REFRESH),
+                KeyCap("P", "管理服务商", CAP_PROVIDERS),
             ),
         )
     }
@@ -154,7 +167,7 @@ class RealModelPanels(
                         customs.map { SelectItem("custom:${it.id}", it.id, it.baseUrl, toggled = null) },
                 ),
             ),
-            keyCaps = listOf(KeyCap("Enter", "配置", "$ID_PROVIDERS:select")),
+            keyCaps = listOf(KeyCap("Enter", "配置", CAP_SELECT)),
         )
     }
 
@@ -170,7 +183,7 @@ class RealModelPanels(
         val st = auth.state(providerId)
         val fields = buildList {
             if (p.envVar != null && (AuthKind.API_KEY in p.authKinds || p.fields.isEmpty())) {
-                add(FormField(KEY_FIELD, "API Key", PiSettingType.Str, help = keyHelp(st)))
+                add(FormField(KEY_FIELD, "API Key", PiSettingType.Str, help = keyHelp(st), secret = true))
             }
             p.fields.forEach { add(FormField(it.envVar, it.label, PiSettingType.Str, help = it.hint)) }
         }
@@ -224,7 +237,7 @@ class RealModelPanels(
     override suspend fun customProviderForm(providerId: String?): OverlayModel {
         val existing = providerId?.let { id -> custom.list().firstOrNull { it.id == id } }
         val draftKey = providerId ?: ""
-        val values = customDrafts[draftKey] ?: existing?.let { c ->
+        val values = (customDrafts[draftKey] ?: existing?.let { c ->
             mapOf(
                 "id" to c.id,
                 "baseUrl" to c.baseUrl,
@@ -232,7 +245,8 @@ class RealModelPanels(
                 "models" to c.models.joinToString(",") { it.id },
                 "headers" to c.headers.entries.joinToString(",") { "${it.key}: ${it.value}" },
             )
-        } ?: mapOf("api" to ProviderApi.OPENAI_COMPLETIONS.wire)
+        } ?: mapOf("api" to ProviderApi.OPENAI_COMPLETIONS.wire)) - KEY_FIELD
+        val keyHelpText = if (pendingKeys.containsKey(draftKey)) "已填写（隐藏，保存后生效）；可写 !命令" else "留空保持原值；可写 !命令"
         return OverlayModel.Form(
             id = if (providerId == null) ID_CUSTOM else "$ID_CUSTOM:$providerId",
             title = if (providerId == null) "添加自定义服务商" else providerId,
@@ -240,7 +254,7 @@ class RealModelPanels(
                 FormField("id", "名称（id）", PiSettingType.Str, enabled = providerId == null),
                 FormField("baseUrl", "接口地址", PiSettingType.Str, help = "如 http://10.0.0.2:8000/v1"),
                 FormField("api", "接口类型", PiSettingType.Enum(ProviderApi.entries.map { it.wire })),
-                FormField(KEY_FIELD, "API Key", PiSettingType.Str, help = "留空保持原值；可写 !命令"),
+                FormField(KEY_FIELD, "API Key", PiSettingType.Str, help = keyHelpText, secret = true),
                 FormField("models", "模型", PiSettingType.StrList, help = "「发现模型」自动填；也可手动加"),
                 FormField("headers", "请求头", PiSettingType.StrList, help = "Name: value"),
             ),
@@ -251,8 +265,13 @@ class RealModelPanels(
 
     // ---------------------------------------------------------------- 事件
 
-    override suspend fun onPanelEvent(overlayId: String, key: String, value: String?): ActionResult = when {
+    override suspend fun onPanelEvent(overlayId: String, key: String, value: String?): ActionResult =
+        dispatch(overlayId, key.removePrefix("$overlayId:"), value)
+
+    private suspend fun dispatch(overlayId: String, key: String, value: String?): ActionResult = when {
         overlayId == ID_MODEL -> onModelEvent(key, value)
+        overlayId == ID_PROVIDERS && key == CAP_SELECT ->
+            value?.takeIf { it.isNotBlank() }?.let { onProvidersEvent(it, null) } ?: ActionResult.Toast("先选中一个服务商")
         overlayId == ID_PROVIDERS -> onProvidersEvent(key, value)
         overlayId == ID_LOGOUT && key.startsWith("provider:") -> logout(key.removePrefix("provider:"))
         overlayId.startsWith("provider.form:") -> onProviderFormEvent(overlayId.removePrefix("provider.form:"), key, value)
@@ -263,13 +282,16 @@ class RealModelPanels(
     }
 
     private suspend fun onModelEvent(key: String, value: String?): ActionResult = when {
-        key.startsWith("tab:") -> ActionResult.Overlay(modelPicker(ModelPickerTab.valueOf(key.removePrefix("tab:")), value.orEmpty()))
-        key == "query" -> ActionResult.Overlay(modelPicker(ModelPickerTab.ALL, value.orEmpty()))
-        key == "refresh" -> when (val r = catalog.refresh()) {
-            is Outcome.Ok -> ActionResult.Overlay(modelPicker())
+        key.startsWith("tab:") -> ActionResult.Overlay(modelPicker(tabOf(key.removePrefix("tab:")), value.orEmpty()))
+        key == "query" -> ActionResult.Overlay(modelPicker(modelTab, value.orEmpty()))
+        key == CAP_REFRESH -> when (val r = catalog.refresh()) {
+            is Outcome.Ok -> ActionResult.Overlay(modelPicker(modelTab))
             is Outcome.Err -> ActionResult.Toast("刷新失败：${r.message}")
         }
-        key == "providers" -> ActionResult.Overlay(providerList())
+        key == CAP_PROVIDERS -> ActionResult.Overlay(providerList())
+        key == CAP_SELECT -> selectedRef(value)?.let { selectModel(it) } ?: ActionResult.Toast("先选中一个模型")
+        key == CAP_DEFAULT -> (selectedRef(value) ?: currentRef())?.let { setDefault(it) } ?: ActionResult.Toast("先选中一个模型")
+        key == CAP_STAR -> selectedRef(value)?.let { toggleScoped(it.toString()) } ?: ActionResult.Toast("先选中一个模型")
         key.startsWith("model:") -> ModelRef.parse(key.removePrefix("model:"))?.let { selectModel(it) } ?: ActionResult.Toast("无效模型")
         key.startsWith("star:") -> toggleScoped(key.removePrefix("star:"))
         key.startsWith("default:") -> ModelRef.parse(key.removePrefix("default:"))?.let { setDefault(it) } ?: ActionResult.Toast("无效模型")
@@ -369,25 +391,44 @@ class RealModelPanels(
     private suspend fun onCustomEvent(providerId: String?, key: String, value: String?): ActionResult {
         val values = parseValues(value)
         val draftKey = providerId ?: ""
-        if (values.isNotEmpty()) customDrafts[draftKey] = values
+        values[KEY_FIELD]?.takeIf { it.isNotBlank() }?.let { pendingKeys[draftKey] = it }
+        if (values.isNotEmpty()) customDrafts[draftKey] = values - KEY_FIELD
         val id = providerId ?: values["id"].orEmpty().trim()
         val api = ProviderApi.fromWire(values["api"]) ?: ProviderApi.OPENAI_COMPLETIONS
-        val rawKey = values[KEY_FIELD]?.takeIf { it.isNotBlank() }
+        val baseUrl = values["baseUrl"].orEmpty().trim()
+        val rawKey = pendingKeys[draftKey]
         return when (key) {
-            "discover" -> when (val r = custom.discover(values["baseUrl"].orEmpty().trim(), api, rawKey, providerId)) {
+            "discover" -> when (val r = custom.discover(baseUrl, api, rawKey, providerId)) {
                 is Outcome.Ok -> {
-                    customDrafts[draftKey] = values + ("models" to r.value.joinToString(",") { it.id })
+                    discoveredModels[draftKey] = r.value
+                    customDrafts[draftKey] = (values - KEY_FIELD) + ("models" to r.value.joinToString(",") { it.id })
                     ActionResult.Overlay(customProviderForm(providerId))
                 }
                 is Outcome.Err -> ActionResult.Toast("发现模型失败：${r.message}")
             }
-            "submit", "test" -> {
+            // 测试连接**不落盘**：表单与已存配置不同（新建、改了地址 / 协议、填了新 Key）时用表单值临时探测；
+            // 与已存一致时才用已存配置做完整测试。只有「保存」才写 models.json / Key。
+            "test" -> {
                 if (id.isEmpty()) return ActionResult.Toast("请填写名称")
+                val saved = providerId?.let { pid -> custom.list().firstOrNull { it.id == pid } }
+                val sameAsSaved = saved != null && rawKey == null && saved.baseUrl == baseUrl && saved.api == api
+                if (sameAsSaved) {
+                    val m = splitList(values["models"]).firstOrNull() ?: saved!!.models.firstOrNull()?.id
+                        ?: return ActionResult.Toast("没有模型可测试")
+                    probeText(custom.test(ModelRef(id, m)))
+                } else when (val r = custom.discover(baseUrl, api, rawKey, providerId)) {
+                    is Outcome.Ok -> ActionResult.Toast("✓ 连接成功，接口返回 ${r.value.size} 个模型（未保存）")
+                    is Outcome.Err -> ActionResult.Toast("✗ 测试失败（未保存）：${r.message}")
+                }
+            }
+            "submit" -> {
+                if (id.isEmpty()) return ActionResult.Toast("请填写名称")
+                val existing = providerId?.let { pid -> custom.list().firstOrNull { it.id == pid } }
                 val cp = CustomProvider(
                     id = id,
-                    baseUrl = values["baseUrl"].orEmpty().trim(),
+                    baseUrl = baseUrl,
                     api = api,
-                    models = splitList(values["models"]).map { CustomModel(it) },
+                    models = mergeModels(splitList(values["models"]), existing?.models.orEmpty(), discoveredModels[draftKey].orEmpty()),
                     headers = splitList(values["headers"]).mapNotNull { h ->
                         val i = h.indexOf(':'); if (i <= 0) null else h.substring(0, i).trim() to h.substring(i + 1).trim()
                     }.toMap(),
@@ -395,22 +436,25 @@ class RealModelPanels(
                 when (val r = custom.upsert(cp, rawKey)) {
                     is Outcome.Err -> ActionResult.Toast("保存失败：${r.message}")
                     is Outcome.Ok -> {
-                        customDrafts.remove(draftKey)
+                        forgetDraft(draftKey)
                         onCredentialsChanged(id)
-                        if (key == "submit") ActionResult.Toast("已保存 $id")
-                        else {
-                            val m = cp.models.firstOrNull() ?: return ActionResult.Toast("已保存；没有模型可测试")
-                            probeText(custom.test(ModelRef(id, m.id)))
-                        }
+                        ActionResult.Toast("已保存 $id")
                     }
                 }
             }
+            "cancel" -> { forgetDraft(draftKey); ActionResult.Done }
             "remove" -> when (val r = custom.remove(id)) {
-                is Outcome.Ok -> ActionResult.Toast("已删除 $id")
+                is Outcome.Ok -> { forgetDraft(draftKey); ActionResult.Toast("已删除 $id") }
                 is Outcome.Err -> ActionResult.Toast("删除失败：${r.message}")
             }
             else -> ActionResult.Toast("未知操作：$key")
         }
+    }
+
+    private fun forgetDraft(draftKey: String) {
+        customDrafts.remove(draftKey)
+        discoveredModels.remove(draftKey)
+        pendingKeys.remove(draftKey)
     }
 
     private suspend fun testProvider(providerId: String): ActionResult {
@@ -430,6 +474,11 @@ class RealModelPanels(
 
     // ---------------------------------------------------------------- settings.json
 
+    private fun selectedRef(value: String?): ModelRef? =
+        value?.trim()?.removePrefix("model:")?.removePrefix("star:")?.removePrefix("default:")?.takeIf { it.isNotEmpty() }?.let(ModelRef::parse)
+
+    private fun currentRef(): ModelRef? = engine.chat.value.model?.let { ModelRef(it.provider, it.id) }
+
     private fun scopedRefs(): List<String> =
         (piSettings?.values?.value?.get("enabledModels") as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull } ?: emptyList()
 
@@ -443,12 +492,22 @@ class RealModelPanels(
         }
     }
 
+    /**
+     * 「设为默认」= pi 的 Ctrl+S：一次写 defaultProvider、defaultModel、defaultThinkingLevel 三个键。
+     * 任何一步失败就把已写的键恢复原值，保证不会出现「provider 已改、model 还是旧的」的半写状态。
+     */
     private suspend fun setDefault(ref: ModelRef): ActionResult {
         val s = piSettings ?: return ActionResult.Toast("默认模型暂不可编辑")
-        val a = s.set("defaultProvider", JsonPrimitive(ref.provider))
-        val b = s.set("defaultModel", JsonPrimitive(ref.id))
-        return if (a is Outcome.Ok && b is Outcome.Ok) ActionResult.Toast("已设为默认：$ref")
-        else ActionResult.Toast("保存失败")
+        val thinking = engine.chat.value.thinkingLevel
+        val writes = linkedMapOf<String, JsonElement?>(
+            "defaultProvider" to JsonPrimitive(ref.provider),
+            "defaultModel" to JsonPrimitive(ref.id),
+            "defaultThinkingLevel" to thinking?.let(::JsonPrimitive),
+        ).filterValues { it != null }
+        return when (val r = setAllOrRollback(s, writes)) {
+            is Outcome.Ok -> ActionResult.Toast("已设为默认：$ref" + (thinking?.let { " · $it" } ?: ""))
+            is Outcome.Err -> ActionResult.Toast("保存失败：${r.message}")
+        }
     }
 
     // ---------------------------------------------------------------- 工具
@@ -494,6 +553,44 @@ class RealModelPanels(
         }
 
         fun splitList(s: String?): List<String> = s.orEmpty().split(',', '\n').map { it.trim() }.filter { it.isNotEmpty() }
+
+        const val CAP_SELECT = "select"
+        const val CAP_DEFAULT = "default"
+        const val CAP_STAR = "star"
+        const val CAP_REFRESH = "refresh"
+        const val CAP_PROVIDERS = "providers"
+
+        /** 页签 key → 枚举：接受枚举名（ALL）和显示标签（全部）；未知值回到 ALL，不抛异常。 */
+        fun tabOf(raw: String): ModelPickerTab =
+            ModelPickerTab.entries.firstOrNull { it.name.equals(raw, ignoreCase = true) }
+                ?: TAB_LABELS.entries.firstOrNull { it.value == raw }?.key
+                ?: ModelPickerTab.ALL
+
+        /**
+         * 保存自定义服务商时的模型列表：按表单里的 id 顺序，优先用已存的模型（保留推理 / 看图 / 上下文等能力），
+         * 其次用「发现模型」得到的，都没有才新建只有 id 的模型（能力未指定，由存储层写成「不写该字段」）。
+         */
+        fun mergeModels(ids: List<String>, existing: List<CustomModel>, discovered: List<CustomModel>): List<CustomModel> {
+            val old = existing.associateBy { it.id }
+            val found = discovered.associateBy { it.id }
+            return ids.distinct().map { old[it] ?: found[it] ?: CustomModel(it) }
+        }
+
+        /** 依次写入；某一步失败时把已写的键恢复为写之前的值（原来没有的键删除）。 */
+        suspend fun setAllOrRollback(s: PiSettings, writes: Map<String, JsonElement?>): Outcome<Unit> {
+            val before = s.values.value
+            val done = ArrayList<String>()
+            for ((k, v) in writes) {
+                when (val r = s.set(k, v)) {
+                    is Outcome.Ok -> done += k
+                    is Outcome.Err -> {
+                        done.asReversed().forEach { s.set(it, before[it]) }
+                        return r
+                    }
+                }
+            }
+            return Outcome.Ok(Unit)
+        }
 
         private fun <T> Outcome<T>.okOr(default: T): T = (this as? Outcome.Ok)?.value ?: default
     }

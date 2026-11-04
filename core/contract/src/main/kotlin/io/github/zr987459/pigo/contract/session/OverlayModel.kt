@@ -106,6 +106,8 @@ data class FormField(
     val type: PiSettingType,
     val help: String? = null,
     val enabled: Boolean = true,
+    /** 密文字段（API Key 等）：渲染器必须遮挡显示，且不得把输入值写进 [OverlayModel.Form.values] 或日志。 */
+    val secret: Boolean = false,
 )
 
 data class TreeNode(
