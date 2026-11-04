@@ -212,6 +212,12 @@ data class CustomModel(
     val reasoning: Boolean = false,
     val input: Set<String> = setOf("text"),
     val cost: ModelCost? = null,
+    /**
+     * 能力的三态（PR #19 审查）：null = 未指定（写盘时不写该字段，保留文件原值）；true / false = 用户显式开 / 关，照写。
+     * 为 null 时实现按 [reasoning] / [input] 推断（只有「开」会写入）。
+     */
+    val reasoningExplicit: Boolean? = null,
+    val imagesExplicit: Boolean? = null,
 )
 
 data class CustomProvider(

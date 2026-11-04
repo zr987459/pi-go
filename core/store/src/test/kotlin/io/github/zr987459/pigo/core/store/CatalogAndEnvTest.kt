@@ -271,20 +271,18 @@ class CatalogAndEnvTest {
 
     // ---------------- 偏好 ----------------
 
-    @Test fun modelPrefsCurrencyRateAndRecent() = runTest {
+    @Test fun modelPrefsRecentOnly() = runTest {
         val f = File(rootfs, "prefs/models.json")
+        f.parentFile!!.mkdirs()
+        // 旧版文件里的其他键（已删除的费用换算设置）读取时忽略，保存后丢弃。
+        f.writeText("""{"legacyKey":true,"recent":["a/b"]}""")
         val p = ModelPrefsStore(f, StandardTestDispatcher(testScheduler))
-        assertFalse(p.prefs.value.showCny)
-        assertEquals(7.1, p.prefs.value.cnyPerUsd, 0.0)
-        p.setShowCny(true)
-        p.setRate(7.0)
-        expectIae { p.setRate(0.0) }
+        assertEquals(listOf("a/b"), p.prefs.value.recent)
         for (i in 1..7) p.touchRecent("p", "m$i")
         p.touchRecent("p", "m5")
         assertEquals(listOf("p/m5", "p/m7", "p/m6", "p/m4", "p/m3"), p.prefs.value.recent)
         val reloaded = ModelPrefsStore(f, StandardTestDispatcher(testScheduler))
-        assertTrue(reloaded.prefs.value.showCny)
-        assertEquals(7.0, reloaded.prefs.value.cnyPerUsd, 0.0)
         assertEquals(5, reloaded.prefs.value.recent.size)
+        assertFalse(f.readText().contains("legacyKey"))
     }
 }
