@@ -64,6 +64,7 @@ import io.github.zr987459.pigo.di.StoreBindings
 import io.github.zr987459.pigo.form.FormHost
 import io.github.zr987459.pigo.feature.chat.ui.calm.CalmSurface
 import io.github.zr987459.pigo.form.toggleForm
+import io.github.zr987459.pigo.form.TermBack
 import io.github.zr987459.pigo.feature.term.TermEnv
 import io.github.zr987459.pigo.feature.term.TermSurface
 import io.github.zr987459.pigo.feature.term.FileMatch as TermFileMatch
@@ -199,7 +200,7 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
                             val search = graph.fileSearch
                             val env = remember(graph) {
                                 TermEnv(
-                                    fileSearch = search?.let { fs -> { q: String -> fs.suggest(q).map { TermFileMatch(it.path, it.isDir, it.completion) } } },
+                                    fileSearch = search?.let { fs -> val f: suspend (String) -> List<TermFileMatch> = { q -> fs.suggest(q).map { TermFileMatch(it.path, it.isDir, it.completion) } }; f },
                                     panelSource = graph.panelSource,
                                     onPanelEvent = { id, k, v -> graph.modelPanelEvents.onEvent(id, k, v) },
                                     onAttachImage = { pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },

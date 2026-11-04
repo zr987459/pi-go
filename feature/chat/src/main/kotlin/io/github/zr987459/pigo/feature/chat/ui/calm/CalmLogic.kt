@@ -124,6 +124,13 @@ fun bashTransition(old: DraftState, newText: String): DraftState? {
     return null
 }
 
+/**
+ * 命令模式下空输入按退格 → 退出命令模式（PR #17 遗留 Nit 3：按上面的注释实现）。空输入时文本框不会回调 onValueChange，
+ * 所以由输入框的按键监听调用。返回 null = 不处理（有文字时照常删字；普通模式不变）。
+ */
+fun bashBackspace(old: DraftState): DraftState? =
+    if (old.text.isEmpty() && old.bashMode != BashMode.NONE) old.copy(bashMode = BashMode.NONE, selectionStart = 0, selectionEnd = 0) else null
+
 /** 历史翻找（空输入上滑，§4.3 / 清单 §9）：从新到旧循环。[cursor] = 已翻到的倒数第几条（-1 = 未翻）。 */
 fun historyAt(history: List<String>, cursor: Int): Pair<String, Int>? {
     if (history.isEmpty()) return null

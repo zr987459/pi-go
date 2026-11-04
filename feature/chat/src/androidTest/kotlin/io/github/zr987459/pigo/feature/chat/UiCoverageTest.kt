@@ -1,6 +1,12 @@
 package io.github.zr987459.pigo.feature.chat
 
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.onRoot
+import androidx.compose.runtime.setValue
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -376,5 +382,126 @@ class UiCoverageTest {
         compose.waitForIdle()
         compose.onNodeWithTag("commands:search").assert(hasText("fzs"))
         compose.onNodeWithTag("commands:list").performScrollToNode(hasTestTag("action:session.tree"))
+    }
+
+    // ---- PR #17 遗留 Nit 1（r3/app PR 2 并入）：CalmSurface 慢帧 + 深浅色截图 ----
+
+    /**
+     * 1000 条流式 delta 下慢帧（帧间隔超过 2 个刷新周期，与 JankStats 默认判定相同）。做法同 TermCoverageTest：
+     * 同一模拟器先跑朴素 LazyColumn + Text 基线，CalmSurface 慢帧率 < 5% 直接通过，否则须 ≤ 基线 + 5 个百分点且 ≤ 25%
+     * （调度者裁定的相对阈值；CI 模拟器是软件渲染）。替代原指向旧 ChatScreen 的 StreamingJankTest。
+     */
+    @Test
+    fun calmSlowFramesWithin1000Deltas() {
+        val baseHost = FakeSessionHost(scope)
+        val calmHost = FakeSessionHost(scope)
+        var mode by androidx.compose.runtime.mutableStateOf(0)
+        compose.setContent {
+            if (mode == 0) BaselineList(baseHost) else CalmSurface(calmHost, dark = false)
+        }
+        compose.waitForIdle()
+        val chunks = (0 until 1000).map { i -> if (i % 40 == 0) "\n\n## 第 ${i / 40} 节\n\n- 列表项 $i " else "字$i " }
+        val baseline = measureSlowFrames(baseHost, chunks)
+        compose.runOnUiThread { mode = 1 }
+        compose.waitForIdle()
+        val calm = measureSlowFrames(calmHost, chunks)
+        val r = { p: Pair<Int, Int> -> if (p.second == 0) 0.0 else p.first.toDouble() / p.second }
+        val msg = "UI 形态慢帧 ${"%.2f".format(r(calm) * 100)}%（${calm.first}/${calm.second}），同模拟器基线 ${"%.2f".format(r(baseline) * 100)}%（${baseline.first}/${baseline.second}）"
+        android.util.Log.i("UiCoverageTest", msg)
+        assertTrue("没有采集到帧", calm.second > 0 && baseline.second > 0)
+        val t = r(calm)
+        assertTrue("$msg：超过 5% 且超过基线 + 5 个百分点或 25%", t < 0.05 || (t <= r(baseline) + 0.05 && t <= 0.25))
+        val last = calmHost.chat.value.items.last { it is ChatItem.Assistant } as ChatItem.Assistant
+        assertTrue(last.blocks.filterIsInstance<ContentBlock.Text>().joinToString("") { it.text }.contains("字999"))
+    }
+
+    private fun measureSlowFrames(h: FakeSessionHost, chunks: List<String>): Pair<Int, Int> {
+        val frames = java.util.concurrent.atomic.AtomicInteger()
+        val slow = java.util.concurrent.atomic.AtomicInteger()
+        val last = java.util.concurrent.atomic.AtomicLong(0)
+        val tracking = java.util.concurrent.atomic.AtomicBoolean(true)
+        val refreshNs = (1_000_000_000L / (androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
+            .getSystemService(android.view.WindowManager::class.java).defaultDisplay.refreshRate.coerceAtLeast(30f))).toLong()
+        val cb = object : android.view.Choreographer.FrameCallback {
+            override fun doFrame(t: Long) {
+                val p = last.getAndSet(t)
+                if (p != 0L) {
+                    frames.incrementAndGet()
+                    if (t - p > 2 * refreshNs) slow.incrementAndGet()
+                }
+                if (tracking.get()) android.view.Choreographer.getInstance().postFrameCallback(this)
+            }
+        }
+        compose.runOnUiThread { android.view.Choreographer.getInstance().postFrameCallback(cb) }
+        val stream = h.startStream(StreamScript(chunks, intervalMs = 8), userText = "写长一点")
+        compose.waitUntil(120_000) { !stream.isActive }
+        compose.waitForIdle()
+        tracking.set(false)
+        return slow.get() to frames.get()
+    }
+
+    @androidx.compose.runtime.Composable
+    private fun BaselineList(h: FakeSessionHost) {
+        val chat by h.chat.collectAsState()
+        val state = androidx.compose.foundation.lazy.rememberLazyListState()
+        androidx.compose.runtime.LaunchedEffect(chat.items.size, chat.items.lastOrNull()) {
+            if (chat.items.isNotEmpty()) state.scrollToItem(chat.items.size - 1, Int.MAX_VALUE)
+        }
+        androidx.compose.foundation.lazy.LazyColumn(state = state, modifier = androidx.compose.ui.Modifier.fillMaxSize()) {
+            items(chat.items.size, key = { chat.items[it].key }) { i ->
+                val item = chat.items[i]
+                val text = when (item) {
+                    is ChatItem.User -> item.text
+                    is ChatItem.Assistant -> item.blocks.filterIsInstance<ContentBlock.Text>().joinToString("") { b -> b.text }
+                    else -> ""
+                }
+                androidx.compose.material3.Text(text)
+            }
+        }
+    }
+
+    /**
+     * 深浅色截图：同一会话分别在浅色、深色下截整屏，存到应用外部文件目录（calm-light.png / calm-dark.png，CI 可取作产物），
+     * 并断言两张都有内容、深色平均亮度明显低于浅色、正文在两种主题下都可见。
+     */
+    @Test
+    fun calmLightAndDarkScreenshots() {
+        var dark by androidx.compose.runtime.mutableStateOf(false)
+        compose.setContent { CalmSurface(host, dark = dark) }
+        compose.waitForIdle()
+        val job = host.startStream(StreamScript(listOf("# 标题\n\n", "正文一段，", "`code`\n"), intervalMs = 10), userText = "截图")
+        compose.waitUntil(5_000) { job.isCompleted }
+        compose.waitForIdle()
+        val light = compose.onRoot().captureToImage().asAndroidBitmap()
+        compose.runOnIdle { dark = true }
+        compose.waitForIdle()
+        val darkShot = compose.onRoot().captureToImage().asAndroidBitmap()
+        val dir = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext.getExternalFilesDir(null)
+        if (dir != null) {
+            java.io.File(dir, "calm-light.png").outputStream().use { light.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+            java.io.File(dir, "calm-dark.png").outputStream().use { darkShot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+        }
+        val lumL = meanLuma(light)
+        val lumD = meanLuma(darkShot)
+        assertTrue("浅色截图亮度 $lumL 应明显高于深色 $lumD", lumL - lumD > 60)
+        assertTrue("浅色截图不应是纯色", distinctColors(light) > 8)
+        assertTrue("深色截图不应是纯色", distinctColors(darkShot) > 8)
+        compose.onNodeWithText("正文一段", substring = true, useUnmergedTree = true).assertIsDisplayed()
+    }
+
+    private fun meanLuma(b: android.graphics.Bitmap): Double {
+        var sum = 0.0; var n = 0
+        val step = 8
+        for (y in 0 until b.height step step) for (x in 0 until b.width step step) {
+            val c = b.getPixel(x, y)
+            sum += 0.299 * android.graphics.Color.red(c) + 0.587 * android.graphics.Color.green(c) + 0.114 * android.graphics.Color.blue(c); n++
+        }
+        return if (n == 0) 0.0 else sum / n
+    }
+
+    private fun distinctColors(b: android.graphics.Bitmap): Int {
+        val set = HashSet<Int>()
+        for (y in 0 until b.height step 6) for (x in 0 until b.width step 6) set += b.getPixel(x, y)
+        return set.size
     }
 }
