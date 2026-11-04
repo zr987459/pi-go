@@ -98,10 +98,8 @@ class PiActionsImpl(
             "send.followUp" -> host.sendDraft(SendMode.FOLLOW_UP).toResult()
             "abort" -> when {
                 host.chat.value.retry != null -> ops.abortRetry().toResult()
-                else -> e.stop().let { r ->
-                    if (r is Outcome.Ok) host.draft.value = QueueRecall.merge(host.draft.value, r.value.steering + r.value.followUp)
-                    r.toResult()
-                }
+                // 经聊天端口停止：撤回的排队消息进共享草稿（含「已撤回」芯片），两种形态一致（审查第 2 轮 I2）。
+                else -> host.chatPort.stop().toResult()
             }
             "retry.abort" -> ops.abortRetry().toResult()
             "queue.dequeue" -> ops.dequeueAll().let { r ->

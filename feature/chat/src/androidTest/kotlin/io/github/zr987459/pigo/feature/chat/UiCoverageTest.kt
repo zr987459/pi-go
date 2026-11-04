@@ -140,7 +140,7 @@ class UiCoverageTest {
                 is UiEntry.Persistent -> checkPersistent(spec, ui.tag)
                 is UiEntry.LongPress -> checkLongPress(spec, ui.tag)
             }
-            if (!ok) missing += "${spec.id}（${spec.ui::class.simpleName}）"
+            if (!ok) missing += "${spec.id}（${spec.ui::class.simpleName}）" + (explainWhy[spec.id]?.let { "：$it" } ?: "")
             resetUi()
         }
         assertTrue("UI 形态缺少入口或结果标记：$missing", missing.isEmpty())
@@ -153,10 +153,30 @@ class UiCoverageTest {
         return waitFor("overlay:${spec.id}")
     }
 
+    /**
+     * 说明条目：⌘ 里点它 → 动作真的执行 → 本地结果块出现在消息列表里，且能在列表里滚到并显示出来。
+     * 结果块追加在列表末尾，可能在视口外（LazyColumn 不组合视口外的项），所以先等结果块落进 host，
+     * 再在 `calm:messages` 上 performScrollToNode 把它滚进视口后断言显示（不放宽：块不在列表里照样失败）。
+     */
     private fun checkExplain(spec: PiActionSpec): Boolean {
-        if (!searchAndClick(spec.title, spec.id)) return false
-        return ran(spec.id) && waitFor("local:explain:${spec.id}")
+        if (!searchAndClick(spec.title, spec.id)) { explainWhy[spec.id] = "⌘ 里找不到或点不到"; return false }
+        if (!ran(spec.id)) { explainWhy[spec.id] = "动作没有执行"; return false }
+        val tag = "local:explain:${spec.id}"
+        val landed = try {
+            compose.waitUntil(3_000) { host.localBlocks.value.any { it.title == "explain:${spec.id}" } }; true
+        } catch (_: Throwable) { false }
+        if (!landed) { explainWhy[spec.id] = "结果块没有进 localBlocks"; return false }
+        resetUi() // 收起 ⌘ 面板，消息列表回到前台
+        val shown = runCatching {
+            compose.onNodeWithTag("calm:messages").performScrollToNode(hasTestTag(tag))
+            compose.waitForIdle()
+            compose.onNodeWithTag(tag, useUnmergedTree = true).assertIsDisplayed()
+        }.isSuccess
+        if (!shown) explainWhy[spec.id] = "结果块不在消息列表里或无法显示"
+        return shown
     }
+
+    private val explainWhy = mutableMapOf<String, String>()
 
     private fun checkPersistent(spec: PiActionSpec, tag: String): Boolean {
         when (spec.id) {

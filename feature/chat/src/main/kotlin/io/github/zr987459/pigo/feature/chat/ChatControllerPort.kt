@@ -7,13 +7,17 @@ import io.github.zr987459.pigo.contract.ImageInput
 import io.github.zr987459.pigo.contract.Outcome
 import io.github.zr987459.pigo.contract.SendMode
 import io.github.zr987459.pigo.contract.session.BashMode
+import io.github.zr987459.pigo.contract.session.DraftImage
 import io.github.zr987459.pigo.contract.session.DraftState
+import io.github.zr987459.pigo.contract.session.OutgoingMessage
+import io.github.zr987459.pigo.contract.QueueSnapshot
 import io.github.zr987459.pigo.core.session.AtFileExpansion
 import io.github.zr987459.pigo.core.session.SessionChatPort
 import io.github.zr987459.pigo.feature.chat.logic.ExtUiAnswer
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
 
 /**
  * `SessionHostImpl` 的聊天端口（审查第 1 轮 I1）：**包住现有的 [ChatController]**，不另起一套状态。
@@ -26,30 +30,66 @@ import kotlinx.coroutines.flow.StateFlow
  */
 class ChatControllerPort(
     private val controller: ChatController,
-    private val imageLoader: suspend (List<io.github.zr987459.pigo.contract.session.DraftImage>) -> List<ImageInput> = { emptyList() },
+    private val imageLoader: suspend (List<DraftImage>) -> List<ImageInput> = { emptyList() },
 ) : SessionChatPort {
 
     override val draft: MutableStateFlow<DraftState> get() = controller.sharedDraft
 
+    /** 经端口发出、带图片的本地 id → 草稿里的图片 URI（失败后「改一改」时放回共享草稿）。 */
+    private val sentImages = java.util.concurrent.ConcurrentHashMap<String, List<DraftImage>>()
+
+    /**
+     * 发送当前草稿（审查第 2 轮 I3）：图片直接随这一次提交传给 [ChatController.submitContent]，**不**放进控制器的附件，
+     * 所以被拒时控制器里不留任何东西、草稿原样不动，重发也不会重复带图；是否被接受只看 submitContent 的明确返回值。
+     */
     override suspend fun send(mode: SendMode): Outcome<Disposition> {
         if (controller.isStopping) return Outcome.Err(ErrCode.RPC_REJECTED, "正在停止，稍后再发")
         val d = draft.value
         if (!d.hasSendableContent) return Outcome.Err(ErrCode.RPC_REJECTED, "草稿为空")
         val body = AtFileExpansion.compose(d.text, d.fileRefs)
-        val text = if (d.bashMode != BashMode.NONE && !body.startsWith(d.bashMode.prefix)) d.bashMode.prefix + body else body
-        if (d.images.isNotEmpty()) controller.addImages(imageLoader(d.images))
-        controller.setDraft(text)
-        controller.submit(mode)
-        // submit 接受后会清空输入框（composer.draft）；没清空 = 被拒（停止中、模型不支持图片等，原因已经发到 notices）。
-        if (controller.composerDraft.isNotEmpty() && controller.composerDraft == text) {
-            controller.setDraft(d.text) // 草稿原样放回（@ 引用、! 模式仍在 sharedDraft 里）
-            return Outcome.Err(ErrCode.RPC_REJECTED, "未发送")
+        val text = (if (d.bashMode != BashMode.NONE && !body.startsWith(d.bashMode.prefix)) d.bashMode.prefix + body else body).trim()
+        val images = if (d.images.isEmpty()) emptyList() else imageLoader(d.images)
+        if (d.images.isNotEmpty() && images.size != d.images.size) {
+            val msg = "有图片读取失败，没有发送"
+            controller.postNotice(msg)
+            return Outcome.Err(ErrCode.RPC_REJECTED, msg)
         }
-        // 已交给 Outbox：清掉 @ 引用、! 模式、图片；「已撤回」芯片保留。
-        // 文字以输入框为准（submit 已清空；同步协程可能还没跑，不能把旧文字写回去）。
-        draft.value = draft.value.copy(fileRefs = emptyList(), images = emptyList(), bashMode = BashMode.NONE).withText(controller.composerDraft)
-        return Outcome.Ok(Disposition.STARTED)
+        val r = controller.submitContent(text, images, mode) {
+            // 清掉已发出的内容；这期间用户又改过的文字保留，「已撤回」芯片保留。
+            draft.update { cur ->
+                val rest = cur.copy(
+                    images = cur.images.filterNot { it in d.images },
+                    fileRefs = cur.fileRefs.filterNot { it in d.fileRefs },
+                    bashMode = if (cur.text == d.text) BashMode.NONE else cur.bashMode,
+                )
+                if (cur.text == d.text) rest.withText("") else rest
+            }
+        }
+        return when (r) {
+            is ChatController.SubmitResult.Rejected -> Outcome.Err(ErrCode.RPC_REJECTED, r.reason)
+            is ChatController.SubmitResult.Accepted -> {
+                if (r.localId != null && d.images.isNotEmpty()) sentImages[r.localId] = d.images
+                Outcome.Ok(Disposition.STARTED)
+            }
+        }
     }
+
+    override val outgoing: StateFlow<List<OutgoingMessage>> get() = controller.outgoing
+
+    override fun retryOutgoing(id: String) = controller.retry(id)
+
+    /** 失败的消息退回共享草稿：文字按撤回规则（不覆盖草稿），图片 URI 放回草稿。 */
+    override fun editOutgoing(id: String) {
+        controller.editFailed(id, restoreAttachments = false) ?: return
+        sentImages.remove(id)?.let { imgs -> draft.update { it.copy(images = it.images + imgs.filterNot { i -> i in it.images }) } }
+    }
+
+    override fun discardOutgoing(id: String) {
+        controller.deleteFailed(id)
+        sentImages.remove(id)
+    }
+
+    override suspend fun stop(): Outcome<QueueSnapshot> = controller.stopAndWait()
 
     override val dialogs: StateFlow<List<ExtUiRequest>> get() = controller.pendingDialogs
 

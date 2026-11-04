@@ -13,6 +13,7 @@ import io.github.zr987459.pigo.contract.actions.ActionResult
 import io.github.zr987459.pigo.contract.actions.PiActions
 import io.github.zr987459.pigo.contract.session.DraftState
 import io.github.zr987459.pigo.contract.session.LocalBlock
+import io.github.zr987459.pigo.contract.session.OutgoingMessage
 import io.github.zr987459.pigo.contract.session.OverlayModel
 import io.github.zr987459.pigo.contract.session.OverlayStack
 import io.github.zr987459.pigo.contract.session.ScrollAnchor
@@ -72,6 +73,14 @@ class SessionHostImpl(
 
     private val _clipboard = MutableSharedFlow<String>(replay = 0, extraBufferCapacity = 8)
     override val clipboardRequests: Flow<String> = _clipboard.asSharedFlow()
+
+    override val outgoing: StateFlow<List<OutgoingMessage>> = chatPort.outgoing
+
+    override fun retryOutgoing(id: String) = chatPort.retryOutgoing(id)
+
+    override fun editOutgoing(id: String) = chatPort.editOutgoing(id)
+
+    override fun discardOutgoing(id: String) = chatPort.discardOutgoing(id)
 
     override val actions: PiActions = actionsFactory(this)
 

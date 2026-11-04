@@ -22,6 +22,8 @@ import io.github.zr987459.pigo.contract.QueueSnapshot
 import io.github.zr987459.pigo.contract.RetryBanner
 import io.github.zr987459.pigo.contract.SendMode
 import io.github.zr987459.pigo.contract.session.DraftState
+import io.github.zr987459.pigo.contract.session.OutgoingMessage
+import io.github.zr987459.pigo.contract.session.OutgoingStatus
 import io.github.zr987459.pigo.core.session.DraftCodec
 import io.github.zr987459.pigo.feature.chat.logic.ChatRow
 import io.github.zr987459.pigo.feature.chat.logic.ChatRows
@@ -44,6 +46,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
@@ -163,11 +166,32 @@ class ChatController(
     private val local = MutableStateFlow(Local())
 
     /**
-     * 两种形态共用的草稿（DESIGN-r3 §5.1；审查第 1 轮 I1）。文字与输入框 `composer.draft` 双向同步，
-     * 另带光标、`@` 引用、`!` 模式、图片 URI、「已撤回」芯片；按会话经 [drafts] 持久化（[DraftCodec]）。
-     * `SessionHostImpl.draft` 就是这一个对象（经 `ChatControllerPort`）。
+     * 草稿的**唯一**存放处（DESIGN-r3 §5.1；审查第 2 轮 I2、I4）：文字、光标、`@` 引用、`!` 模式、图片 URI、
+     * 「已撤回」芯片都只在这里。`SessionHostImpl.draft` 就是这一个对象（经 `ChatControllerPort`）。
+     *
+     * - 两种形态、旧聊天页的输入框、控制器自己（撤回放回、插入、扩展写入、发送后清空）都读写它，没有第二份、没有同步协程，
+     *   所以不会出现一边把另一边的新输入回滚成旧值（吞字）；控制器的改写一律用 `update`（CAS）原子地套用；
+     * - `ChatScreenState.composer` 的 draft / withdrawn 从它派生；`withdrawn` 就是 [DraftState.recalled]；
+     * - 按会话经 [drafts] 持久化（[DraftCodec]，含「已撤回」芯片）。
      */
     val sharedDraft: MutableStateFlow<DraftState> = MutableStateFlow(DraftState.EMPTY)
+
+    /**
+     * 打字写进 [sharedDraft] 的草稿对象（按引用记最近若干个）。合成时文字变了、且不是这些对象之一，才算「非打字改写」，
+     * `composer.revision` 加一，旧输入框才用它覆盖自己（来源判定按对象引用，滞后的合成不会把旧的打字结果当成改写）。
+     */
+    private val typedDrafts = ArrayDeque<DraftState>()
+    private fun markTyped(d: DraftState) = synchronized(typedDrafts) {
+        typedDrafts.addLast(d)
+        while (typedDrafts.size > TYPED_RING) typedDrafts.removeFirst()
+    }
+    private fun isTyped(d: DraftState) = synchronized(typedDrafts) { typedDrafts.any { it === d } }
+    private var composedText: String? = null
+    private var draftRevision = 0
+
+    /** 离开会话时写入的空草稿（按引用识别）：它不触发落盘，免得把刚保存的旧会话草稿覆盖掉。 */
+    @Volatile
+    private var clearedDraft: DraftState? = null
 
     /** 合成协程最后处理过的会话文件（草稿和分叉文本按它归属）。 */
     @Volatile
@@ -220,27 +244,17 @@ class ChatController(
     private val retryAnchor = RetryAnchor()
 
     val state: StateFlow<ChatScreenState> =
-        combine(engine.chat, engine.status, local) { chat, status, l -> compose(chat, status, l) }
-            .stateIn(scope, SharingStarted.Eagerly, compose(engine.chat.value, engine.status.value, local.value))
+        combine(engine.chat, engine.status, local, sharedDraft) { chat, status, l, d -> compose(chat, status, l, d) }
+            .stateIn(scope, SharingStarted.Eagerly, compose(engine.chat.value, engine.status.value, local.value, sharedDraft.value))
 
     init {
         scope.launch { engine.uiRequests.collect { onUiRequest(it) } }
-        // composer.draft → sharedDraft（输入框、队列退回、分叉文本、扩展 set_editor_text 改的都是 composer）。
-        scope.launch {
-            local.collect { l ->
-                val t = l.composer.draft
-                if (sharedDraft.value.text != t) sharedDraft.update { if (it.text == t) it else it.withText(t) }
-            }
-        }
-        // sharedDraft → composer.draft（两种形态改的是 sharedDraft），并按会话持久化。
+        // 草稿只有 sharedDraft 一份：这里只负责落盘与斜杠命令候选，不往任何别处同步。
         scope.launch {
             var last = sharedDraft.value
             sharedDraft.collect { d ->
-                if (local.value.composer.draft != d.text) {
-                    local.update { it.copy(composer = it.composer.copy(draft = d.text)) }
-                    if (SlashCompletion.queryOf(d.text) != null) ensureCommands()
-                }
-                if (d != last) persistDraftSoon()
+                if (d != last && d !== clearedDraft) persistDraftSoon()
+                if (d.text != last.text && SlashCompletion.queryOf(d.text) != null) ensureCommands()
                 last = d
             }
         }
@@ -309,6 +323,7 @@ class ChatController(
      */
     private fun resetSessionLocal(sameProcess: Boolean) {
         var dropped: List<DialogEntry> = emptyList()
+        var rescued: List<String> = emptyList()
         // 调用时 lastQueue 仍是旧会话 / 旧进程最后一次 queue_update 的快照（collect 里在此之后才更新）。
         val engineQueue = lastQueue
         lastQueue = QueueSnapshot.EMPTY
@@ -327,8 +342,8 @@ class ChatController(
             } else {
                 s.returnedSending + s.orphanSends + s.sends.filter { it.status == Delivery.SENDING }.associate { it.id to it.text }
             }
+            rescued = all
             s.copy(
-                composer = ComposerLogic.onWithdrawn(s.composer, all),
                 sends = emptyList(),
                 orphanSends = orphans,
                 returnedSending = returned,
@@ -342,6 +357,7 @@ class ChatController(
                 generation = s.generation + 1,
             )
         }
+        editDraft { ComposerLogic.onWithdrawn(it, rescued) }
         for (d in dropped) {
             notifier?.cancel(d.request.id)
             if (sameProcess && d.request.needsResponse) {
@@ -355,7 +371,11 @@ class ChatController(
     /** 思考计时所属的会话代数；变化时清空计时缓存（跨会话 assistant key 可能相同）。 */
     private var thinkingGeneration = 0
 
-    private fun compose(chat: ChatState, status: EngineStatus, l: Local): ChatScreenState {
+    private fun compose(chat: ChatState, status: EngineStatus, raw: Local, d: DraftState): ChatScreenState {
+        // 输入框文字与「已撤回」芯片从唯一的草稿派生；非打字改写才让 revision 加一（见 typedDrafts）。
+        if (composedText != null && d.text != composedText && !isTyped(d)) draftRevision++
+        composedText = d.text
+        val l = raw.copy(composer = raw.composer.copy(draft = d.text, withdrawn = d.recalled, revision = draftRevision))
         val visibleRetry = retryAnchor.update(chat)
         if (l.generation != thinkingGeneration) {
             thinkingStart.clear()
@@ -426,10 +446,31 @@ class ChatController(
 
     // ---------------- 输入框 ----------------
 
+    /** 输入框打字：写进唯一的草稿（光标放到末尾，其余字段不变）。 */
     fun setDraft(text: String) {
-        local.update { it.copy(composer = it.composer.copy(draft = text)) }
+        sharedDraft.update { d -> if (d.text == text) d else d.withText(text).also(::markTyped) }
         if (SlashCompletion.queryOf(text) != null) ensureCommands()
-        persistDraftSoon()
+    }
+
+    /**
+     * 以程序方式改写草稿（撤回放回、插入、扩展写入、发送后清空…）：在 [sharedDraft] 上原子地套用 [ComposerLogic]。
+     * 文字变了光标放到末尾；`withdrawn` 就是 [DraftState.recalled]。其余字段（图片、`@` 引用、`!` 模式）不变。
+     */
+    private fun editDraft(f: (ComposerState) -> ComposerState) {
+        sharedDraft.update { d ->
+            val n = f(ComposerState(draft = d.text, withdrawn = d.recalled))
+            when {
+                n.draft == d.text && n.withdrawn == d.recalled -> d
+                n.draft == d.text -> d.copy(recalled = n.withdrawn)
+                else -> d.copy(recalled = n.withdrawn).withText(n.draft)
+            }
+        }
+    }
+
+    /** 一次提交的结果：[Accepted.localId] 为 Outbox 里的本地 id（`!` 命令为 null）；[Rejected.reason] 已经发到 [messages]（停止中、空内容除外）。 */
+    sealed interface SubmitResult {
+        data class Accepted(val localId: String?) : SubmitResult
+        data class Rejected(val reason: String) : SubmitResult
     }
 
     /**
@@ -437,37 +478,47 @@ class ChatController(
      * 以 `!` 开头走 `bash`（输出进上下文），`!!` 走 `bash` 且不进上下文（C6）；带图片时走 [EngineExtras.send]（C1）。
      */
     fun submit(mode: SendMode? = null) {
+        val text = sharedDraft.value.text.trim()
+        val images = local.value.attachments
+        submitContent(text, images, mode) {
+            // 发出的是读到的那份文字；这期间用户又改过就保留新输入。
+            sharedDraft.update { d -> if (d.text.trim() == text) d.withText("") else d }
+            if (images.isNotEmpty()) local.update { it.copy(attachments = emptyList()) }
+        }
+    }
+
+    /**
+     * 发出一份内容（[submit] 与 `ChatControllerPort.send` 共用）。被拒时**什么都不改**（草稿、附件原样），返回原因；
+     * 接受时先调 [onAccept]（调用方清掉已发出的内容），再交给 Outbox / `bash`。
+     * 判断是否被接受一律看这个返回值（审查第 2 轮 I3），不比较草稿文字。
+     */
+    fun submitContent(text: String, images: List<ImageInput>, mode: SendMode?, onAccept: () -> Unit): SubmitResult {
         val l = local.value
-        if (l.composer.stopping) return
-        val text = l.composer.draft.trim()
-        val images = l.attachments
-        if (text.isEmpty() && images.isEmpty()) return
+        if (l.composer.stopping) return SubmitResult.Rejected("正在停止，稍后再发")
+        if (text.isEmpty() && images.isEmpty()) return SubmitResult.Rejected("草稿为空")
         val ex = extras
         val route = if (ex != null && images.isEmpty()) InputRouting.route(text) else InputRoute.Message(text)
         if (route is InputRoute.Bash && ex != null) {
-            if (l.bashRunning) {
-                emitMessage("上一条命令还在执行")
-                return
-            }
-            local.update { it.copy(composer = it.composer.withDraft("")) }
-            persistDraftSoon()
+            if (l.bashRunning) return reject("上一条命令还在执行")
+            onAccept()
             runBash(ex, route, original = text)
-            return
+            return SubmitResult.Accepted(null)
         }
         if (images.isNotEmpty()) {
-            if (ex == null) {
-                emitMessage("当前版本还不支持发送图片")
-                return
-            }
-            if (!modelAcceptsImages(engine.chat.value.model)) {
-                emitMessage("当前模型不支持看图，请换一个支持图片的模型")
-                return
-            }
+            if (ex == null) return reject("当前版本还不支持发送图片")
+            if (!modelAcceptsImages(engine.chat.value.model)) return reject("当前模型不支持看图，请换一个支持图片的模型")
         }
-        local.update { it.copy(composer = it.composer.withDraft(""), attachments = emptyList()) }
-        persistDraftSoon()
-        sendText(text, mode ?: SendMode.FOLLOW_UP, reuseId = null, images = images)
+        onAccept()
+        return SubmitResult.Accepted(sendText(text, mode ?: SendMode.FOLLOW_UP, reuseId = null, images = images))
     }
+
+    private fun reject(reason: String): SubmitResult.Rejected {
+        emitMessage(reason)
+        return SubmitResult.Rejected(reason)
+    }
+
+    /** 一次性提示（供端口报告图片读取失败等）。 */
+    fun postNotice(text: String) = emitMessage(text)
 
     // ---------------- 图片附件（C1） ----------------
 
@@ -493,8 +544,7 @@ class ChatController(
 
     /** 选中候选：草稿变成 `/name `，等用户补参数。 */
     fun pickCommand(command: SlashCommand) {
-        local.update { it.copy(composer = it.composer.withDraft(SlashCompletion.complete(command))) }
-        persistDraftSoon()
+        editDraft { it.withDraft(SlashCompletion.complete(command)) }
     }
 
     /** 命令面板的「刷新」：技能或模板改过之后重新读取。 */
@@ -557,7 +607,7 @@ class ChatController(
                 local.update { it.copy(bashRunning = false) }
             }
             failed?.let { e ->
-                local.update { it.copy(composer = ComposerLogic.onSendRejected(it.composer, original)) }
+                editDraft { ComposerLogic.onSendRejected(it, original) }
                 emitMessage("命令没有执行：" + e.message.ifBlank { "未知错误" })
             }
         }
@@ -625,8 +675,7 @@ class ChatController(
 
     private fun applyForkText(t: String) {
         pendingFork = null
-        local.update { it.copy(composer = ComposerLogic.onWithdrawn(it.composer, listOf(t))) }
-        persistDraftSoon()
+        editDraft { ComposerLogic.onWithdrawn(it, listOf(t)) }
     }
 
     // ---------------- 草稿（S7） ----------------
@@ -639,7 +688,8 @@ class ChatController(
         draftJob?.cancel()
         draftJob = scope.launch {
             delay(config.draftSaveDelayMs)
-            store.put(key, DraftCodec.encode(currentDraft()))
+            val d = currentDraft()
+            if (DraftCodec.isBlank(d)) store.remove(key) else store.put(key, DraftCodec.encode(d))
         }
     }
 
@@ -669,8 +719,9 @@ class ChatController(
         draftJob = null
         val draft = currentDraft()
         if (drafts == null) return
-        local.update { it.copy(composer = it.composer.withDraft("")) }
-        sharedDraft.value = DraftState.EMPTY
+        val cleared = DraftState()
+        clearedDraft = cleared
+        sharedDraft.value = cleared
         val key = keyOf(file)
         scope.launch { if (DraftCodec.isBlank(draft)) drafts.remove(key) else drafts.put(key, DraftCodec.encode(draft)) }
     }
@@ -695,24 +746,23 @@ class ChatController(
             if (DraftCodec.isBlank(restored)) return@launch
             // 读回来时已经又换了会话：不要放进别的会话。
             if (observedFile != file) return@launch
-            var applied = false
-            local.update { s ->
+            // 光标、@ 引用、! 模式、图片、撤回芯片随文字一起回来（只在输入框为空时整份放回）。
+            sharedDraft.update { s ->
                 when {
-                    s.composer.draft.isBlank() -> { applied = true; s.copy(composer = s.composer.withDraft(restored.text)) }
-                    firstLearn || s.composer.draft.trim() == restored.text.trim() -> s
-                    else -> s.copy(composer = s.composer.copy(withdrawn = s.composer.withdrawn + restored.text))
+                    s.text.isBlank() -> restored.copy(
+                        images = s.images + restored.images,
+                        fileRefs = s.fileRefs + restored.fileRefs,
+                        recalled = s.recalled + restored.recalled,
+                    )
+                    firstLearn || s.text.trim() == restored.text.trim() -> s
+                    else -> s.copy(recalled = s.recalled + listOf(restored.text).filter { it.isNotBlank() } + restored.recalled)
                 }
             }
-            // 光标、@ 引用、! 模式、图片、撤回芯片随文字一起回来（只在文字真的放回输入框时）。
-            if (applied) sharedDraft.value = restored
         }
     }
 
-    /** 要持久化的草稿：以输入框文字为准，加上共享草稿里的其余字段。 */
-    private fun currentDraft(): DraftState = sharedDraft.value.let { d ->
-        val t = local.value.composer.draft
-        if (d.text == t) d else d.withText(t)
-    }
+    /** 要持久化的草稿（唯一的一份）。 */
+    private fun currentDraft(): DraftState = sharedDraft.value
 
     // ---------------- 供 SessionHost（ChatControllerPort）用的单一状态 ----------------
 
@@ -725,7 +775,16 @@ class ChatController(
         local.map { it.replaceDraftOffer }.distinctUntilChanged().stateIn(scope, SharingStarted.Eagerly, null)
 
     /** 输入框当前文字（同步读取，不经合成后的 [state]）。 */
-    val composerDraft: String get() = local.value.composer.draft
+    val composerDraft: String get() = sharedDraft.value.text
+
+    /**
+     * 外发消息的送达状态（审查第 2 轮 I1）：Outbox 里还看得见的本地气泡（发送中 / 已发出 / 已排队 / 失败可重试），
+     * 加上 pi 队列里排队等待的消息（`queue_update`，先插话后排队）。两种形态经 `SessionHost.outgoing` 读同一份。
+     */
+    val outgoing: StateFlow<List<OutgoingMessage>> =
+        combine(local, engine.chat) { l, chat -> outgoingOf(l.sends, chat) }
+            .distinctUntilChanged()
+            .stateIn(scope, SharingStarted.Eagerly, outgoingOf(local.value.sends, engine.chat.value))
 
     /** 正在停止（此时发送会被忽略）。 */
     val isStopping: Boolean get() = local.value.composer.stopping
@@ -743,15 +802,26 @@ class ChatController(
     }
 
     /** 失败气泡上的「改一改」：文本退回输入框（输入框不空时以撤回芯片显示，不覆盖草稿）。 */
-    fun editFailed(localId: String) {
+    fun editFailed(localId: String) = editFailed(localId, restoreAttachments = true)
+
+    /**
+     * [restoreAttachments]：图片放回本控制器的附件（旧聊天页）；端口传 false，自己把图片 URI 放回共享草稿。
+     * 返回被退回的那条（不存在时 null）。
+     */
+    fun editFailed(localId: String, restoreAttachments: Boolean): LocalSend? {
+        var taken: LocalSend? = null
         local.update { s ->
-            val l = s.sends.firstOrNull { it.id == localId } ?: return@update s
+            val l = s.sends.firstOrNull { it.id == localId && it.status == Delivery.FAILED }
+            taken = l
+            if (l == null) return@update s
             s.copy(
                 sends = s.sends - l,
-                composer = if (l.text.isBlank()) s.composer else ComposerLogic.onSendRejected(s.composer, l.text),
-                attachments = if (s.attachments.isEmpty()) l.images else s.attachments,
+                attachments = if (restoreAttachments && s.attachments.isEmpty()) l.images else s.attachments,
             )
         }
+        val l = taken ?: return null
+        if (l.text.isNotBlank()) editDraft { ComposerLogic.onSendRejected(it, l.text) }
+        return l
     }
 
     fun deleteFailed(localId: String) = local.update { s -> s.copy(sends = s.sends.filterNot { it.id == localId }) }
@@ -762,7 +832,7 @@ class ChatController(
         sendText(text, SendMode.FOLLOW_UP, reuseId = null)
     }
 
-    private fun sendText(text: String, mode: SendMode, reuseId: String?, images: List<ImageInput> = emptyList()) {
+    private fun sendText(text: String, mode: SendMode, reuseId: String?, images: List<ImageInput> = emptyList()): String {
         val chat = engine.chat.value
         val id = reuseId ?: "s${seq++}"
         val pending = LocalSend(id = id, text = text, status = Delivery.SENDING, baselineUserCount = Outbox.userCount(chat, text), images = images)
@@ -778,10 +848,15 @@ class ChatController(
             }
             val now = engine.chat.value
             var lateDelivered = false
+            var draftEdit: ((ComposerState) -> ComposerState)? = null
+            var failedNow = false
             local.update { s ->
                 lateDelivered = false
+                draftEdit = null
+                failedNow = false
                 val cur = s.sends.firstOrNull { it.id == id }
-                    ?: return@update settleOrphan(s, id, r).also { lateDelivered = it.second }.first
+                    ?: return@update settleOrphan(s, id, r).also { lateDelivered = it.second; draftEdit = it.third }.first
+                failedNow = r is Outcome.Err
                 val next: LocalSend? = when (r) {
                     is Outcome.Ok -> when (r.value) {
                         Disposition.STARTED -> cur.copy(status = Delivery.SENT, sawRunning = now.running)
@@ -793,12 +868,15 @@ class ChatController(
                 val sends = s.sends.map { if (it.id == id) next else it }.filterNotNull()
                 s.copy(sends = Outbox.reconcile(sends, now))
             }
+            draftEdit?.let { editDraft(it) }
             if (lateDelivered) emitMessage("该消息已发出")
             else if (r is Outcome.Ok && r.value == Disposition.HANDLED) emitMessage("已由扩展命令处理")
+            else if (failedNow && r is Outcome.Err) emitMessage("消息没有发出（${sendErrorText(r)}），内容已保留，可重试或改一改")
         }
         inflightSends += job
         job.invokeOnCompletion { inflightSends.remove(job) }
         job.start()
+        return id
     }
 
     /**
@@ -808,18 +886,18 @@ class ChatController(
      *   在草稿或芯片仍等于原文时撤掉退回的那份，并返回 true（调用方提示「该消息已发出」）；
      * - 其他情况（已被引擎接管后对账移除）：什么都不做。
      */
-    private fun settleOrphan(s: Local, id: String, r: Outcome<Disposition>): Pair<Local, Boolean> {
+    private fun settleOrphan(s: Local, id: String, r: Outcome<Disposition>): Triple<Local, Boolean, ((ComposerState) -> ComposerState)?> {
         s.returnedSending[id]?.let { text ->
             val rest = s.returnedSending - id
-            if (r is Outcome.Err) return s.copy(returnedSending = rest) to false
-            return s.copy(returnedSending = rest, composer = retractReturned(s.composer, text)) to true
+            if (r is Outcome.Err) return Triple(s.copy(returnedSending = rest), false, null)
+            return Triple(s.copy(returnedSending = rest), true) { c -> retractReturned(c, text) }
         }
-        val text = s.orphanSends[id] ?: return s to false
+        val text = s.orphanSends[id] ?: return Triple(s, false, null)
         val rest = s.orphanSends - id
         return if (r is Outcome.Err) {
-            s.copy(orphanSends = rest, composer = ComposerLogic.onWithdrawn(s.composer, listOf(text))) to false
+            Triple(s.copy(orphanSends = rest), false) { c -> ComposerLogic.onWithdrawn(c, listOf(text)) }
         } else {
-            s.copy(orphanSends = rest) to false
+            Triple(s.copy(orphanSends = rest), false, null)
         }
     }
 
@@ -858,7 +936,19 @@ class ChatController(
      * 否则以「已撤回 n 条」芯片显示，**绝不覆盖草稿**。草稿以停止完成那一刻为准（停止期间用户可以继续打字）。
      */
     fun stop() {
-        if (local.value.composer.stopping) return
+        startStop()
+    }
+
+    /** 停止并等结果（`SessionChatPort.stop`，终端形态的 Esc）：已在停止中就等那一次的结果。 */
+    suspend fun stopAndWait(): Outcome<QueueSnapshot> = startStop().await()
+
+    @Volatile
+    private var stopResult: CompletableDeferred<Outcome<QueueSnapshot>>? = null
+
+    private fun startStop(): CompletableDeferred<Outcome<QueueSnapshot>> {
+        stopResult?.let { if (local.value.composer.stopping) return it }
+        val result = CompletableDeferred<Outcome<QueueSnapshot>>()
+        stopResult = result
         // 先收起所有还在等用户回答的阻塞类对话框（工具确认、提问等），不留悬空弹窗（piweb-study G1）。
         // pi 1.5.0 的 RPC 对话框在 abort 时不会自己结束、也不发关闭事件：不先应答 cancelled，
         // 扩展没传 signal 时 abort 会一直等到 20 s 超时被强杀。移植自 agegr/pi-web@025e24e
@@ -890,28 +980,34 @@ class ChatController(
             } catch (e: CancellationException) {
                 slow.cancel()
                 local.update { it.copy(composer = it.composer.copy(stopping = false, stopSlow = false)) }
+                result.complete(Outcome.Err(ErrCode.CANCELLED, "已取消"))
                 throw e
             } catch (t: Throwable) {
                 Outcome.Err(ErrCode.UNKNOWN, t.message ?: "", t)
             }
             slow.cancel()
+            var texts: List<String> = emptyList()
             local.update { s ->
-                var c = s.composer.copy(stopping = false, stopSlow = false)
-                if (r is Outcome.Ok) {
-                    // 停止超时触发强杀重启时，引擎重启已经把队列文本退回过一次，这里扣掉，避免出现两份。
-                    val texts = minusEach(ComposerLogic.withdrawnTexts(r.value), s.withdrawnDuringStop)
-                    c = ComposerLogic.onWithdrawn(c, texts)
-                }
+                // 停止超时触发强杀重启时，引擎重启已经把队列文本退回过一次，这里扣掉，避免出现两份。
+                texts = if (r is Outcome.Ok) minusEach(ComposerLogic.withdrawnTexts(r.value), s.withdrawnDuringStop) else emptyList()
                 // 排队中的本地气泡已随队列一起撤回（文本在撤回结果里），不再显示。
-                s.copy(composer = c, sends = s.sends.filterNot { it.status == Delivery.QUEUED }, withdrawnDuringStop = emptyList())
+                s.copy(
+                    composer = s.composer.copy(stopping = false, stopSlow = false),
+                    sends = s.sends.filterNot { it.status == Delivery.QUEUED },
+                    withdrawnDuringStop = emptyList(),
+                )
             }
+            // 撤回的文字进唯一的草稿：输入框为空时放回，否则进「已撤回」芯片（= DraftState.recalled，随草稿持久化）。
+            editDraft { ComposerLogic.onWithdrawn(it, texts) }
             if (r is Outcome.Err) emitMessage("停止失败：" + r.message.ifBlank { "未知错误" })
+            result.complete(r)
         }
+        return result
     }
 
-    fun insertWithdrawn() = local.update { it.copy(composer = ComposerLogic.insertWithdrawn(it.composer)) }
+    fun insertWithdrawn() = editDraft { ComposerLogic.insertWithdrawn(it) }
 
-    fun discardWithdrawn() = local.update { it.copy(composer = ComposerLogic.discardWithdrawn(it.composer)) }
+    fun discardWithdrawn() = editDraft { ComposerLogic.discardWithdrawn(it) }
 
     // ---------------- 折叠 ----------------
 
@@ -954,9 +1050,10 @@ class ChatController(
                 s.copy(status = if (a.text.isNullOrBlank()) s.status - a.key else s.status + (a.key to a.text))
             }
             is ExtUiAction.Title -> local.update { it.copy(title = a.title) }
-            is ExtUiAction.EditorText -> local.update { s ->
-                val applied = ComposerLogic.applyEditorText(s.composer, a.text)
-                if (applied != null) s.copy(composer = applied) else s.copy(replaceDraftOffer = a.text)
+            is ExtUiAction.EditorText -> {
+                var offer = false
+                editDraft { c -> offer = false; ComposerLogic.applyEditorText(c, a.text) ?: c.also { offer = true } }
+                if (offer) local.update { it.copy(replaceDraftOffer = a.text) }
             }
         }
     }
@@ -984,9 +1081,10 @@ class ChatController(
         return removed
     }
 
-    fun acceptReplaceDraft() = local.update { s ->
-        val t = s.replaceDraftOffer ?: return@update s
-        s.copy(composer = s.composer.withDraft(t), replaceDraftOffer = null)
+    fun acceptReplaceDraft() {
+        var t: String? = null
+        local.update { s -> t = s.replaceDraftOffer; s.copy(replaceDraftOffer = null) }
+        t?.let { text -> editDraft { it.withDraft(text) } }
     }
 
     fun rejectReplaceDraft() = local.update { it.copy(replaceDraftOffer = null) }
@@ -1061,6 +1159,35 @@ class ChatController(
 
         /** 一条消息最多附几张图。 */
         const val MAX_IMAGES = 8
+
+        /** [typedDrafts] 记多少个打字对象。 */
+        private const val TYPED_RING = 64
+
+        /** [outgoing] 的内容：可见的本地气泡 + pi 队列里还没有本地气泡对应的排队消息。 */
+        fun outgoingOf(sends: List<LocalSend>, chat: ChatState): List<OutgoingMessage> {
+            val visible = Outbox.visible(sends, chat)
+            val local = visible.map { l ->
+                OutgoingMessage(
+                    id = l.id,
+                    text = l.text,
+                    status = when (l.status) {
+                        Delivery.SENDING -> OutgoingStatus.SENDING
+                        Delivery.SENT -> OutgoingStatus.SENT
+                        Delivery.QUEUED -> OutgoingStatus.QUEUED
+                        Delivery.FAILED -> OutgoingStatus.FAILED
+                    },
+                    imageCount = l.images.size,
+                    error = l.error,
+                    needsSettings = l.needsSettings,
+                )
+            }
+            val shownQueued = visible.filter { it.status == Delivery.QUEUED }.map { it.text }
+            val steer = minusEach(chat.queue.steering.filter { it.isNotBlank() }, shownQueued)
+            val follow = minusEach(chat.queue.followUp.filter { it.isNotBlank() }, minusEach(shownQueued, chat.queue.steering))
+            val queued = steer.mapIndexed { i, t -> OutgoingMessage("queue:steer:$i", t, OutgoingStatus.QUEUED) } +
+                follow.mapIndexed { i, t -> OutgoingMessage("queue:follow:$i", t, OutgoingStatus.QUEUED) }
+            return local + queued
+        }
 
         /** 只带图片时，按「有字」计算发送键状态用的占位（不会发出去）。 */
         private const val IMAGE_ONLY_PLACEHOLDER = "[image]"

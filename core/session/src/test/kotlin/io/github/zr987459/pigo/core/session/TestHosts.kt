@@ -62,6 +62,18 @@ class TestChatPort(private val engine: io.github.zr987459.pigo.contract.EngineCl
         return engine.send(AtFileExpansion.compose(d.text, d.fileRefs), mode)
     }
 
+    override val outgoing: kotlinx.coroutines.flow.StateFlow<List<io.github.zr987459.pigo.contract.session.OutgoingMessage>> =
+        kotlinx.coroutines.flow.MutableStateFlow(emptyList())
+    override fun retryOutgoing(id: String) {}
+    override fun editOutgoing(id: String) {}
+    override fun discardOutgoing(id: String) {}
+
+    override suspend fun stop(): Outcome<QueueSnapshot> {
+        val r = engine.stop()
+        if (r is Outcome.Ok) draft.value = QueueRecall.merge(draft.value, r.value.steering + r.value.followUp)
+        return r
+    }
+
     override fun answerDialog(requestId: String, value: String?, confirmed: Boolean?, cancelled: Boolean) {
         _dialogs.value = _dialogs.value.filterNot { it.id == requestId }
         answers += Triple(requestId, value, cancelled)
