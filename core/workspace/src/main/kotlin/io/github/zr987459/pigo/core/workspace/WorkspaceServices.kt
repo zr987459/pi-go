@@ -20,6 +20,9 @@ class WorkspaceServices(
     currentSessionPath: (suspend () -> String?)? = null,
 ) {
     val fs = RootfsWorkspace(runtime.hostFile("/"), { cmd, timeout -> runtime.exec(cmd, emptyMap(), timeout) })
+
+    /** DESIGN-r3 §1.2：`@` 模糊搜索、读文件、branchName()、只列目录（与 [fs] 同一个对象）。 */
+    val search: io.github.zr987459.pigo.contract.workspace.WorkspaceSearch get() = fs
     val attachments = WorkspaceAttachments(fs, AndroidImageCodec)
     val exporter = WorkspaceSessionExporter(
         fs, File(cacheDir, "pigo-exports"), exportHtml,

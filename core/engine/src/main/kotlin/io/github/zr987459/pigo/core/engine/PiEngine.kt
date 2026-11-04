@@ -47,6 +47,10 @@ import io.github.zr987459.pigo.contract.QueueSnapshot
 import io.github.zr987459.pigo.contract.RuntimeManager
 import io.github.zr987459.pigo.contract.SendMode
 import io.github.zr987459.pigo.contract.SessionStats
+import io.github.zr987459.pigo.contract.bridge.BridgeState
+import io.github.zr987459.pigo.contract.bridge.BridgeStatus
+import io.github.zr987459.pigo.contract.bridge.PiBridge
+import io.github.zr987459.pigo.contract.bridge.TreeNavResult
 import io.github.zr987459.pigo.contract.rpc.EngineEvent
 import io.github.zr987459.pigo.contract.rpc.ExtUiRequestRecord
 import io.github.zr987459.pigo.contract.rpc.RpcCommand
@@ -59,6 +63,7 @@ import io.github.zr987459.pigo.core.protocol.ProviderErrors
 import io.github.zr987459.pigo.core.protocol.Redactor
 import io.github.zr987459.pigo.core.protocol.Responses
 import io.github.zr987459.pigo.core.protocol.RpcChannel
+import io.github.zr987459.pigo.core.protocol.RpcTimeouts
 import io.github.zr987459.pigo.core.protocol.StderrClassifier
 import io.github.zr987459.pigo.core.protocol.long
 import io.github.zr987459.pigo.core.protocol.str
@@ -118,7 +123,11 @@ class PiEngine(
     private val io: CoroutineDispatcher = Dispatchers.IO,
     private val compute: CoroutineDispatcher = Dispatchers.Default,
     private val clock: () -> Long = System::currentTimeMillis,
-) : EngineClient, EngineExtras {
+    /** `pigo-bridge.ts` 的来源（Android：APK assets）；null 时只在容器里已有该文件时加载（DESIGN-r3 §5.6）。 */
+    private val bridgeSource: BridgeSource? = null,
+    /** 由引擎进程树的根 PID（proot）找到 pi（node）进程 PID；Android 上经 `ProcessTree`，桌面直接就是 pi。 */
+    private val enginePidResolver: (rootPid: Int) -> Int? = { it },
+) : EngineClient, EngineExtras, PiBridge {
 
     private class Conn(
         val gen: Int,
@@ -215,6 +224,10 @@ class PiEngine(
 
     /** 收到的不带 id 的 parse 错误等协议异常次数（诊断页可见）。 */
     val protocolErrors = AtomicInteger(0)
+
+    /** 当前进程里的桥接扩展状态与在途请求（§5.6）。 */
+    private val bridge = BridgeChannel()
+    override val bridgeStatus: StateFlow<BridgeStatus> get() = bridge.status
 
     private val _status = MutableStateFlow<EngineStatus>(EngineStatus.Stopped)
     override val status: StateFlow<EngineStatus> = _status.asStateFlow()
@@ -510,7 +523,9 @@ class PiEngine(
         }
         knownSecrets = keyEnv.filterKeys { it.endsWith("_API_KEY") || it.startsWith("PIGO_KEY_") || it.endsWith("_TOKEN") }
             .values.filter { it.length >= 6 }
-        val spec = config.spec(session, cwd, keyEnv)
+        val withBridge = withContext(io) { prepareBridge() }
+        bridge.reset(gen, withBridge, if (config.bridgeExtension == null) "未启用桥接扩展" else null)
+        val spec = config.spec(session, cwd, keyEnv, withBridge)
         // 只记 argv 与 cwd，环境变量里有 Key，不写日志。
         log.i(TAG, "启动 pi（$reason）：argv=${spec.argv.joinToString(" ")} cwd=${spec.cwd}")
         // 希望引擎运行：前台服务保持开启（幂等）。不在每次 boot / 进程退出时启停，避免 startForegroundService
@@ -706,7 +721,10 @@ class PiEngine(
                 }
                 is EngineEvent.ExtensionError -> {
                     log.w(TAG, "扩展出错：${record.extensionPath} ${record.event}: ${record.error?.let(redactor::redact)}")
-                    inputs.trySend(Input.Rec(c.gen, record))
+                    // 桥接扩展自己的错误不进时间线：界面通过 bridgeStatus 显示退路原因（§5.6）。
+                    if (!bridge.onExtensionError(record.extensionPath, record.error?.let(redactor::redact))) {
+                        inputs.trySend(Input.Rec(c.gen, record))
+                    }
                 }
                 else -> inputs.trySend(Input.Rec(c.gen, record))
             }
@@ -715,6 +733,8 @@ class PiEngine(
 
     private fun onUiRequest(c: Conn, r: ExtUiRequestRecord) {
         val o = r.raw
+        // 桥接扩展的回传（`pigo-bridge:` 前缀的 notify）只给 BridgeChannel，不给界面。
+        if (r.method == "notify" && bridge.onNotify(o.str("message"))) return
         val req = ExtUiRequest(
             id = r.id,
             method = r.method,
@@ -765,6 +785,7 @@ class PiEngine(
             null
         }
         c.exited = true
+        bridge.onExit(c.gen)
         log.i(TAG, "pi 进程退出：code=$code intentional=${c.intentional}")
         if (c.intentional || closed) return
         onCrash(c, code)
@@ -1191,7 +1212,9 @@ class PiEngine(
         val cwd = currentCwd
         if (!refresh) commandCache?.let { (k, v) -> if (k == cwd) return Outcome.Ok(v) }
         return extra { RpcCommands.GetCommands(it) }.map { r ->
-            ExtraResponses.commands(r.data).map(ContractMapping::command).also { commandCache = cwd to it }
+            ExtraResponses.commands(r.data).map(ContractMapping::command)
+                .filterNot { it.name.startsWith(PiBridge.COMMAND_PREFIX) } // 桥接的内部命令不进 `/` 补全
+                .also { commandCache = cwd to it }
         }
     }
 
@@ -1386,6 +1409,200 @@ class PiEngine(
     private fun Outcome<RpcResponse>.unit(): Outcome<Unit> = when (this) {
         is Outcome.Ok -> Outcome.Ok(Unit)
         is Outcome.Err -> this
+    }
+
+    // =================================================================== 桥接扩展（DESIGN-r3 §5.6，r3/core）
+
+    /** 安装（或确认已存在）桥接扩展；返回是否加 `-e`。在 io 线程调用。 */
+    private fun prepareBridge(): Boolean {
+        val guest = config.bridgeExtension ?: return false
+        val host = runCatching { runtime.hostFile(guest) }.getOrNull() ?: return false
+        bridgeSource?.let { src ->
+            val ok = runCatching { src.open()?.let { PigoBridge.install(it, host) } }.getOrNull() == true
+            if (!ok) log.w(TAG, "桥接扩展安装失败，走退路")
+        }
+        return host.isFile
+    }
+
+    /** 引擎已启动且桥接 ready（PENDING 时最多等 [EngineConfig.bridgeReadyTimeoutMs]）。 */
+    private suspend fun bridgeReady(): Boolean {
+        val s = ensureStarted()
+        if (s is Outcome.Err) return false
+        return bridge.awaitSettled(config.bridgeReadyTimeoutMs)
+    }
+
+    /** 每种桥接命令一把锁：同一时刻每种命令最多一个在途，回复不会被同类的另一个请求认领（审查 Nit 1）。 */
+    private val bridgeLocks = java.util.concurrent.ConcurrentHashMap<String, Mutex>()
+
+    private suspend fun <T> bridgeSerial(cmd: String, block: suspend () -> T): T =
+        bridgeLocks.getOrPut(cmd) { Mutex() }.withLock { block() }
+
+    /**
+     * 发一条桥接命令（经 `prompt`，不进聊天时间线），等 [waiter] 的回复，最多 [timeoutMs]。
+     *
+     * pi 1.5.0 要等扩展命令的 handler **执行完**才回 `prompt` 的 response（`agent-session.js` 的 `prompt()` 先
+     * `await _tryExecuteExtensionCommand()`），所以承载命令的 `prompt` 用与 waiter 相同的超时，并且不走 [callCmd] 的
+     * 「超时 → 探活 → 强杀重启」（慢的树切换不是引擎卡死）。`prompt` 被 pi 拒绝时立即失败，不等到超时。
+     *
+     * 超时后：[onLate] 非空时继续在 [EngineConfig.bridgeLateWindowMs] 内接迟到的回复并交给它（例如再重建一次时间线）；
+     * 返回 RPC_TIMEOUT，由调用方按 pi 当前状态对账。
+     */
+    private suspend fun bridgeCall(
+        text: String,
+        waiter: BridgeChannel.Waiter,
+        timeoutMs: Long,
+        onLate: (suspend (PigoBridge.Message) -> Unit)? = null,
+    ): Outcome<PigoBridge.Message> {
+        val c = conn
+        if (c == null) {
+            waiter.cancel()
+            return Outcome.Err(ErrCode.ENGINE_EXIT, "引擎未运行")
+        }
+        val cmd = RpcCommand.Prompt(ids.next(), text)
+        scope.launch(io) {
+            val sent = c.channel.request(cmd, timeoutMs)
+            if (sent is Outcome.Err && sent.code != ErrCode.RPC_TIMEOUT) waiter.fail(sent)
+        }
+        val r = waiter.await(timeoutMs, keepOnTimeout = onLate != null)
+        if (r is Outcome.Err && r.code == ErrCode.RPC_TIMEOUT && onLate != null) {
+            scope.launch(io) { waiter.awaitLate(config.bridgeLateWindowMs)?.let { runCatching { onLate(it) } } }
+        }
+        return r
+    }
+
+    private fun unavailableReason(): String = bridge.status.value.reason ?: "桥接扩展不可用"
+
+    override suspend fun treeNavigate(entryId: String, summarize: Boolean): Outcome<TreeNavResult> {
+        if (!PigoBridge.validEntryId(entryId)) return Outcome.Err(ErrCode.RPC_REJECTED, "记录 id 不合法")
+        if (!bridgeReady()) {
+            // 退路：从该记录 fork 出新会话（§5.6）。RPC `fork` 只接受用户消息的 id（get_fork_messages 的列表），
+            // 选中助手或工具记录时直接说明，而不是把 pi 的 RPC 错误原样抛给界面（审查 Nit 3）。
+            log.i(TAG, "桥接不可用（${unavailableReason()}），树内切换退化为 fork")
+            val points = forkMessages()
+            if (points is Outcome.Ok && points.value.none { it.entryId == entryId }) {
+                return Outcome.Err(ErrCode.RPC_REJECTED, "树内切换不可用（${unavailableReason()}），只能从用户消息分叉出新会话")
+            }
+            return when (val f = fork(entryId)) {
+                is Outcome.Ok -> Outcome.Ok(
+                    TreeNavResult(leafId = null, sessionFile = sessionFile, cancelled = f.value.cancelled, viaFork = true, editorText = f.value.text),
+                )
+                is Outcome.Err -> f
+            }
+        }
+        return bridgeSerial("tree-nav") {
+            val timeout = if (summarize) config.bridgeSummarizeTimeoutMs else config.bridgeSlowTimeoutMs
+            val r = bridgeCall(PigoBridge.treeNavCommand(entryId, summarize), bridge.expectReply("tree-nav"), timeout) { late ->
+                // 迟到的成功回复：pi 已切换，按它当前的状态再重建一次（对账时可能还没切完）。
+                if (late is PigoBridge.Message.Reply && late.ok && !late.bool("cancelled")) reloadAfterSwitch()
+            }
+            val m = when (r) {
+                is Outcome.Ok -> r.value as PigoBridge.Message.Reply
+                is Outcome.Err -> {
+                    if (r.code != ErrCode.RPC_TIMEOUT) return@bridgeSerial r
+                    // 审查 Important 1：超时不当失败。pi 可能已经切到新叶子，按它当前的状态重建时间线，
+                    // 否则下一条消息会接到界面看不见的分支后面。
+                    log.w(TAG, "树内切换 ${timeout / 1000} s 未确认，按引擎当前状态对账")
+                    reloadAfterSwitch()
+                    val leaf = (tree() as? Outcome.Ok)?.value?.leafId
+                    return@bridgeSerial Outcome.Ok(TreeNavResult(leafId = leaf, sessionFile = sessionFile, cancelled = false, unconfirmed = true))
+                }
+            }
+            if (!m.ok) return@bridgeSerial Outcome.Err(ErrCode.RPC_REJECTED, m.error ?: "树内切换失败")
+            val cancelled = m.bool("cancelled")
+            if (!cancelled) reloadAfterSwitch()
+            Outcome.Ok(
+                TreeNavResult(
+                    leafId = m.str("leafId"),
+                    sessionFile = m.str("sessionFile") ?: sessionFile,
+                    cancelled = cancelled,
+                    editorText = m.str("editorText")?.takeIf { !cancelled },
+                ),
+            )
+        }
+    }
+
+    override suspend fun setEntryLabel(entryId: String, label: String?): Outcome<Unit> {
+        if (!PigoBridge.validEntryId(entryId)) return Outcome.Err(ErrCode.RPC_REJECTED, "记录 id 不合法")
+        if (!bridgeReady()) return Outcome.Err(ErrCode.UNKNOWN, "标签不可用：" + unavailableReason())
+        return bridgeSerial("label") {
+            val r = bridgeCall(PigoBridge.labelCommand(entryId, label), bridge.expectLabelReply(entryId), config.bridgeReplyTimeoutMs)
+            when (r) {
+                is Outcome.Ok -> (r.value as PigoBridge.Message.Reply).let { m ->
+                    if (m.ok) Outcome.Ok(Unit) else Outcome.Err(ErrCode.RPC_REJECTED, m.error ?: "设置标签失败")
+                }
+                is Outcome.Err -> r
+            }
+        }
+    }
+
+    override suspend fun reloadResources(): Outcome<Unit> {
+        if (!bridgeReady()) return Outcome.Err(ErrCode.ENGINE_START, PiBridge.RELOAD_NEEDS_RESTART)
+        return bridgeSerial("reload") {
+            // reload 让旧扩展实例失效，完成信号是新实例的 ready（reason=reload），失败时旧实例会回 {cmd:reload, ok:false}。
+            val w = bridge.expect { (it is PigoBridge.Message.Ready && it.reason == "reload") || (it is PigoBridge.Message.Reply && it.cmd == "reload") }
+            val r = bridgeCall(PigoBridge.RELOAD_COMMAND, w, config.bridgeSlowTimeoutMs) { commandCache = null }
+            val m = when (r) {
+                is Outcome.Ok -> r.value
+                is Outcome.Err -> {
+                    if (r.code == ErrCode.RPC_TIMEOUT) {
+                        // 对账：命令列表以 pi 为准重新取；迟到的 ready 到了会再清一次缓存。
+                        commandCache = null
+                        refreshState()
+                        return@bridgeSerial Outcome.Err(ErrCode.RPC_TIMEOUT, "重新加载还没完成，完成后会自动刷新")
+                    }
+                    return@bridgeSerial r
+                }
+            }
+            if (m is PigoBridge.Message.Reply && !m.ok) return@bridgeSerial Outcome.Err(ErrCode.RPC_REJECTED, m.error ?: "重新加载失败")
+            commandCache = null
+            Outcome.Ok(Unit)
+        }
+    }
+
+    override suspend fun switchSessionViaBridge(sessionPath: String): Outcome<Unit> {
+        if (sessionPath.isBlank() || sessionPath.any { it == '\n' || it == '\r' }) return Outcome.Err(ErrCode.RPC_REJECTED, "会话路径不合法")
+        if (!bridgeReady()) return Outcome.Err(ErrCode.UNKNOWN, unavailableReason())
+        val target = sessionPath.trim()
+        return bridgeSerial("switch") {
+            // 完成信号是新实例的 ready（reason=resume）；任何 cmd=switch 的回复（失败，或被别的扩展取消）也结束等待，
+            // 不必等到超时（审查 Nit 2）。
+            val w = bridge.expect { (it is PigoBridge.Message.Ready && it.reason == "resume") || (it is PigoBridge.Message.Reply && it.cmd == "switch") }
+            val r = bridgeCall(PigoBridge.switchCommand(target), w, config.bridgeSlowTimeoutMs) { late ->
+                if (late is PigoBridge.Message.Ready) { commandCache = null; reloadAfterSwitch() }
+            }
+            val m = when (r) {
+                is Outcome.Ok -> r.value
+                is Outcome.Err -> {
+                    if (r.code != ErrCode.RPC_TIMEOUT) return@bridgeSerial r
+                    // 审查 Important 1：超时后按 pi 当前状态对账。get_state 显示已经在目标会话 → 当成功，重建时间线。
+                    refreshState()
+                    if (sessionFile == target) {
+                        commandCache = null
+                        reloadAfterSwitch()
+                        return@bridgeSerial Outcome.Ok(Unit)
+                    }
+                    return@bridgeSerial r
+                }
+            }
+            if (m is PigoBridge.Message.Reply) {
+                if (!m.ok) return@bridgeSerial Outcome.Err(ErrCode.RPC_REJECTED, m.error ?: "切换会话失败")
+                if (m.bool("cancelled")) return@bridgeSerial Outcome.Err(ErrCode.CANCELLED, "切换会话被扩展取消")
+            }
+            commandCache = null
+            reloadAfterSwitch()
+            Outcome.Ok(Unit)
+        }
+    }
+
+    /**
+     * pi 进程 PID（DESIGN-r3 §7.2 B 档：切换形态前后 PID 不变）。由进程树根（proot）经 [enginePidResolver] 找到；
+     * 引擎未运行返回 null。
+     */
+    fun debugEnginePid(): Int? {
+        val c = conn ?: return null
+        if (c.exited) return null
+        val root = runCatching { c.process.prootPid }.getOrNull() ?: return null
+        return runCatching { enginePidResolver(root) }.getOrNull()
     }
 
     /** 测试/诊断用：当前唤醒锁是否持有。 */
