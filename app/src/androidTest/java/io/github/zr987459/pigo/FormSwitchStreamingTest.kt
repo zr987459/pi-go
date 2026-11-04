@@ -2,7 +2,15 @@ package io.github.zr987459.pigo
 
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.requiredWidth
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.printToString
+import java.util.concurrent.atomic.AtomicInteger
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -10,12 +18,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.getBoundsInRoot
 import androidx.test.platform.app.InstrumentationRegistry
 import io.github.zr987459.pigo.di.BindingContext
 import io.github.zr987459.pigo.di.Mode
 import io.github.zr987459.pigo.di.SessionBindings
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -56,10 +62,12 @@ import org.junit.runner.RunWith
  * 装配：宿主经 `SessionBindings.host(Mode.FAKE, …)` 取得——AppGraph 按 `BindingMode.session` 调的就是这个工厂，FAKE 分支给出
  * `FakeSessionHost`（引擎 = FakeScriptedEngine）；界面是 App 里同一个 [ChatPage]（FormHost + CalmSurface + TermSurface）。
  *
- * 流式：500 段、每段 20ms（不暂停时约 10 秒）。出段时机由测试控制（[StreamScript.gate]）：
- * - 每次经 UI 点击与断言期间暂停出段，让 Compose 有空闲（连续 20ms 出段时界面没有空档，CI 79ffb91 实测 ComposeNotIdleException），
- *   断言完放行 300ms 再点下一次——切换确实发生在生成中途；
- * - 第 [HOLD] 段之后要等全部 16 次切换完成才放行，所以「切换完时仍在生成中」不依赖模拟器快慢。
+ * 流式：500 段、每段 20ms。出段由测试分批放行（[StreamScript.gate] 只放到 `allowed` 之前的段）：
+ * - 流自由出段时测试**不做任何要求界面空闲的操作**（查找、点击、waitForIdle 都会等空闲；连续 20ms 出段时界面没有空档，
+ *   慢模拟器上 Compose 一直忙 → ComposeNotIdleException，CI 79ffb91、7c8681e 实测）。
+ *   等出段只看引擎侧计数（[pollUntil]，不碰 Compose），停在闸门后再 waitForIdle、经 UI 点击、断言；
+ * - 每次切换之间放行 [BATCH] 段（20ms × 15 ≈ 300ms 的流），切换确实发生在生成中途；
+ * - 16 次切换都做完才放行其余分段，所以「切换完时仍在生成中」不依赖模拟器快慢。
  *
  * 全部切换都经真实 UI：UI 形态顶栏的 ⇄ 与终端键条固定在最右的 ⇄UI（同一个测试标签 form:toggle）。
  * 段号、全文、搜索词尽量从屏幕语义节点读。
@@ -122,27 +130,33 @@ class FormSwitchStreamingTest {
         rule.runOnIdle { host.draft.value = draft }
         host.clearCommands()
 
-        val paused = MutableStateFlow(false)
-        val releaseRest = CompletableDeferred<Unit>()
+        // 闸门：第 i 段只在 i < allowed 时发出；atGate = 当前停在闸门前的段号（= 已发出的段数）。
+        val allowed = MutableStateFlow(0)
+        val atGate = AtomicInteger(-1)
         val script = StreamScript(List(SEGMENTS) { "第${it}段\n" }, intervalMs = 20, gate = { i ->
-            paused.first { !it }
-            if (i >= HOLD) releaseRest.await()
+            atGate.set(i)
+            allowed.first { it > i }
         })
-        /** 暂停出段 → 经 UI 切换 → 断言 → 恢复出段。 */
-        fun toggleWhilePaused(check: () -> Unit) {
-            paused.value = true
+        val job = host.startStream(script, userText = "数到五百")
+        /** 放行到第 [n] 段之前，等引擎把这些段发完、停在闸门前（只看引擎侧计数，不等界面空闲），再让界面追上。 */
+        fun releaseTo(n: Int) {
+            allowed.value = n
+            pollUntil("引擎发出前 $n 段") { atGate.get() >= n }
             rule.waitForIdle()
+        }
+        /** 流停在闸门前时经 UI 切换并断言，然后放行下一批（约 300ms 的流）。 */
+        fun toggleThenStream(check: () -> Unit) {
             clickToggle()
             check()
-            paused.value = false
+            releaseTo(allowed.value + BATCH)
         }
-        val job = host.startStream(script, userText = "数到五百")
+        releaseTo(BATCH)
         rule.waitUntil(5_000) { maxSegmentOnScreen() >= 0 }
 
         // ① 生成中经真实 UI 每 300ms 切一次，共 10 次：屏幕上的最大段号单调不减（列表贴底，流式不断）
         var last = maxSegmentOnScreen()
         repeat(10) { i ->
-            toggleWhilePaused {
+            toggleThenStream {
                 val want = if (i % 2 == 0) UiForm.TERM else UiForm.CALM
                 assertEquals(want, host.form.value)
                 assertTrue(exists(if (want == UiForm.TERM) "term:surface" else "calm:composer"))
@@ -150,13 +164,10 @@ class FormSwitchStreamingTest {
                 assertTrue("切换后屏幕上的段号倒退：$last → $now（第 ${i + 1} 次切换）", now >= last)
                 last = now
             }
-            Thread.sleep(300)
         }
         assertEquals(UiForm.CALM, host.form.value)
-        assertTrue("生成仍在进行（第 $HOLD 段后的分段要等切换完才放行）", job.isActive)
+        assertTrue("生成仍在进行（其余分段要等切换完才放行）", job.isActive)
 
-        paused.value = true
-        rule.waitForIdle()
         // 发送键状态：生成中 + 输入框有草稿 = 「引导」；输入框草稿与光标原样
         assertTrue(exists("send:steer"))
         rule.onNodeWithTag("calm:input").assert(hasText("草稿abc"))
@@ -175,9 +186,8 @@ class FormSwitchStreamingTest {
             host.showExtDialog(ExtUiRequest(id = "req-1", method = "confirm", title = "确认", message = "继续吗？", timeoutMs = 60_000), System.currentTimeMillis())
         }
         rule.waitForIdle()
-        paused.value = false
         repeat(6) { i ->
-            toggleWhilePaused {
+            toggleThenStream {
                 assertEquals(if (i % 2 == 0) UiForm.TERM else UiForm.CALM, host.form.value)
                 if (host.form.value == UiForm.TERM) {
                     rule.onNodeWithTag("term:editor").assert(hasText("草稿abc", substring = true))
@@ -187,12 +197,10 @@ class FormSwitchStreamingTest {
                 assertTrue("切换后屏幕上的段号倒退：$last → $now（第 ${i + 11} 次切换）", now >= last)
                 last = now
             }
-            Thread.sleep(300)
         }
         assertEquals(UiForm.CALM, host.form.value)
         assertTrue("16 次切换完时仍在生成中", job.isActive)
-        paused.value = true
-        rule.waitForIdle()
+        assertTrue("切换期间只放行了一部分分段：${atGate.get()}", atGate.get() < SEGMENTS)
 
         // 草稿逐字段相等，屏幕上也是原样
         assertEquals(draft, host.draft.value)
@@ -210,13 +218,12 @@ class FormSwitchStreamingTest {
         rule.onNodeWithTag("overlay:model.select:search", useUnmergedTree = true).assert(hasText("son"))
         rule.runOnIdle { host.overlay.clear() }
 
-        // 切换全部完成后才放行剩余分段
-        paused.value = false
-        releaseRest.complete(Unit)
+        // 切换全部完成后才放行剩余分段；等流结束只看 job（不碰 Compose），结束后界面才追上
+        allowed.value = SEGMENTS
+        pollUntil("流式结束", 60_000) { job.isCompleted }
+        rule.waitForIdle()
 
         // 流式完整、引擎只启动一次、切换不发 abort / new_session / switch_session / restart；没有误触附件 / 退到后台
-        rule.waitUntil(30_000) { job.isCompleted }
-        rule.waitForIdle()
         val full = (host.chat.value.items.last { it is io.github.zr987459.pigo.contract.ChatItem.Assistant } as io.github.zr987459.pigo.contract.ChatItem.Assistant)
             .blocks.filterIsInstance<io.github.zr987459.pigo.contract.ContentBlock.Text>().joinToString("") { it.text }
         assertEquals(script.fullText, full)
@@ -236,22 +243,35 @@ class FormSwitchStreamingTest {
         rule.waitUntil(3_000) { maxSegmentOnScreen() == SEGMENTS - 1 }
     }
 
-    /** PR #26 第 2 轮 Nit 3：320dp / 360dp 窄屏下 ⇄UI（终端键条）与 ⇄（UI 顶栏）都在屏幕内、可点。 */
+    /**
+     * PR #26 第 2 轮 Nit 3：320dp / 360dp 窄屏下 ⇄UI（终端键条）与 ⇄（UI 顶栏）都在屏幕内、可点。
+     *
+     * CI 模拟器本身就是 320×640dp（avd 默认 skin 320x640、160dpi）。360dp 比屏幕宽，旧写法 `requiredWidth(360.dp)`
+     * 会把内容居中、左右各裁掉 20dp，测的不是「360dp 宽的屏幕」。这里按需缩小密度（同 `DeviceConfigurationOverride.ForcedSize`
+     * 的做法），让内容按 [w] 宽排版并整体落在窗口内；窄于窗口时靠左排版。
+     */
     @Test
     fun narrowScreensKeepToggleVisibleAndClickable() {
         val ctx = BindingContext(InstrumentationRegistry.getInstrumentation().targetContext.applicationContext, scope)
         val host = SessionBindings.host(Mode.FAKE, ctx, UiForm.TERM) { error("A 档只用 FAKE") } as FakeSessionHost
-        var width by mutableStateOf(320.dp)
+        currentForm = { host.form.value }
+        var screenW by mutableStateOf(320.dp)
         rule.setContent {
-            Box(Modifier.requiredWidth(width)) {
-                ChatPage(
-                    host = host, panelEvents = null, panelSource = null, fileSearch = null,
-                    cwd = "/root/pi-cwd", home = "/root", onOpenSettings = {}, onAttachImage = {}, onBackground = {},
-                )
+            BoxWithConstraints {
+                val d = LocalDensity.current
+                val scale = if (maxWidth < screenW) maxWidth / screenW else 1f
+                CompositionLocalProvider(LocalDensity provides Density(d.density * scale, d.fontScale)) {
+                    Box(Modifier.width(screenW).fillMaxHeight()) {
+                        ChatPage(
+                            host = host, panelEvents = null, panelSource = null, fileSearch = null,
+                            cwd = "/root/pi-cwd", home = "/root", onOpenSettings = {}, onAttachImage = {}, onBackground = {},
+                        )
+                    }
+                }
             }
         }
         for (w in listOf(320.dp, 360.dp)) {
-            rule.runOnIdle { width = w; host.form.value = UiForm.TERM }
+            rule.runOnIdle { screenW = w; host.form.value = UiForm.TERM }
             rule.waitForIdle()
             for (want in listOf(UiForm.CALM, UiForm.TERM)) {
                 assertToggleOnScreen(w)
@@ -261,16 +281,36 @@ class FormSwitchStreamingTest {
         }
     }
 
+    /** ⇄ 节点显示着、整体落在窗口（根节点）内、尺寸非零；失败时带上形态、边界与语义树，便于在 CI 日志里定位。 */
     private fun assertToggleOnScreen(w: Dp) {
         val node = rule.onNodeWithTag("form:toggle", useUnmergedTree = true)
-        node.assertIsDisplayed()
-        val b = node.getBoundsInRoot()
-        assertTrue("form:toggle 超出 $w：${b}", b.left >= 0.dp && b.right <= w + 0.5.dp && b.right > b.left)
+        val b = node.fetchSemanticsNode().boundsInWindow
+        val root = rule.onRoot().fetchSemanticsNode().boundsInWindow
+        fun diag() = "w=$w form=${currentForm()} toggle=$b root=$root\n" + rule.onRoot(useUnmergedTree = true).printToString(maxDepth = 6)
+        try {
+            node.assertIsDisplayed()
+        } catch (e: AssertionError) {
+            throw AssertionError("form:toggle 未显示：${diag()}", e)
+        }
+        assertTrue("form:toggle 不在窗口内：${diag()}",
+            b.width > 0f && b.height > 0f && b.left >= root.left - 0.5f && b.right <= root.right + 0.5f &&
+                b.top >= root.top - 0.5f && b.bottom <= root.bottom + 0.5f)
+    }
+
+    private var currentForm: () -> UiForm? = { null }
+
+    /** 轮询引擎侧条件（不碰 Compose、不等界面空闲）。 */
+    private fun pollUntil(what: String, timeoutMs: Long = 20_000, cond: () -> Boolean) {
+        val end = System.currentTimeMillis() + timeoutMs
+        while (!cond()) {
+            if (System.currentTimeMillis() > end) throw AssertionError("等待超时（${timeoutMs}ms）：$what")
+            Thread.sleep(10)
+        }
     }
 
     private companion object {
         const val SEGMENTS = 500
-        /** 第 HOLD 段起要等全部切换完成才放行。 */
-        const val HOLD = 400
+        /** 两次切换之间放行的段数（20ms × 15 ≈ 300ms 的流）。 */
+        const val BATCH = 15
     }
 }
