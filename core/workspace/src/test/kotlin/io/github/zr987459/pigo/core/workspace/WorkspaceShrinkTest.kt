@@ -78,10 +78,14 @@ class WorkspaceShrinkTest {
     fun gitCompatStubs() = runBlocking {
         f("/root/repo/.git/HEAD", "ref: refs/heads/main\n")
         f("/root/plain")
-        val st = (ws().gitStatus("/root/repo") as Outcome.Ok).value
-        assertTrue(st.isRepo); assertEquals("main", st.branch); assertTrue("不再列改动", st.files.isEmpty())
-        assertFalse((ws().gitStatus("/root/plain") as Outcome.Ok).value.isRepo)
-        assertTrue("未登记的目录仍拒绝", ws().gitStatus("/root/../etc") is Outcome.Err)
+        // PR #16 审查 Important 2：不能回「是仓库、无改动」（旧 Git 页会显示「工作区很干净」），明确返回「已删除」。
+        val st = ws().gitStatus("/root/repo")
+        assertTrue("有仓库也返回已删除：$st", st is Outcome.Err && st.message == RootfsWorkspace.GIT_REMOVED)
+        val plain = ws().gitStatus("/root/plain")
+        assertTrue(plain is Outcome.Err && plain.message == RootfsWorkspace.GIT_REMOVED)
+        val denied = ws().gitStatus("/root/../etc")
+        assertTrue("未登记的目录仍按越界拒绝", denied is Outcome.Err && denied.message != RootfsWorkspace.GIT_REMOVED)
+        assertEquals("分支名改由 branchName() 提供", "main", ws().branchName("/root/repo"))
         assertTrue(ws().gitDiff("/root/repo", null, false) is Outcome.Err)
         assertTrue(ws().gitWorktrees("/root/repo") is Outcome.Err)
         assertTrue("不再执行 git", execCalls.isEmpty())

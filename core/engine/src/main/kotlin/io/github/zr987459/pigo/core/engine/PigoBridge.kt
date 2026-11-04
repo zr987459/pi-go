@@ -115,11 +115,30 @@ class BridgeChannel {
     inner class Waiter internal constructor(val match: (PigoBridge.Message) -> Boolean) {
         internal val result = CompletableDeferred<Outcome<PigoBridge.Message>>()
 
-        suspend fun await(timeoutMs: Long): Outcome<PigoBridge.Message> {
+        /**
+         * 等回复，最多 [timeoutMs]。[keepOnTimeout] 为真时超时后仍保持登记（调用方随后用 [awaitLate] 接迟到的回复，
+         * 或 [cancel]）；否则超时即注销。
+         */
+        suspend fun await(timeoutMs: Long, keepOnTimeout: Boolean = false): Outcome<PigoBridge.Message> {
             val r = withTimeoutOrNull(timeoutMs) { result.await() }
-            waiters.remove(this)
+            if (r != null || !keepOnTimeout) waiters.remove(this)
             return r ?: Outcome.Err(ErrCode.RPC_TIMEOUT, "桥接扩展没有回应")
         }
+
+        /** 超时之后继续等迟到的回复，最多 [windowMs]；结束（无论有没有等到）都注销。 */
+        suspend fun awaitLate(windowMs: Long): PigoBridge.Message? {
+            val r = withTimeoutOrNull(windowMs) { result.await() }
+            waiters.remove(this)
+            return (r as? Outcome.Ok)?.value
+        }
+
+        /** 提前以失败结束（例如承载命令的 `prompt` 被 pi 拒绝），不必等到超时。 */
+        fun fail(err: Outcome.Err) {
+            result.complete(err)
+            waiters.remove(this)
+        }
+
+        val isDone: Boolean get() = result.isCompleted
 
         fun cancel() { waiters.remove(this) }
     }
@@ -173,6 +192,14 @@ class BridgeChannel {
     fun expect(match: (PigoBridge.Message) -> Boolean): Waiter = Waiter(match).also { waiters += it }
 
     fun expectReply(cmd: String): Waiter = expect { it is PigoBridge.Message.Reply && it.cmd == cmd }
+
+    /**
+     * 标签回复按 entryId 关联（审查 Nit 1）：同一 entry 的回复才算；扩展在参数缺失时回的失败没有 entryId，也接受。
+     * PiEngine 另外对每种桥接命令串行（Mutex），所以同一时刻每种命令最多一个在途。
+     */
+    fun expectLabelReply(entryId: String): Waiter = expect {
+        it is PigoBridge.Message.Reply && it.cmd == "label" && (it.str("entryId") == null || it.str("entryId") == entryId)
+    }
 
     fun expectReady(reason: String): Waiter = expect { it is PigoBridge.Message.Ready && it.reason == reason }
 

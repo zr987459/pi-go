@@ -41,8 +41,17 @@ data class EngineConfig(
     val bridgeExtension: String? = PigoBridge.GUEST_PATH,
     /** 启动后等桥接 ready 的时间；超时视为不可用，走退路。 */
     val bridgeReadyTimeoutMs: Long = 8_000,
-    /** 桥接命令等回复的时间（`--summarize` 的树切换要等模型写摘要，另用 [RpcTimeouts] 的压缩超时）。 */
+    /** 快的桥接命令（`/pigo:label`）等回复的时间。 */
     val bridgeReplyTimeoutMs: Long = 30_000,
+    /**
+     * 慢的桥接命令（不带摘要的 `/pigo:tree-nav`、`/pigo:reload`、`/pigo:switch`）等回复的时间：reload 要重新加载全部扩展，
+     * 切到大会话要读整个会话文件、重新绑定扩展。pi 要等扩展 handler 执行完才回 `prompt` 的 response（审查第 1 轮 Important 1）。
+     */
+    val bridgeSlowTimeoutMs: Long = 2 * RpcTimeouts.SLOW_MS,
+    /** 带摘要的树切换（`/pigo:tree-nav --summarize`）要等模型写分支摘要，与 `compact` 同为 [RpcTimeouts.COMPACT_MS]。 */
+    val bridgeSummarizeTimeoutMs: Long = RpcTimeouts.COMPACT_MS,
+    /** 超时之后仍接收迟到回复的窗口：迟到的回复到了就再按 pi 当前状态重建一次时间线。 */
+    val bridgeLateWindowMs: Long = RpcTimeouts.COMPACT_MS,
     /**
      * 启动参数加 `-a`（`--approve`，信任本次运行的项目目录）。默认关：它对整次运行的所有目录生效；
      * 按目录信任改用 [ProjectTrustFile] 写 `trust.json`（docs/protocol/r3-measurements.md §2）。

@@ -827,13 +827,21 @@ class PiEngineTest {
     @Test
     fun promptTimeoutIsConfirmedLaterInsteadOfDuplicated() = runBlocking {
         // 审查 Nit #6：prompt 应答超时 → 标红但仍等确认；pi 其实收下了 → 气泡变回「已发送」，只有一条。
+        // PR #16 审查 Nit 4：原来用 later(1_300) 与 1 s 的超时只差 300 ms，CI 慢时确认会先于「标红」断言到达。
+        // 改成闸门：测试断言完「已标红」才放行 pi 的确认，与机器快慢无关。
+        val gate = java.util.concurrent.CountDownLatch(1)
         val rt = ScriptedRuntime {
             { cmd ->
                 if (cmd.str("type") == "prompt") {
-                    later(1_300) {
-                        emit("""{"type":"agent_start"}""")
-                        emit("""{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"${cmd.str("message")}"}]}}""")
-                    }
+                    val pi = this
+                    Thread {
+                        // 不占脚本线程：超时后的 get_state 探活照常应答。
+                        gate.await(10, java.util.concurrent.TimeUnit.SECONDS)
+                        pi.later(0) {
+                            emit("""{"type":"agent_start"}""")
+                            emit("""{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"${cmd.str("message")}"}]}}""")
+                        }
+                    }.apply { isDaemon = true }.start()
                 } else {
                     basics(cmd)
                 }
@@ -843,6 +851,7 @@ class PiEngineTest {
         e.start()
         assertEquals(ErrCode.RPC_TIMEOUT, (e.send("慢") as Outcome.Err).code)
         assertEquals(Delivery.FAILED, (e.chat.value.items.single() as ChatItem.User).delivery)
+        gate.countDown() // 现在才让 pi 的确认到达
         waitFor { e.chat.value.running }
         // agent_start 与 user message_start 由同一个脚本任务先后发出：running 变真时 message_start 可能还没归约完
         // （CI 上偶发 expected SENT but was FAILED）。等确认到达再断言「只有一条且已发送」。

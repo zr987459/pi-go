@@ -29,12 +29,19 @@ data class BridgeStatus(
 
 /**
  * @param viaFork 桥接不可用、退化为「从该记录 fork 出新会话」（§5.6 退路）；此时 [sessionFile] 是新会话文件。
+ * @param editorText 选中的是用户消息时，该消息的原文：pi `/tree` 会把它放回编辑器（叶子切到它的父节点），
+ *   调用方（r3/session）应写进共享草稿。桥接路径由 pigo-bridge 从 entry 取（RPC 下 `navigateTree` 的返回里没有它），
+ *   fork 退路取 `fork` 响应的 text。不是用户消息时为 null。
+ * @param unconfirmed 桥接回复在超时内没有到（例如带摘要的切换很慢）：PiEngine 已按 pi 当前状态（get_state + get_messages
+ *   + get_tree）重建时间线，[leafId] 是 pi 当前的叶子，但切换是否完成未确认；界面应提示「已按引擎当前状态刷新」。
  */
 data class TreeNavResult(
     val leafId: String?,
     val sessionFile: String?,
     val cancelled: Boolean,
     val viaFork: Boolean = false,
+    val editorText: String? = null,
+    val unconfirmed: Boolean = false,
 )
 
 interface PiBridge {

@@ -97,6 +97,9 @@ class RealPiBridgeIntegrationTest {
         assertNotEquals("leafId 改变", before.leafId, after.leafId)
         assertEquals("sessionFile 不变", file, engine.currentSessionFile)
         assertEquals(nav.leafId, after.leafId)
+        // 审查 Nit 3：选中用户消息 → 原文随回复带回，r3/session 放回共享草稿（pi /tree 的行为）。
+        assertEquals("第一句 #text", nav.editorText)
+        assertFalse(nav.unconfirmed)
     }
 
     @Test

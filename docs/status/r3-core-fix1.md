@@ -8,3 +8,14 @@
   4. 新增 docs/notices/r3-core.md（FileSearch / branchName / ProjectTrustFile 来源，MIT）。
   5. Nit：PigoBridge 按请求 id 关联回复；切会话取消尽快报错；fork 退路与 TreeNavResult 带回 editorText；PiEngineTest:827 时序稳定化。
 - 进度：见下方更新。
+
+## 进度 08:06 CST
+- 已改（第一次推送，待 CI）：
+  - PiEngine 桥接：bridgeCall 不再走 callCmd 的 15 s；prompt 与 waiter 同超时（label=bridgeReplyTimeoutMs，tree-nav/reload/switch=bridgeSlowTimeoutMs，--summarize=bridgeSummarizeTimeoutMs=COMPACT_MS）；prompt 被拒立即失败；超时对账（tree-nav：get_messages 重建 + get_tree 取叶子，返回 unconfirmed；switch：get_state 已在目标即成功；reload：清命令缓存）；迟到回复在 bridgeLateWindowMs 内再重建。
+  - 每种桥接命令一把 Mutex；label 回复按 entryId 关联；switch 的 cancelled 回复立即报 CANCELLED。
+  - TreeNavResult 加 editorText / unconfirmed；pigo-bridge.ts 回传用户消息原文；fork 退路带回 text，非用户消息先说明不发 fork。
+  - RootfsWorkspace.gitStatus → Err(GIT_REMOVED)。
+  - docs/notices/r3-core.md。
+  - PiEngineTest.promptTimeout… 改闸门（CountDownLatch），去掉 300 ms 时间差。
+  - 新测试：PiEngineBridgeTest 6 条（slowSummarize…、treeNavTimeoutReconciles…、switchTimeoutReconciles…、switchCancelledByExtensionFailsFast、rejectedPromptFailsFast、concurrentLabelsGetTheirOwnReplies）；RealPi 断言 editorText。
+- 下一步：看 CI（Android debug build、真 pi 桥接集成测试），修红；更新 PR #16 描述（范围外改动：EngineBindings.kt:76-77 调度者 2026-11-04 授权）。

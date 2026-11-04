@@ -9,7 +9,8 @@
  *   /pigo:reload                              → ctx.reload()          完成信号：新实例的 {"event":"ready","reason":"reload"}
  *   /pigo:switch <sessionPath>                → ctx.switchSession     完成信号：新实例的 {"event":"ready","reason":"resume","sessionFile":"…"}
  *
- * 失败一律回 {"cmd":…,"ok":false,"error":"…"}；App 侧按 `cmd` 匹配最近一次请求（同一时刻每种命令最多一个在途）。
+ * 失败一律回 {"cmd":…,"ok":false,"error":"…"}（label 另带 entryId）；App 侧每种命令串行（同一时刻最多一个在途），
+ * 按 `cmd` 匹配，label 再按 entryId 关联。tree-nav 的成功回复带 editorText（选中用户消息时的原文）。
  * 每次扩展实例生效（session_start）回 {"event":"ready","version":1,"reason":…,"sessionFile":…}，App 用它判断桥接可用；收不到或收到 `extension_error`
  * 就走 §5.6 的退路。
  *
@@ -37,6 +38,16 @@ function errText(e: unknown): string {
 	return e instanceof Error ? e.message : String(e);
 }
 
+/** 用户消息 entry 的纯文本（字符串内容，或 content 数组里 text 块的拼接）；不是用户消息返回 null。 */
+function userText(entry: any): string | null {
+	const msg = entry?.type === "message" ? entry.message : null;
+	if (!msg || msg.role !== "user") return null;
+	if (typeof msg.content === "string") return msg.content;
+	if (!Array.isArray(msg.content)) return null;
+	const parts = msg.content.filter((c: any) => c?.type === "text" && typeof c.text === "string").map((c: any) => c.text);
+	return parts.length > 0 ? parts.join("") : null;
+}
+
 function splitArgs(args: string): string[] {
 	return (args ?? "").trim().split(/\s+/).filter((s) => s.length > 0);
 }
@@ -61,6 +72,9 @@ export default function pigoBridge(pi: Api) {
 			const target = parts.find((p) => !p.startsWith("--"));
 			if (!target) return reply(ctx, { cmd: "tree-nav", ok: false, error: "缺少 entryId" });
 			try {
+				// pi 的 /tree 选中用户消息时把原文放回编辑器；RPC 模式下 navigateTree 的返回里去掉了 editorText，
+				// 所以在切换前从 entry 取原文一并回传（App 写进共享草稿）。
+				const editorText = userText(ctx.sessionManager.getEntry?.(target));
 				const r = await ctx.navigateTree(target, { summarize });
 				reply(ctx, {
 					cmd: "tree-nav",
@@ -68,6 +82,7 @@ export default function pigoBridge(pi: Api) {
 					cancelled: !!r?.cancelled,
 					leafId: ctx.sessionManager.getLeafId(),
 					sessionFile: ctx.sessionManager.getSessionFile() ?? null,
+					editorText: r?.cancelled ? null : (r?.editorText ?? editorText),
 				});
 			} catch (e) {
 				reply(ctx, { cmd: "tree-nav", ok: false, error: errText(e) });
@@ -85,12 +100,12 @@ export default function pigoBridge(pi: Api) {
 			if (!entryId) return reply(ctx, { cmd: "label", ok: false, error: "缺少 entryId" });
 			try {
 				if (!ctx.sessionManager.getEntry(entryId)) {
-					return reply(ctx, { cmd: "label", ok: false, error: `没有这条记录：${entryId}` });
+					return reply(ctx, { cmd: "label", ok: false, entryId, error: `没有这条记录：${entryId}` });
 				}
 				pi.setLabel(entryId, label.length > 0 ? label : undefined);
 				reply(ctx, { cmd: "label", ok: true, entryId, label: label.length > 0 ? label : null });
 			} catch (e) {
-				reply(ctx, { cmd: "label", ok: false, error: errText(e) });
+				reply(ctx, { cmd: "label", ok: false, entryId, error: errText(e) });
 			}
 		},
 	});

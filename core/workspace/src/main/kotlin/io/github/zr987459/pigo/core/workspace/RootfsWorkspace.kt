@@ -165,14 +165,17 @@ class RootfsWorkspace(
 
     /**
      * Git 页已按 DESIGN-r3 §1.1 X5 删除（pi 没有）；GitParse 与 diff/worktree 实现一并删除。
-     * 契约 [WorkspaceFs] 冻结（r3/core 只新增文件），旧调用方（feature/files 的 Git 页，r3/app 删除）在那之前仍能编译：
-     * 只回答「是不是仓库 + 当前分支名」，不再列文件改动。
+     * 契约 [WorkspaceFs] 冻结（r3/core 只新增文件），旧调用方（feature/files 的 Git 页，r3/app 删除）在那之前仍能编译。
+     *
+     * PR #16 审查 Important 2：不能回「是仓库、无改动」——旧 Git 页会对有改动的仓库显示「工作区很干净」。
+     * 与 [gitDiff]/[gitWorktrees] 一样明确返回「已删除」：Git 页显示这句说明，文件页不再显示 Git 入口与改动角标。
+     * 未登记的 cwd 仍先按越界拒绝（只检查不扩大）。页脚分支名用 [branchName]。
      */
     @Deprecated("r3: r3/app 删除调用方（GitScreens / FilesController）；页脚分支名用 branchName()")
-    override suspend fun gitStatus(cwd: String): Outcome<GitStatus> = guarded {
-        paths().resolve(cwd) // 只检查不扩大：未登记的 cwd 抛 PathDenied
-        val b = branchNameBlocking(cwd)
-        if (b == null) GitStatus(isRepo = false) else GitStatus(isRepo = true, branch = b)
+    override suspend fun gitStatus(cwd: String): Outcome<GitStatus> {
+        val checked = guarded { paths().resolve(cwd); Unit }
+        if (checked is Outcome.Err) return checked
+        return Outcome.Err(ErrCode.UNKNOWN, GIT_REMOVED)
     }
 
     @Deprecated("r3: Git diff 已删除（DESIGN-r3 §1.1 X5），r3/app 删除调用方")
