@@ -9,7 +9,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import io.github.zr987459.pigo.contract.Phase
 import io.github.zr987459.pigo.contract.RuntimeStatus
 import io.github.zr987459.pigo.contract.fake.FakeProviderConfigStore
-import io.github.zr987459.pigo.core.ui.AppBackdrop
+import io.github.zr987459.pigo.feature.settings.ui.PlainBackdrop
 import io.github.zr987459.pigo.core.ui.PiGoTheme
 import io.github.zr987459.pigo.feature.settings.ui.LargeTitle
 
@@ -34,7 +34,7 @@ private fun SettingsDarkPreview() = PiGoTheme(darkTheme = true) { SettingsSample
 
 @Composable
 private fun GuideSample() {
-    AppBackdrop {
+    PlainBackdrop {
         Column(Modifier.verticalScroll(rememberScrollState())) {
             LargeTitle("后台运行", subtitle = "pi 在后台跑任务时，手机系统可能为了省电把它关掉。")
             BackgroundGuideContent()

@@ -59,18 +59,18 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import io.github.zr987459.pigo.core.ui.AppBackdrop
-import io.github.zr987459.pigo.core.ui.AppIcon
-import io.github.zr987459.pigo.core.ui.AppIcons
-import io.github.zr987459.pigo.core.ui.ChromeIconButton
-import io.github.zr987459.pigo.core.ui.GlassTier
 import io.github.zr987459.pigo.core.ui.AppMotion
 import io.github.zr987459.pigo.core.ui.AppShape
-import io.github.zr987459.pigo.core.ui.DshTheme
-import io.github.zr987459.pigo.core.ui.Glyph
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import io.github.zr987459.pigo.core.ui.calm.Calm
+import io.github.zr987459.pigo.core.ui.calm.CalmIcons
+import io.github.zr987459.pigo.core.ui.calm.CalmTheme
 
 /**
- * OnboardingScaffold：渐变背景，内容最宽 440dp 居中；顶部 56dp 放步骤条；
+ * OnboardingScaffold：CalmTheme 纯色背景（DESIGN-r3 §4.1：无玻璃、无渐变），内容最宽 440dp 居中；顶部 56dp 放步骤条；
  * 内容 padding (24, 0, 24, 20)，可滚动且至少撑满一屏（子项可用 weight 当 Spacer）。
  */
 @Composable
@@ -81,7 +81,7 @@ internal fun OnboardingScaffold(
     nav: OnboardingNav? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    AppBackdrop(modifier) {
+    CalmBackdrop(modifier) {
         // edge-to-edge：外层没有 Scaffold，这里自己避开状态栏、导航栏和输入法（步骤条、底部按钮不被挡住）。
         Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing), contentAlignment = Alignment.TopCenter) {
             Column(Modifier.widthIn(max = 440.dp).fillMaxSize()) {
@@ -89,14 +89,9 @@ internal fun OnboardingScaffold(
                     // 与 dsh-Go 子页面一致：左上角 44dp 圆钮（返回或「≡」打开抽屉）。
                     if (nav != null) {
                         Box(Modifier.align(Alignment.CenterStart).padding(start = 12.dp)) {
-                            ChromeIconButton(
-                                if (nav.isMenu) AppIcons.menu else AppIcons.back,
-                                if (nav.isMenu) "打开菜单" else "返回",
-                                nav.onClick,
-                                size = 44.dp,
-                                tier = GlassTier.Pill,
-                                modifier = Modifier.testTag(if (nav.isMenu) "onboarding:menu" else "onboarding:back"),
-                            )
+                            IconButton(onClick = nav.onClick, modifier = Modifier.testTag(if (nav.isMenu) "onboarding:menu" else "onboarding:back").size(44.dp)) {
+                                Icon(if (nav.isMenu) CalmIcons.Menu else CalmIcons.Back, contentDescription = if (nav.isMenu) "打开菜单" else "返回", tint = Calm.colors.text)
+                            }
                         }
                     }
                     OnboardingStepBar(step, steps)
@@ -122,7 +117,7 @@ internal data class OnboardingNav(val isMenu: Boolean, val onClick: () -> Unit)
 @Composable
 internal fun OnboardingStepBar(step: Int, steps: Int) {
     val scheme = MaterialTheme.colorScheme
-    val track = scheme.onSurface.copy(alpha = if (DshTheme.isDark) 0.14f else 0.10f)
+    val track = scheme.onSurface.copy(alpha = if (Calm.colors.isDark) 0.14f else 0.10f)
     Row(
         Modifier.width(120.dp).semantics { contentDescription = "第 $step 步，共 $steps 步" },
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -140,15 +135,11 @@ internal fun OnboardingStepBar(step: Int, steps: Int) {
     }
 }
 
-/** OnboardingHeader：52dp 方圆主色容器里 26dp 图标 → 22dp → headlineMedium 标题 → 6dp → bodyMedium 次级色说明。 */
+/** OnboardingHeader：标题 → 6dp → 次级色说明（极简：不放图标容器）。 */
 @Composable
-internal fun OnboardingHeader(icon: Glyph, title: String, message: String? = null) {
+internal fun OnboardingHeader(title: String, message: String? = null) {
     val scheme = MaterialTheme.colorScheme
     Column {
-        Box(Modifier.size(52.dp).clip(AppShape.Md).background(scheme.primaryContainer), contentAlignment = Alignment.Center) {
-            AppIcon(icon, null, size = 26.dp, tint = scheme.onPrimaryContainer)
-        }
-        Spacer(Modifier.height(22.dp))
         Text(title, style = MaterialTheme.typography.headlineMedium, color = scheme.onSurface)
         if (message != null) {
             Spacer(Modifier.height(6.dp))
@@ -157,18 +148,31 @@ internal fun OnboardingHeader(icon: Glyph, title: String, message: String? = nul
     }
 }
 
-/** OnboardingFact：上下 8dp，20dp 图标 + 14dp + bodyMedium 文本；[color] 同时给图标和文字（如警告色）。 */
+/** OnboardingFact：上下 8dp，6dp 圆点 + 14dp + bodyMedium 文本；[color] 同时给圆点和文字（如警告色）。 */
 @Composable
-internal fun OnboardingFact(icon: Glyph, text: String, color: Color? = null, modifier: Modifier = Modifier) {
+internal fun OnboardingFact(text: String, color: Color? = null, modifier: Modifier = Modifier) {
     Row(modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        AppIcon(icon, null, size = 20.dp, tint = color ?: MaterialTheme.colorScheme.onSurfaceVariant)
+        Box(Modifier.size(6.dp).clip(CircleShape).background(color ?: MaterialTheme.colorScheme.onSurfaceVariant))
         Spacer(Modifier.width(14.dp))
         Text(text, style = MaterialTheme.typography.bodyMedium, color = color ?: MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
     }
 }
 
+/** 引导页用到的状态色（取自 CalmTheme，§4.2）。 */
+internal data class OnboardingColors(val warning: Color, val danger: Color, val textFaint: Color)
+
+@Composable
+internal fun onboardingColors(): OnboardingColors = Calm.colors.let { OnboardingColors(warning = it.error, danger = it.error, textFaint = it.secondary) }
+
+@Composable
+private fun CalmBackdrop(modifier: Modifier, content: @Composable () -> Unit) {
+    CalmTheme(dark = isSystemInDarkTheme()) {
+        Box(modifier.fillMaxSize().background(Calm.colors.background)) { content() }
+    }
+}
+
 /**
- * ProgressHalo：背后一团随 2.4s 呼吸起伏的主色光（半径 ±6%、透明度 0.6↔1）；14% 透明的底环；
+ * ProgressHalo：14% 透明的底环（无光晕、无渐变，§4.1）；
  * 进度弧从 12 点钟方向起、圆头、35%→100% 的扫掠渐变，数值变化 480ms 过渡；[value] 为 null 时是 1.6s 一圈的 90° 转弧。
  */
 @Composable
@@ -180,7 +184,7 @@ internal fun ProgressHalo(
     color: Color = MaterialTheme.colorScheme.primary,
     content: @Composable () -> Unit = {},
 ) {
-    val glowAlpha = if (DshTheme.isDark) 0.16f else 0.20f
+    val glowAlpha = if (Calm.colors.isDark) 0.16f else 0.20f
     val loop = rememberInfiniteTransition(label = "halo")
     val breath by loop.animateFloat(0f, 1f, infiniteRepeatable(tween(AppMotion.Breath, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "breath")
     val spin by loop.animateFloat(0f, 1f, infiniteRepeatable(tween(1600, easing = LinearEasing)), label = "spin")
@@ -193,16 +197,6 @@ internal fun ProgressHalo(
             val stroke = strokeWidth.toPx()
             val radius = (this.size.minDimension - stroke) / 2 - 8.dp.toPx()
             val c = center
-            val glowRadius = radius * (1.18f + 0.06f * breath)
-            drawCircle(
-                Brush.radialGradient(
-                    listOf(color.copy(alpha = glowAlpha * (0.6f + 0.4f * breath)), color.copy(alpha = 0f)),
-                    center = c,
-                    radius = glowRadius,
-                ),
-                radius = glowRadius,
-                center = c,
-            )
             drawCircle(color.copy(alpha = 0.14f), radius = radius, center = c, style = Stroke(stroke))
             val startDeg: Float
             val sweepDeg: Float
@@ -217,7 +211,7 @@ internal fun ProgressHalo(
                 val frac = (sweepDeg / 360f).coerceIn(0.05f, 1f)
                 rotate(startDeg, c) {
                     drawArc(
-                        brush = Brush.sweepGradient(0f to color.copy(alpha = 0.35f), frac to color, center = c),
+                        color = color,
                         startAngle = 0f,
                         sweepAngle = sweepDeg,
                         useCenter = false,

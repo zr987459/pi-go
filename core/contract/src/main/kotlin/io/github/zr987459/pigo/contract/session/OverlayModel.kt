@@ -34,6 +34,8 @@ sealed interface OverlayModel {
         val fields: List<FormField> = emptyList(),
         val values: Map<String, String> = emptyMap(),
         val submitLabel: String? = null,
+        /** 「提交」之外的表单操作（如「测试」「账号登录」「清除」），点击按 [KeyCap] 的协议回传面板事件，value = 表单值 JSON。 */
+        val actions: List<KeyCap> = emptyList(),
     ) : OverlayModel
 
     data class Text(
@@ -97,7 +99,14 @@ data class SelectItem(
     val keyHint: String? = null,
 )
 
-/** 面板底部 / 行内的键帽（终端）或按钮（UI），点了执行 [actionId]。 */
+/**
+ * 面板底部 / 行内的键帽（终端）或按钮（UI）。
+ *
+ * 点击协议（调度者裁定，PR #19）：键帽点击产生**面板事件**，由面板宿主分发，而不是当作动作 id 交给 `PiActions.run`：
+ * 渲染器调用 `onPanelEvent(overlay.id, actionId, 当前高亮项的 key)`（没有高亮项时传 `SelectList.selectedKey`，表单面板传表单值 JSON）。
+ * 面板宿主（`SessionHost` / 设置页）把事件转给产出该面板的一方（如 `ModelPanels.onPanelEvent`）。
+ * [actionId] 是该面板自己的事件 key（如 `select`、`default`、`star`），不保证在 `PiActionCatalog` 里。
+ */
 data class KeyCap(val key: String, val label: String, val actionId: String)
 
 data class FormField(
@@ -106,6 +115,8 @@ data class FormField(
     val type: PiSettingType,
     val help: String? = null,
     val enabled: Boolean = true,
+    /** 密文字段（API Key 等）：渲染器必须遮挡显示，且不得把输入值写进 [OverlayModel.Form.values] 或日志。 */
+    val secret: Boolean = false,
 )
 
 data class TreeNode(

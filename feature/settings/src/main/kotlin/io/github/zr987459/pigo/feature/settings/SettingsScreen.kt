@@ -55,20 +55,19 @@ import io.github.zr987459.pigo.contract.ProviderConfigStore
 import io.github.zr987459.pigo.contract.ProviderPreset
 import io.github.zr987459.pigo.contract.RuntimeStatus
 import io.github.zr987459.pigo.contract.SecretStore
-import io.github.zr987459.pigo.core.ui.AppBackdrop
-import io.github.zr987459.pigo.core.ui.AppIcon
-import io.github.zr987459.pigo.core.ui.AppIcons
-import io.github.zr987459.pigo.core.ui.AppShape
-import io.github.zr987459.pigo.core.ui.DshTheme
-import io.github.zr987459.pigo.feature.settings.ui.DshFilled
-import io.github.zr987459.pigo.feature.settings.ui.DshOutlined
+import io.github.zr987459.pigo.feature.settings.ui.BackButton
+import io.github.zr987459.pigo.feature.settings.ui.PlainBackdrop
+import io.github.zr987459.pigo.feature.settings.ui.FieldShape
+import io.github.zr987459.pigo.feature.settings.ui.SettingsColors
+import io.github.zr987459.pigo.feature.settings.ui.PlainFilled
+import io.github.zr987459.pigo.feature.settings.ui.PlainOutlined
 import io.github.zr987459.pigo.feature.settings.ui.InfoRow
 import io.github.zr987459.pigo.feature.settings.ui.LargeTitle
 import io.github.zr987459.pigo.feature.settings.ui.NoticeCard
 import io.github.zr987459.pigo.feature.settings.ui.SettingsHues
 import io.github.zr987459.pigo.feature.settings.ui.SettingsSection
 import io.github.zr987459.pigo.feature.settings.ui.SettingsTile
-import io.github.zr987459.pigo.feature.settings.ui.dshFieldColors
+import io.github.zr987459.pigo.feature.settings.ui.plainFieldColors
 import io.github.zr987459.pigo.feature.settings.ui.groupTitleStyle
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -120,12 +119,16 @@ data class CustomEndpointPrefill(val baseUrl: String, val modelIds: List<String>
  *
  * @param secrets 用于显示 Key 末 4 位（别名约定 `key.<provider>` / `key.custom.<id>`）；为 null 时只显示「已配置」。
  * @param engine 有引擎时：保存 Key 后自动重启引擎；「默认模型」从 `get_available_models` 里选并 `set_model`。
- * @param runtimeStatus 运行环境版本信息。
+ * @param runtimeStatus 已不在设置页显示（设置只剩模型，DESIGN-r3 §6.1）；参数保留以兼容调用方，r3/app 接线时去掉。
  * @param loadCustom 读取已有自定义端点（id → 接口地址与模型），用于编辑时预填；为 null 时编辑需要重新填写。
  * @param focus 打开时滚动到的区块（[SettingsFocus]）。
  * @param discoverModels 自定义端点「获取模型列表」：(id, baseUrl, rawKey) → 模型 id 列表；rawKey 为空表示用已保存的 Key。
  * @param testConnection 「测试连接」；为 null 时不显示按钮。
  * @param onBack 左上角返回圆钮；为 null 时不显示。
+ * @param panels 模型配置面板（`feature/models` 的 RealModelPanels，r3/app 装配时传入）。**有它时整页按 DESIGN-r3 §6.1
+ *   渲染**（[ModelsSettingsPage]：默认模型、常用模型、已连接、全部服务商（拼音搜索）、自定义、高级），其余参数不再使用；
+ *   为 null 时保留旧版列表，只为 r3/app 装配前不坏。
+ * @param piSettings pi 的 `settings.json`（默认模型、高级项的当前值）；可为 null。
  * @param onModelClick 「选择默认模型」入口；为 null 时用本页的默认模型对话框（现有行为）。
  *   留给 features 工作流接完整的模型选择器。
  */
@@ -144,7 +147,13 @@ fun SettingsScreen(
     testConnection: (suspend (ConnectionTarget) -> ConnectionCheck)? = null,
     onModelClick: (() -> Unit)? = null,
     onBack: (() -> Unit)? = null,
+    panels: io.github.zr987459.pigo.contract.models.ModelPanels? = null,
+    piSettings: io.github.zr987459.pigo.contract.settings.PiSettings? = null,
 ) {
+    if (panels != null) {
+        ModelsSettingsPage(panels, piSettings, modifier, onBack)
+        return
+    }
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     var configured by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -152,7 +161,6 @@ fun SettingsScreen(
     var version by remember { mutableIntStateOf(0) } // 保存后 +1，触发重新读取
     var editing by remember { mutableStateOf<ProviderPreset?>(null) }
     var pickingDefault by remember { mutableStateOf(false) }
-    var showGuide by remember { mutableStateOf(false) }
     val presets = remember(providers) { providers.presets() }
     val listState = rememberLazyListState()
     var testingCurrent by remember { mutableStateOf(false) }
@@ -210,25 +218,17 @@ fun SettingsScreen(
         }
     }
 
-    AppBackdrop(modifier.testTag("page:settings")) {
+    PlainBackdrop(modifier.testTag("page:settings")) {
         Scaffold(
             containerColor = Color.Transparent,
             snackbarHost = { SnackbarHost(snackbar) },
-            // 与 dsh-Go 子页面一致：左上角 44dp 返回圆钮（同 BackgroundGuidePage）。
             topBar = {
                 if (onBack != null) {
                     androidx.compose.foundation.layout.Row(
                         Modifier.fillMaxWidth().statusBarsPadding().height(56.dp).padding(horizontal = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        io.github.zr987459.pigo.core.ui.ChromeIconButton(
-                            AppIcons.back,
-                            "返回",
-                            onBack,
-                            size = 44.dp,
-                            tier = io.github.zr987459.pigo.core.ui.GlassTier.Pill,
-                            modifier = Modifier.testTag("settings:back"),
-                        )
+                        BackButton(onBack, Modifier.testTag("settings:back"))
                     }
                 }
             },
@@ -238,12 +238,12 @@ fun SettingsScreen(
                 state = listState,
                 contentPadding = PaddingValues(top = 8.dp, bottom = 32.dp),
             ) {
-                // 下标与 settingsItemIndex 一致：大标题(0) 模型与 Key(1) 三个服务商分组(2..4) 默认模型(5) 后台运行 运行环境
+                // 下标与 settingsItemIndex 一致：大标题(0)「模型」(1) 默认模型(2) 各服务商分组(3..) 页底指引；设置只剩模型（DESIGN-r3 §6.1）。
                 item(key = "title") { LargeTitle("设置") }
                 item(key = "sec-models") {
                     Column(Modifier.padding(bottom = 24.dp)) {
                         Text(
-                            "模型与 Key",
+                            ModelsSettings.root().single().title,
                             style = groupTitleStyle(),
                             modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp).testTag("settings:sec-models"),
                         )
@@ -252,6 +252,43 @@ fun SettingsScreen(
                             "pi 能读取容器内的文件和环境变量，请使用可随时作废的 Key，不要用主账号的 Key。" +
                                 "Key 只加密保存在本机，不会写进容器里的文件。",
                         )
+                    }
+                }
+                item(key = "sec-default") {
+                    SettingsSection("默认模型", titleModifier = Modifier.testTag("settings:sec-default")) {
+                        val current = currentModel
+                        SettingsTile(
+                            title = "选择默认模型",
+                            tint = SettingsHues.AI,
+                            subtitle = if (configured.isEmpty()) "先在下面填一个 Key，再选默认模型" else "新会话默认使用的模型",
+                            value = current?.let { it.name ?: it.id },
+                            enabled = configured.isNotEmpty(),
+                            onTap = { (onModelClick ?: { pickingDefault = true })() },
+                            modifier = Modifier.testTag("settings:pickDefault"),
+                        )
+                        val tester = testConnection
+                        if (tester != null && current != null) {
+                            SettingsTile(
+                                title = if (testingCurrent) "正在测试…" else "测试连接",
+                                tint = SettingsHues.AI,
+                                subtitle = "${current.name ?: current.id}（${current.provider}）",
+                                enabled = !testingCurrent,
+                                chevron = false,
+                                onTap = {
+                                    testingCurrent = true
+                                    currentCheck = null
+                                    scope.launch {
+                                        val isCustom = presets.none { it.provider == current.provider && it.kind != PresetKind.CUSTOM_OPENAI }
+                                        currentCheck = runCatching {
+                                            tester(ConnectionTarget(current.provider, isCustom, null, "", current.id))
+                                        }.getOrElse { ConnectionCheck(false, "测试失败：${it.message}") }
+                                        testingCurrent = false
+                                    }
+                                },
+                                modifier = Modifier.testTag("settings:testCurrent"),
+                            )
+                            currentCheck?.let { CheckText(it, Modifier.padding(start = 60.dp, end = 16.dp, bottom = 10.dp)) }
+                        }
                     }
                 }
                 PresetKind.entries.forEach { kind ->
@@ -281,84 +318,13 @@ fun SettingsScreen(
                         }
                     }
                 }
-                item(key = "sec-default") {
-                    SettingsSection("默认模型", titleModifier = Modifier.testTag("settings:sec-default")) {
-                        val current = currentModel
-                        SettingsTile(
-                            title = "选择默认模型",
-                            icon = AppIcons.model,
-                            tint = SettingsHues.AI,
-                            subtitle = if (configured.isEmpty()) "先在上面填一个 Key，再选默认模型" else "新会话默认使用的模型",
-                            value = current?.let { it.name ?: it.id },
-                            enabled = configured.isNotEmpty(),
-                            onTap = { (onModelClick ?: { pickingDefault = true })() },
-                            modifier = Modifier.testTag("settings:pickDefault"),
-                        )
-                        val tester = testConnection
-                        if (tester != null && current != null) {
-                            SettingsTile(
-                                title = if (testingCurrent) "正在测试…" else "测试连接",
-                                icon = AppIcons.testConnection,
-                                tint = SettingsHues.AI,
-                                subtitle = "${current.name ?: current.id}（${current.provider}）",
-                                enabled = !testingCurrent,
-                                chevron = false,
-                                onTap = {
-                                    testingCurrent = true
-                                    currentCheck = null
-                                    scope.launch {
-                                        val isCustom = presets.none { it.provider == current.provider && it.kind != PresetKind.CUSTOM_OPENAI }
-                                        currentCheck = runCatching {
-                                            tester(ConnectionTarget(current.provider, isCustom, null, "", current.id))
-                                        }.getOrElse { ConnectionCheck(false, "测试失败：${it.message}") }
-                                        testingCurrent = false
-                                    }
-                                },
-                                modifier = Modifier.testTag("settings:testCurrent"),
-                            )
-                            currentCheck?.let { CheckText(it, Modifier.padding(start = 60.dp, end = 16.dp, bottom = 10.dp)) }
-                        }
-                    }
-                }
-                item(key = "sec-background") {
-                    SettingsSection("后台运行") {
-                        SettingsTile(
-                            title = "让 pi 在后台也能继续运行",
-                            icon = AppIcons.keepAlive,
-                            tint = SettingsHues.GENERAL,
-                            subtitle = "电池优化、自启动设置，以及 Android 12+ 子进程限制说明",
-                            onTap = { showGuide = true },
-                            modifier = Modifier.testTag("settings:openBackground"),
-                        )
-                    }
-                }
-                item(key = "sec-runtime") {
-                    val st = runtimeStatus
-                    SettingsSection("运行环境与关于", footer = "pi-go 以 Apache-2.0 许可证开源。界面参照 dsh-Go。") {
-                        if (st == null) {
-                            InfoRow("运行环境", "信息暂不可用")
-                        } else {
-                            InfoRow(
-                                "状态",
-                                phaseLabel(st.phase.name),
-                                valueColor = if (st.phase.name == "BROKEN") MaterialTheme.colorScheme.error else null,
-                            )
-                            InfoRow("Ubuntu", st.ubuntu ?: "-")
-                            InfoRow("Node.js", st.node ?: "-")
-                            InfoRow("pi", st.pi ?: "-")
-                            st.error?.let {
-                                Text(
-                                    "问题：$it",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.error,
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-                                )
-                            }
-                        }
-                        onRepairRuntime?.let {
-                            SettingsTile(title = "修复运行环境", icon = AppIcons.tool, tint = SettingsHues.HELP, onTap = it)
-                        }
-                    }
+                item(key = "footer") {
+                    Text(
+                        ModelsSettings.FOOTER_HINT,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = SettingsColors.faint,
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp).testTag("settings:footerHint"),
+                    )
                 }
             }
         }
@@ -422,9 +388,6 @@ fun SettingsScreen(
         )
     }
 
-    if (showGuide) {
-        BackgroundGuidePage(onClose = { showGuide = false })
-    }
 }
 
 internal const val CUSTOM_OTHER = "custom"
@@ -441,28 +404,15 @@ private fun kindHint(k: PresetKind) = when (k) {
     PresetKind.CUSTOM_OPENAI -> "其他兼容 OpenAI 接口的服务，需要自己填接口地址和模型 id。"
 }
 
-private fun phaseLabel(p: String) = when (p) {
-    "NOT_INSTALLED" -> "未安装"
-    "INSTALLING" -> "安装中"
-    "READY" -> "正常"
-    "BROKEN" -> "需要修复"
-    else -> p
-}
 
 @Composable
 private fun CheckText(c: ConnectionCheck, modifier: Modifier = Modifier) {
     Row(modifier.testTag(if (c.ok) "settings:checkOk" else "settings:checkFail"), verticalAlignment = Alignment.CenterVertically) {
-        AppIcon(
-            if (c.ok) AppIcons.success else AppIcons.error,
-            null,
-            size = 16.dp,
-            tint = if (c.ok) DshTheme.colors.success else MaterialTheme.colorScheme.error,
-        )
-        Spacer(Modifier.width(6.dp))
+        Text(if (c.ok) "✓ " else "✗ ", color = if (c.ok) SettingsColors.success else MaterialTheme.colorScheme.error)
         Text(
             c.message,
             style = MaterialTheme.typography.bodySmall,
-            color = if (c.ok) DshTheme.colors.success else MaterialTheme.colorScheme.error,
+            color = if (c.ok) SettingsColors.success else MaterialTheme.colorScheme.error,
         )
     }
 }
@@ -475,7 +425,7 @@ private fun CheckText(c: ConnectionCheck, modifier: Modifier = Modifier) {
 @Suppress("UNUSED_PARAMETER")
 internal fun settingsItemIndex(key: String, presets: List<ProviderPreset>, configured: List<String>): Int = when (key) {
     "sec-models" -> 1
-    "sec-default" -> 2 + PresetKind.entries.size
+    "sec-default" -> 2
     else -> -1
 }
 
@@ -485,11 +435,10 @@ private fun PresetRow(preset: ProviderPreset, isOn: Boolean, status: String?, on
     val add = preset.provider == CUSTOM_OTHER
     SettingsTile(
         title = preset.label,
-        icon = if (add) AppIcons.add else if (isOn) AppIcons.apiKey else AppIcons.noApiKey,
         tint = if (add) SettingsHues.GENERAL else if (isOn) SettingsHues.AI else SettingsHues.HOSTS,
         subtitle = if (add) "添加新的 OpenAI 兼容服务" else preset.note.takeIf { it.isNotBlank() },
         value = status,
-        valueColor = if (!isOn && !add) DshTheme.colors.warning else null,
+        valueColor = if (!isOn && !add) SettingsColors.warning else null,
         onTap = onClick,
         modifier = Modifier.testTag("preset:${preset.provider}"),
     )
@@ -525,13 +474,13 @@ private fun KeyDialog(
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false),
-                    shape = AppShape.Md,
-                    colors = dshFieldColors(),
+                    shape = FieldShape,
+                    colors = plainFieldColors(),
                     modifier = Modifier.fillMaxWidth().testTag("settings:keyField"),
                 )
                 KeyText.preview(key)?.let { Text("将保存为 $it", style = MaterialTheme.typography.bodySmall) }
                 if (testConnection != null) {
-                    DshOutlined(
+                    PlainOutlined(
                         enabled = !testing && !saving && (KeyText.clean(key).isNotEmpty() || alreadySet),
                         onClick = {
                             testing = true
@@ -550,7 +499,7 @@ private fun KeyDialog(
             }
         },
         confirmButton = {
-            DshFilled(
+            PlainFilled(
                 enabled = !saving && KeyText.clean(key).isNotEmpty(),
                 onClick = {
                     saving = true
@@ -645,16 +594,16 @@ private fun CustomDialog(
                     label = { Text("名称（英文 id）") }, placeholder = { Text("例如 bailian") }, singleLine = true,
                     enabled = preset.provider == CUSTOM_OTHER,
                     supportingText = { Text("Key 会以环境变量 ${KeyText.envVarFor(id)} 交给 pi") },
-                    shape = AppShape.Md,
-                    colors = dshFieldColors(),
+                    shape = FieldShape,
+                    colors = plainFieldColors(),
                     modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
                     value = url, onValueChange = { url = it; error = null },
                     label = { Text("接口地址（baseUrl）") }, singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, autoCorrectEnabled = false),
-                    shape = AppShape.Md,
-                    colors = dshFieldColors(),
+                    shape = FieldShape,
+                    colors = plainFieldColors(),
                     modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
@@ -662,13 +611,13 @@ private fun CustomDialog(
                     label = { Text(if (existing) "API Key（留空 = 保持原来的 Key）" else "API Key") }, singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false),
-                    shape = AppShape.Md,
-                    colors = dshFieldColors(),
+                    shape = FieldShape,
+                    colors = plainFieldColors(),
                     modifier = Modifier.fillMaxWidth(),
                 )
                 KeyText.preview(key)?.let { Text("将保存为 $it", style = MaterialTheme.typography.bodySmall) }
                 if (discoverModels != null) {
-                    DshOutlined(
+                    PlainOutlined(
                         enabled = !discovering && url.isNotBlank() && keyReady,
                         onClick = { scope.launch { discover() } },
                         modifier = Modifier.testTag("settings:discover"),
@@ -698,12 +647,12 @@ private fun CustomDialog(
                     value = models, onValueChange = { models = it; error = null },
                     label = { Text("模型 id（多个用逗号或换行分开）") },
                     placeholder = { Text(preset.note) },
-                    shape = AppShape.Md,
-                    colors = dshFieldColors(),
+                    shape = FieldShape,
+                    colors = plainFieldColors(),
                     modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp),
                 )
                 if (testConnection != null) {
-                    DshOutlined(
+                    PlainOutlined(
                         enabled = !testing && !saving && url.isNotBlank() && keyReady && KeyText.splitModels(models).isNotEmpty(),
                         onClick = {
                             testing = true
@@ -722,7 +671,7 @@ private fun CustomDialog(
             }
         },
         confirmButton = {
-            DshFilled(enabled = !saving, onClick = {
+            PlainFilled(enabled = !saving, onClick = {
                 saving = true
                 scope.launch {
                     error = onSave(id, url, key, KeyText.splitModels(models))
@@ -783,8 +732,8 @@ private fun DefaultModelDialog(
                     OutlinedTextField(
                         value = model, onValueChange = { model = it; error = null },
                         label = { Text("模型 id") }, placeholder = { Text("例如 deepseek-chat") }, singleLine = true,
-                        shape = AppShape.Md,
-                        colors = dshFieldColors(),
+                        shape = FieldShape,
+                        colors = plainFieldColors(),
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
@@ -798,7 +747,7 @@ private fun DefaultModelDialog(
             }
         },
         confirmButton = {
-            DshFilled(enabled = !saving && provider.isNotBlank() && model.isNotBlank(), onClick = {
+            PlainFilled(enabled = !saving && provider.isNotBlank() && model.isNotBlank(), onClick = {
                 saving = true
                 scope.launch {
                     error = onSave(provider, model.trim(), thinking)

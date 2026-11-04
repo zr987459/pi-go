@@ -208,6 +208,7 @@ fun RetryBar(retry: RetryBanner, onStop: () -> Unit, modifier: Modifier = Modifi
  * @param onUnsupported 显示「暂不支持」类提示（Snackbar）。
  * @param contextPercent 上下文占用；非 null 时在发送键左边画 dsh-Go 的上下文小环。
  */
+@Deprecated("r3: r3/calm 删除（DESIGN-r3 X13，改用 ui/calm/CalmSurface；待 r3/app 去掉引用后删文件）")
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ComposerBar(

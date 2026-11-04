@@ -1,0 +1,230 @@
+# DESIGN-r3 §7.1：pi-features.md §1–§11 每个表格数据行一条。列：节号<TAB>行首单元格原文<TAB>动作id | BASE | FORM | NA:<说明动作id>
+§1.1	交互 TUI（默认）	FORM
+§1.1	print `-p`	oneshot
+§1.1	`--mode json`	oneshot
+§1.1	`--mode rpc`	BASE
+§1.1	`pi install/remove/update/list/config`	packages
+§1.1	`pi auth print-api-key / print-bearer-token`	help.authPrint
+§1.1	`pi mcp add/list/remove…`	mcp
+§1.2	`--provider` `--model <pattern[:thinking]>`	model.select
+§1.2	`--api-key`	help.apiKey
+§1.2	`--system-prompt` `--append-system-prompt`	context.system
+§1.2	`-c/--continue` `-r/--resume` `--session` `--session-id`	session.resume
+§1.2	`--fork <path\|id>`	session.fork
+§1.2	`--session-dir` `--no-session` `-n/--name`	settings.session
+§1.2	`--models <patterns>`	model.scoped
+§1.2	`-nt` `-nbt` `-t/--tools` `-xt`	settings.tools
+§1.2	`--thinking <level>`	thinking.select
+§1.2	`-e/--extension` `-ne`	packages
+§1.2	`--no-mcp`	mcp
+§1.2	`--skill` `-ns`	skills
+§1.2	`--prompt-template` `-np`	templates
+§1.2	`--theme` `--use-theme` `--no-themes`	appearance
+§1.2	`-nc/--no-context-files`	settings.contextFiles
+§1.2	`--export <file> [out]`	session.export
+§1.2	`--list-models [search]`	model.select
+§1.2	`--verbose`	session.info
+§1.2	`--tui-mode`	help.tuiMode
+§1.2	`-a/--approve` `-na`	trust
+§1.2	`--offline`	settings.network
+§1.2	`-h` `-v`	help,about
+§2.1	`prompt`	send
+§2.1	`steer`	send
+§2.1	`follow_up`	send.followUp
+§2.1	`abort`	abort
+§2.1	`clear_queue`	queue.dequeue
+§2.1	`new_session`	session.new
+§2.1	`get_state`	BASE
+§2.1	`get_messages`	BASE
+§2.1	`set_model`	model.select
+§2.1	`cycle_model`	model.cycle
+§2.1	`get_available_models`	BASE
+§2.1	`set_thinking_level`	thinking.select
+§2.1	`cycle_thinking_level`	thinking.cycle
+§2.1	`get_available_thinking_levels`	BASE
+§2.1	`set_steering_mode` / `set_follow_up_mode`	settings.queue
+§2.1	`compact`	session.compact
+§2.1	`set_auto_compaction`	settings.compaction
+§2.1	`set_auto_retry` / `abort_retry`	settings.retry
+§2.1	`bash` / `abort_bash`	bash,bash.abort
+§2.1	`get_session_stats`	session.info
+§2.1	`export_html`	session.export
+§2.1	`switch_session`	session.resume
+§2.1	`fork`	session.fork
+§2.1	`clone`	session.clone
+§2.1	`get_fork_messages`	session.fork
+§2.1	`get_entries`	BASE
+§2.1	`get_tree`	session.tree
+§2.1	`get_last_assistant_text`	copy.last
+§2.1	`set_session_name`	session.name
+§2.1	`get_commands`	BASE
+§2.2	`agent_start` / `agent_end`	BASE
+§2.2	`agent_settled`	BASE
+§2.2	`turn_start` / `turn_end`	BASE
+§2.2	`message_start` / `message_end`	BASE
+§2.2	`message_update`	BASE
+§2.2	`tool_execution_start/update/end`	BASE
+§2.2	`queue_update`	queue.dequeue
+§2.2	`entry_appended`	BASE
+§2.2	`session_info_changed`	session.name
+§2.2	`thinking_level_changed`	thinking.select
+§2.2	`compaction_start/end`	session.compact
+§2.2	`auto_retry_start/end`	retry.abort
+§2.2	`summarization_retry_*`	retry.abort
+§2.2	`bash_execution_update`（只在 rpc）	bash
+§2.2	`extension_error`（只在 rpc）	debug
+§2.2	`extension_ui_request`	BASE
+§3	`/settings`	settings
+§3	`/model [p/m]`	model.select
+§3	`/thinking [level]`	thinking.select
+§3	`/scoped-models`	model.scoped
+§3	`/login [provider]`	auth.login
+§3	`/logout`	auth.logout
+§3	`/llama`	ext.llama
+§3	`/new`	session.new
+§3	`/resume`	session.resume
+§3	`/name [name]`	session.name
+§3	`/session`	session.info
+§3	`/tree`	session.tree
+§3	`/fork`	session.fork
+§3	`/clone`	session.clone
+§3	`/compact [说明]`	session.compact
+§3	`/import <path>`	session.import
+§3	`/copy`	copy.last
+§3	`/export [path]`	session.export
+§3	`/share`	session.share
+§3	`/bug [描述]`	bug
+§3	`/trust`	trust
+§3	`/mcp`	mcp
+§3	`/reload`	reload
+§3	`/hotkeys`	hotkeys
+§3	`/changelog`	changelog
+§3	`/debug`	debug
+§3	`/quit`	engine.stop
+§3	`/模板名 [参数]`	templates
+§3	`/skill:名`	skills
+§3	扩展命令	ext.commands
+§4	`read`	settings.tools
+§4	`write`	settings.tools
+§4	`edit`	settings.tools
+§4	`bash`	bash
+§4	`grep`（默认关）	settings.tools
+§4	`find`（默认关）	settings.tools
+§4	`ls`（默认关）	settings.tools
+§4	`powershell`	NA:help.powershell
+§4	`codemode`（内置扩展，`--tools +codemode`）	settings.tools
+§4	`tool_search`（内置扩展）	settings.tools
+§4	MCP 工具 `mcp__服务器__工具`	mcp
+§5	存储位置	session.info
+§5	格式	BASE
+§5	继续最近 / 恢复	session.resume
+§5	新建	session.new
+§5	分叉 / 复制	session.fork
+§5	树导航	session.tree,tree.fold
+§5	树筛选	tree.filter
+§5	标签	tree.label,tree.time
+§5	会话名	session.name
+§5	删除会话	session.delete
+§5	选择器选项	session.resume
+§5	压缩（手动 / 自动）	session.compact
+§5	导出	session.export
+§5	分享	session.share
+§5	导入	session.import
+§5	临时会话	session.newEphemeral
+§5	工作目录	session.cwd
+§6	内置服务商	auth.login
+§6	OAuth / 订阅登录	auth.login
+§6	API key 来源与优先级	auth.login
+§6	自定义服务商 `models.json`	provider.custom
+§6	模型切换	model.select
+§6	循环切换	model.cycle
+§6	作用域模型	model.scoped
+§6	思考强度	thinking.select,model.thinkingAdvanced
+§6	默认模型	model.setDefault
+§6	模型目录更新	model.refreshCatalog
+§6	llama.cpp 本地模型	ext.llama
+§6	虚拟模型 / 分类器 / 图像模型	BASE
+§7	技能	skills
+§7	提示模板	templates
+§7	扩展	packages
+§7	内置扩展	packages
+§7	上下文文件	settings.contextFiles
+§7	主题	appearance
+§7	MCP	mcp
+§7	包	packages
+§7	项目信任	trust
+§7	键位文件	hotkeys
+§8	模型	model.setDefault
+§8	显示	settings
+§8	缓存	settings
+§8	队列	settings.queue
+§8	编辑器	settings
+§8	树	tree.filter
+§8	信任	trust
+§8	工具	settings.tools
+§8	会话	settings.session
+§8	压缩	settings.compaction
+§8	全屏 TUI	FORM
+§8	终端	FORM
+§8	图片	settings
+§8	Markdown	settings
+§8	网络	settings.network
+§8	重试	settings.retry
+§8	Shell	settings
+§8	包与资源	packages
+§8	其他	settings
+§8.1	服务商 key	NA:help.env
+§8.1	进程	settings.network
+§8.1	渲染	NA:help.env
+§8.1	给 bash 工具的会话变量	NA:help.env
+§9	中断 `app.interrupt`	abort
+§9	清空 / 退出 `app.clear`、`app.exit`	editor.clear
+§9	挂起 `app.suspend`	help.suspend
+§9	外部编辑器 `app.editor.external`	editor.expand
+§9	粘贴图片 `app.clipboard.pasteImage`	attach.image
+§9	换行 `tui.input.newLine`	FORM
+§9	补全 `tui.input.tab`	FORM
+§9	排队 `app.message.followUp`	send.followUp
+§9	撤回队列 `app.message.dequeue`	queue.dequeue
+§9	复制 `app.message.copy`	copy.last
+§9	选模型 `app.model.select`	model.select
+§9	循环模型 `app.model.cycleForward/Backward`	model.select
+§9	循环思考 `app.thinking.cycle`	thinking.cycle
+§9	折叠思考 `app.thinking.toggle`	thinking.toggle
+§9	展开工具 `app.tools.expand`	tools.expandAll
+§9	保存默认 `app.models.save`、`app.thinking.save`	model.setDefault
+§9	编辑器光标与删除 `tui.editor.*`	FORM
+§9	历史 `tui.editor.cursorUp/Down`	editor.history
+§9	消息区滚动和跳转 `tui.altScreen.*`	transcript.jump
+§9	会话选择器 `app.session.*`	session.resume
+§9	树 `app.tree.*`	session.tree
+§9	作用域模型 `app.models.*`	model.scoped
+§9	未绑定的会话动作	FORM
+§10	Enter（生成中）	send
+§10	Alt+Enter	send.followUp
+§10	Esc	abort
+§10	`/命令`	FORM
+§10	`@文件`	FORM
+§10	图片	attach.image
+§10	`!cmd`	bash
+§10	`!!cmd`	bash
+§10	双击 Esc（编辑器为空时）	session.tree
+§10	模板参数	templates
+§11	页眉（启动区）	session.info
+§11	消息区	FORM
+§11	思考块	thinking.toggle
+§11	工具调用块	tools.expandAll
+§11	bash 执行块（`!`）	bash
+§11	压缩 / 分支摘要块	session.compact
+§11	技能调用消息	skills
+§11	编辑器	FORM
+§11	自动补全	FORM
+§11	队列显示	queue.dequeue
+§11	状态行	FORM
+§11	**页脚**	FORM
+§11	选择器弹层	FORM
+§11	登录对话框	auth.login
+§11	首次设置	FORM
+§11	转录搜索	transcript.search
+§11	Mermaid	FORM
+§11	彩蛋（armin、3D、earendil 公告）	NA:help.easterEgg
