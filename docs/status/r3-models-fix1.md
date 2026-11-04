@@ -25,3 +25,7 @@
 - [ ] 更新 PR #19 描述（逐条处理说明 + 交接：NetworkAndCostScreen 由 r3/app 删；FormField.secret 是契约范围外最小改动，r3/calm/r3/term 渲染器需遮挡 secret 字段）。
 - [ ] 看 CI：最新推送 bed90a3 的 push/PR run（GET /actions/runs?branch=r3/models）。本地没编译过（feature/models 新测试、RealCustomProviderStore 改动），CI 红先修。
 - 08:28 本会话即将被切断：Important 1、3、4 与 Nit 1–4（本线部分）已推送；Important 2 与 PR 描述、CI 核对留给下一位（见上面的具体做法）。
+
+## 接手（第 2 位修复工作者）
+- 2026-11-04 08:32 CST：**已开始**，基于 3fccae9。
+- 计划：① 看 3fccae9 CI，红了先修；② 普通 merge main（含 r3/core PR#16）；③ Important 2 按上面方案做（SettingsModel 纯函数 + SettingsScreen 逐行渲染 + JVM 界面模型测试 + androidTest 编译）；④ 更新 PR #19 描述；⑤ CI 绿后写完成。
