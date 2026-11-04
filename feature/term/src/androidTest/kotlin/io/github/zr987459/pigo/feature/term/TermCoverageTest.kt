@@ -452,16 +452,21 @@ class TermCoverageTest {
         assertEquals(Triple("confirm.clear:anthropic", "confirm", null), events.last())
         assertEquals("确认框关掉，回到表单", "provider.form:anthropic", host.overlay.top?.id)
 
-        // 外接 Enter 提交表单：面板事件 submit + JSON，提示后关表单
+        // 外接 Enter 提交表单：面板事件 submit + JSON；结果是 Toast（失败 / 提示）时表单不关、已填值保留，提示显示在面板里
+        // （审查第 3 轮 Important 2，与设置页一致：只有 Done 才关）
         rule.onNodeWithTag("term:editor").performClick()
         rule.waitForIdle()
         rule.onNodeWithTag("term:editor").performKeyInput { pressKey(Key.Enter) }
         rule.waitForIdle()
         assertEquals(Triple("provider.form:anthropic", "submit", """{"key":"sk-secret"}"""), events.last())
-        assertEquals(null, host.overlay.top)
+        assertEquals("Toast 不关表单", "provider.form:anthropic", host.overlay.top?.id)
+        assertEquals("已填的 Key 还在", "sk-secret", (host.overlay.top as OverlayModel.Form).values["key"])
+        rule.onNodeWithTag("overlay:provider.form:anthropic:notice", useUnmergedTree = true).assertIsDisplayed()
+        host.overlay.pop()
+        rule.waitForIdle()
         assertTrue("键帽不应作为动作 id 交给 runAction", host.fake.fakeActions.ran.none { it.first in setOf("test", "clear", "submit", "provider.form:anthropic") })
 
-        host.overlay.push(OverlayModel.Text("oauth:github-copilot", "登录 github-copilot", "登录失败：超时\n可点「重试」重新登录"))
+        host.overlay.push(OverlayModel.Text("oauth:github-copilot", "登录 github-copilot", "登录失败：超时\n可点「重试」重新登录", flow = io.github.zr987459.pigo.contract.session.FlowState.FAILED))
         rule.waitForIdle()
         rule.onNodeWithTag("term:keycap:oauth:github-copilot:enter 重试", useUnmergedTree = true).tap()
         rule.waitForIdle()

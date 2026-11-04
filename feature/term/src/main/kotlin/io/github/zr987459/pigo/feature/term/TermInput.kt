@@ -123,6 +123,9 @@ object TermInput {
     }
 
     /**
+     * **旧规则，只在没注入 `TermEnv.panelSource` 时用**（FakeSessionHost 开发 / 测试）。真实装配按面板来源判断，
+     * 见 [TermPanelRouter.toPanel]（PR #18 审查第 3 轮 Important 1）。
+     *
      * 面板事件是否交给面板宿主：ModelPanels 产出的面板（`provider.form:*`、`provider.custom*`、`oauth:*`、`confirm.*:`…，
      * 不在动作表里）走 `onPanelEvent`。动作表里的面板和 SessionHost 自己的面板（`overlay:*`、`explain:*`）照旧
      * `runAction(面板 id, 值)`，与 UI 形态 CalmSheet 的约定一致。
@@ -135,13 +138,16 @@ object TermInput {
         kotlinx.serialization.json.JsonObject(values.mapValues { kotlinx.serialization.json.JsonPrimitive(it.value) }).toString()
 
     /**
-     * 账号登录面板（`oauth:<provider>` 的 Text）上的键帽：总有「刷新」（看下一步）；失败时加「重试」（面板事件 `retry`）。
-     * 返回（标签, 事件 key）。
+     * 流程面板（契约 `OverlayModel.Text.flow`，如账号登录）上的键帽：进行中 / 失败总有「刷新」（看下一步）；失败时加「重试」
+     * （面板事件 `retry`）。按结构化状态判断，不匹配文案（PR #18 审查第 3 轮 Nit 1）。返回（标签, 事件 key）。
      */
     fun oauthCaps(model: io.github.zr987459.pigo.contract.session.OverlayModel): List<Pair<String, String>> {
-        if (!model.id.startsWith("oauth:") || model !is io.github.zr987459.pigo.contract.session.OverlayModel.Text) return emptyList()
-        val failed = model.text.startsWith("登录失败")
-        return listOfNotNull("r 刷新" to "refresh", if (failed) "enter 重试" to "retry" else null)
+        val flow = (model as? io.github.zr987459.pigo.contract.session.OverlayModel.Text)?.flow ?: return emptyList()
+        return when (flow) {
+            io.github.zr987459.pigo.contract.session.FlowState.RUNNING -> listOf("r 刷新" to "refresh")
+            io.github.zr987459.pigo.contract.session.FlowState.FAILED -> listOf("r 刷新" to "refresh", "enter 重试" to "retry")
+            io.github.zr987459.pigo.contract.session.FlowState.DONE -> emptyList()
+        }
     }
 
     /**

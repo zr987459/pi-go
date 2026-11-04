@@ -149,6 +149,11 @@ data class TermEnv(
     val latestCacheHitRate: Double? = null,
     /** 面板宿主：面板自带键帽的点击（key = KeyCap.actionId，value = 高亮项），装配层接到 `ModelPanels.onPanelEvent`。 */
     val onPanelEvent: (suspend (overlayId: String, key: String, value: String?) -> io.github.zr987459.pigo.contract.actions.ActionResult)? = null,
+    /**
+     * 面板来源（审查第 3 轮 Important 1）：包住交给 `PiActionsImpl` 的 ModelPanels，终端形态据此判断栈顶面板是不是它产出的，
+     * 是则选中 / 提交 / 确认走面板事件。注入后 [onPanelEvent] 可省略（缺省用它的 `onPanelEvent`）。
+     */
+    val panelSource: PanelSourceTracker? = null,
 )
 
 private val SPINNER = listOf("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
@@ -212,31 +217,9 @@ private fun TermScreen(
         }
     }
 
-    /**
-     * 面板事件（键帽点击）交给面板宿主 [TermEnv.onPanelEvent] 分发，结果在这里落地一次：
-     * 面板 → 同 id 替换栈顶、否则压栈；提示 → toast。未接线时给出提示，不当作动作 id 执行。
-     */
-    fun panelEvent(overlayId: String, key: String, value: String?, closeOnToast: Boolean = false) {
-        val dispatch = env.onPanelEvent
-        if (dispatch == null) { toast = "面板操作未接线：$overlayId/$key"; return }
-        scope.launch {
-            when (val r = dispatch(overlayId, key, value)) {
-                is io.github.zr987459.pigo.contract.actions.ActionResult.Overlay ->
-                    if (host.overlay.top?.id == r.model.id) host.overlay.replaceTop(r.model)
-                    // 同一面板流程里的下一步（如确认后回到服务商表单）：已在栈里就回到它，不重复压栈
-                    else if (host.overlay.items.value.any { it.id == r.model.id }) {
-                        while (host.overlay.top != null && host.overlay.top?.id != r.model.id) host.overlay.pop()
-                        host.overlay.replaceTop(r.model)
-                    } else host.overlay.push(r.model)
-                is io.github.zr987459.pigo.contract.actions.ActionResult.Toast -> {
-                    toast = r.text
-                    // 提交成功后关表单；「测试」等提示不关，已填的值不丢
-                    if (closeOnToast && host.overlay.top?.id == overlayId) host.overlay.pop()
-                }
-                io.github.zr987459.pigo.contract.actions.ActionResult.Done -> if (host.overlay.top?.id == overlayId) host.overlay.pop()
-                else -> Unit
-            }
-        }
+    // 面板路由与结果落地（审查第 3 轮 Important 1、2）：见 TermPanelRouter
+    val panels = remember(host, env, catalogIds) {
+        TermPanelRouter(host, env, catalogIds, scope, runAction = { id, a -> run(id, a) }, toast = { toast = it })
     }
 
     fun toggleForm() { host.form.value = if (host.form.value == UiForm.TERM) UiForm.CALM else UiForm.TERM }
@@ -310,8 +293,8 @@ private fun TermScreen(
             host.overlay.top != null -> host.overlay.top?.let { top ->
                 if (top is io.github.zr987459.pigo.contract.session.OverlayModel.ExtDialog) {
                     scope.launch { host.engine.answerUi(top.request.id, cancelled = true) }
-                }
-                host.overlay.pop()
+                    host.overlay.pop()
+                } else panels.close(top) // 账号登录关闭发 cancel / done（审查第 3 轮 Nit 2）
             }
             chat.running || chat.retry != null || bashActive -> TermInput.actionForKey("Esc", catalog, chat, bashActive)?.let { run(it) }
             double -> run("session.tree") // pi：空闲时双击 Esc 打开 /tree（doubleEscapeAction 默认 tree）
@@ -399,7 +382,7 @@ private fun TermScreen(
                 when {
                     "app.interrupt" in ids -> { onEsc(); true }
                     // overlay 打开时 Enter 提交 / 确认（Nit 7）
-                    "tui.input.submit" in ids && top != null -> overlayEnter(host, top, scope, { id, a -> run(id, a) }, catalogIds, ::panelEvent)
+                    "tui.input.submit" in ids && top != null -> overlayEnter(host, top, scope, panels)
                     "tui.input.submit" in ids && atMatches.isNotEmpty() -> { pickAt(atMatches.first()); true }
                     "tui.input.submit" in ids && atPending -> { pickAtWhenReady { submit() }; true }
                     "tui.input.submit" in ids -> { submit(); true }
@@ -535,7 +518,7 @@ private fun TermScreen(
                     Column(Modifier.testTag("term:widget:$k")) { v.second.forEach { TermLineText(TermLine(listOf(Span(CellWidth.truncate(it, cols)))), fontSp.sp, tokens) } }
                 }
                 overlays.lastOrNull()?.let { top ->
-                    TermOverlay(host, top, cols, fontSp, tokens, catalog, onRun = { id, a -> run(id, a) }, onPanelEvent = ::panelEvent)
+                    TermOverlay(host, top, cols, fontSp, tokens, catalog, onRun = { id, a -> run(id, a) }, panels = panels)
                 }
                 if (atMatches.isNotEmpty() && overlays.isEmpty()) AtCompletion(atMatches.take(TermInput.visibleCount(maxVisible)), cols, fontSp, tokens, ::pickAt)
                 TermInput.slashQuery(draft.text)?.let { q ->

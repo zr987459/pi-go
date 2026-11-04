@@ -18,7 +18,7 @@ object Markdown {
     private sealed interface Block
     private data class Para(val lines: List<String>) : Block
     private data class Heading(val level: Int, val text: String) : Block
-    private data class ListBlock(val items: List<Triple<Int, String, String>>) : Block // indent, marker, text
+    private data class ListBlock(val items: List<Triple<Int, String, String>>, val startLine: Int = -1, val endLine: Int = -1) : Block // indent, marker, text；[startLine, endLine) 为源码行号
     private data class Quote(val lines: List<String>) : Block
     private data class Code(val lang: String, val fence: String, val lines: List<String>) : Block
     private data object Rule : Block
@@ -48,6 +48,7 @@ object Markdown {
                         out += Quote(q)
                     }
                     ORDERED.matches(l) || BULLET.matches(l) -> {
+                        val startLine = i
                         val items = mutableListOf<Triple<Int, String, String>>()
                         while (i < lines.size) {
                             val cur = lines[i]
@@ -63,7 +64,7 @@ object Markdown {
                             }
                             i++
                         }
-                        out += ListBlock(items)
+                        out += ListBlock(items, startLine, i)
                     }
                     else -> {
                         val p = mutableListOf<String>()
@@ -82,18 +83,16 @@ object Markdown {
         val merged = mutableListOf<Block>()
         for (b in out) {
             val last = merged.lastOrNull()
-            if (b is ListBlock && last is ListBlock && adjacentLists(src, last, b)) merged[merged.size - 1] = ListBlock(last.items + b.items) else merged += b
+            if (b is ListBlock && last is ListBlock && adjacentLists(last, b)) merged[merged.size - 1] = ListBlock(last.items + b.items, last.startLine, b.endLine) else merged += b
         }
         return merged
     }
 
-    private fun adjacentLists(src: String, a: ListBlock, b: ListBlock): Boolean {
-        val lastText = a.items.last().third.lines().last()
-        val firstText = b.items.first().third.lines().first()
-        val idx = src.indexOf(lastText)
-        val next = src.indexOf(firstText, idx + lastText.length)
-        return idx >= 0 && next >= 0 && !src.substring(idx + lastText.length, next).contains("\n\n")
-    }
+    /**
+     * 两个列表块在源码里紧挨着（中间没有空行）：按解析时记下的行号判断（PR #18 审查第 3 轮 Nit 3）。
+     * 不再按文字 `indexOf` 找位置：同一段文字在前面出现过时，流式前缀与最终全文会得出不同结论。
+     */
+    private fun adjacentLists(a: ListBlock, b: ListBlock): Boolean = a.endLine >= 0 && b.startLine == a.endLine
 
     /**
      * 流式增量的切分点（审查第 2 轮慢帧）：最后一个「代码围栏之外的空行」之前那个换行的位置；没有返回 -1。
