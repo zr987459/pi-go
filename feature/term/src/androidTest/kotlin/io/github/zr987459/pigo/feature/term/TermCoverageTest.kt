@@ -197,7 +197,7 @@ class TermCoverageTest {
         val editor = rule.onNodeWithTag("term:editor")
         editor.performClick()
         // Fake 的占位动作会压一个 Text 面板（面板打开时 Esc 关面板、Enter 交给面板），每步取结果后清栈
-        fun last() = host.fake.fakeActions.ran.lastOrNull()?.first.also { host.overlay.clear(); rule.waitForIdle() }
+        fun last() = host.fake.fakeActions.ran.lastOrNull()?.first.also { host.overlay.clear(); rule.waitForIdle(); editor.performClick(); rule.waitForIdle() }
 
         host.chat.value = baseChat.copy(running = true)
         rule.waitForIdle()
