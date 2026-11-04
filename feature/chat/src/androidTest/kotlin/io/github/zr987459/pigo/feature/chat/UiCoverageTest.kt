@@ -189,12 +189,13 @@ class UiCoverageTest {
             "tree.label" -> {
                 val job = host.startStream(StreamScript(listOf("好", "的"), intervalMs = 10), userText = "夹具消息")
                 compose.waitUntil(3_000) { job.isCompleted }
-                "msg:" + host.chat.value.items.first { it is ChatItem.User }.key
+                "msg:" + host.chat.value.items.last { it is ChatItem.User }.key
             }
             "model.setDefault" -> "persist:model.select"
             else -> return false
         }
         compose.waitForIdle()
+        if (anchor.startsWith("msg:")) runCatching { compose.onNodeWithTag("calm:messages").performScrollToNode(hasTestTag(anchor)) }
         if (!waitFor(anchor)) return false
         compose.onNodeWithTag(anchor).performTouchInput { longClick() }
         compose.waitForIdle()

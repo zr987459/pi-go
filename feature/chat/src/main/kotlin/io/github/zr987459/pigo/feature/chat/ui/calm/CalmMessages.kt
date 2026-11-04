@@ -111,7 +111,7 @@ internal fun CalmMessages(
             val i = list.firstVisibleItemIndex
             val key = rows.getOrNull(i)?.key
             host.scrollAnchor.value = if (key == null) ScrollAnchor("", 0, followBottom = true)
-            else ScrollAnchor(key, list.firstVisibleItemScrollOffset, followBottom = follow)
+            else ScrollAnchor(key, list.firstVisibleItemScrollOffset, followBottom = follow && atBottom)
         }
     }
 
