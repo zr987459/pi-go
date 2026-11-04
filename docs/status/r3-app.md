@@ -1,5 +1,11 @@
 # r3/app 状态
 
+> **2026-11-04 11:12 CST 续做开始（PR #21 第 2 轮：接真实 pigo-bridge）**。r3/core 已经由 PR #22 合入 main（d15a637）。计划：
+> 1. 普通 merge main → r3/app（保留 di/EngineBindings.kt 两行桥接）。
+> 2. AppSessionOps 去掉「需要 pigo-bridge」桩：标签 / reload / 树内原地切换 / 取回排队 / 停止引擎 / abortRetry 走 PiBridge / PiEngine；@文件搜索注入 core/workspace FileSearch；每项补测试（FakePiBridge）。
+> 3. 核对单引擎共享；FormToggleNoRpcTest、RealHostFormSwitchTest 仍绿。
+> 4. CI 全绿（含模拟器 job）→ 更新 PR #21 描述 → 本文件写「完成，PR #21」。
+
 > **2026-11-04 10:56 CST 第 3 步完成，PR #21**（「r3/app：接线 UI 形态」）。b36b24e 的 CI 全绿：push 41762225237、PR 41763038142，都含模拟器 job。下一步是 PR 2（等 r3/term 合入），交接见 PR #21 描述「未完成 / 交接」和下文。
 >
 > 2026-11-04 10:20 CST 第 3 步已开始（新工作者）：merge main（含 #16/#17/#19/#20）→ 切真实实现 → calm 面板补 Form.actions/确认框/OAuth 重试 → 真实 SessionHostImpl 的切换测试 → CI 绿 → 开 PR 1。r3/term 未合入，终端继续占位。
