@@ -75,3 +75,14 @@
    - FormHost calm = `CalmSurface(graph.sessionHost, onOpenSettings = 设置›模型)`；删 ChatPage / 旧抽屉入口里依赖 feature/commands/ui 的引用。
    - app/build.gradle.kts 加 `implementation(project(":core:session"))`（r3/core 范围，最小越界，PR 描述列出）。
    - CI 绿 → 开 PR 1「r3/app：接线 UI 形态」。
+
+---
+## 审查第 1 轮修复（fix1）— 11:57 CST 已开始
+直接在 r3/app 上修（普通 merge main，不 rebase、不 force）。审查：PR #21 issuecomment-6622088667。
+计划（每条加测试）：
+1. Important 1：“＋ › 图片”接系统图片选择器 → imageLoader → 随消息发送，两形态共用附件状态。
+2. Important 2：“网络代理”并入 设置›模型 页（查看/修改/关闭），删旧代理页与 NetworkAndCostScreen。
+3. Important 3：返回键依次关 ⌘/面板/会话列表，都关着退到后台；终端同理。
+4. Important 4：OAuth 轮询不覆盖输入中的表单；NeedCode 显示授权链接；PKCE UI 形态测试。
+5. Nit 1–4：删除确认关编辑表单；模型行长按›设为默认；运行环境修复/导出 HTML/关于 入口；终端未合入时回落 UI。
+下一步：读审查评论与代码。
