@@ -40,6 +40,11 @@ fun ModelsPageExtras(
      * 装配层传 `engine.restart(…)`，返回给用户看的结果；为 null 时只提示用 ⌘ ›「停止引擎」。
      */
     onRestartEngine: (suspend () -> String)? = null,
+    /**
+     * 当前 pi 进程启动时实际注入的代理（PR #21 第 3 轮 Nit）：装配层在引擎每次启动时记下。与已保存的代理不一致时
+     * 「立即重启 pi」一直显示（离开本页再回来、重组都不丢）；为 null 表示不知道，退回「本页刚保存过」的判断。
+     */
+    effective: kotlinx.coroutines.flow.StateFlow<NetworkSettings?>? = null,
 ) {
     val scope = rememberCoroutineScope()
     val net by settings.network.collectAsState()
@@ -47,6 +52,7 @@ fun ModelsPageExtras(
     var about by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var restartOffered by remember { mutableStateOf(false) }
+    val applied = effective?.collectAsState()?.value
 
     Column(Modifier.fillMaxWidth().padding(top = 16.dp)) {
         Text("其他", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.outline, modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp))
@@ -59,7 +65,7 @@ fun ModelsPageExtras(
         }
         ExtraRow("关于", "pi-go 版本、许可", "settings:about") { about = true }
         message?.let { Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp).testTag("settings:extraMessage")) }
-        if (restartOffered && onRestartEngine != null) {
+        if (onRestartEngine != null && ProxyLogic.showRestart(applied, net, restartOffered)) {
             ExtraRow("立即重启 pi", "让代理设置生效；正在生成的回复会中断", "settings:restartPi") {
                 restartOffered = false
                 message = "正在重启 pi…"
@@ -141,6 +147,21 @@ object ProxyLogic {
         val head = if (n.proxyUrl == null) "已关闭代理" else "代理已保存"
         return head + if (canRestart) "，点下方「立即重启 pi」生效" else "，在 ⌘ ›「停止引擎」后重新进入生效"
     }
+
+    /** 两份代理设置是否等效（地址比较忽略首尾空白；无代理时例外列表不影响）。 */
+    fun same(a: NetworkSettings, b: NetworkSettings): Boolean {
+        val pa = a.proxyUrl?.trim()?.ifEmpty { null }
+        val pb = b.proxyUrl?.trim()?.ifEmpty { null }
+        if (pa != pb) return false
+        return pa == null || a.noProxy.trim() == b.noProxy.trim()
+    }
+
+    /**
+     * 是否显示「立即重启 pi」：知道当前生效的代理（[applied]）时，只要与已保存的（[saved]）不一致就一直显示；
+     * 不知道时退回「本页刚保存过」（[justSaved]）。
+     */
+    fun showRestart(applied: NetworkSettings?, saved: NetworkSettings, justSaved: Boolean): Boolean =
+        if (applied != null) !same(applied, saved) else justSaved
 
     /** 「立即重启 pi」的结果提示。 */
     fun restartMessage(ok: Boolean, error: String? = null): String = if (ok) "pi 已重启，代理设置已生效" else "重启失败：${error.orEmpty()}"

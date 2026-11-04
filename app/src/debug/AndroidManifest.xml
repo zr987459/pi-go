@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!-- 仅 debug：窗口配置与 MainActivity 相同（adjustResize + onCreate 里 enableEdgeToEdge）的空宿主，
+             仪器测试在它上面 setContent，测到的软键盘 / 窗口行为与 App 一致（FormSwitchStreamingTest 窄屏用例）。 -->
+        <activity
+            android:name="io.github.zr987459.pigo.MainWindowTestActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar"
+            android:windowSoftInputMode="adjustResize" />
+    </application>
+</manifest>

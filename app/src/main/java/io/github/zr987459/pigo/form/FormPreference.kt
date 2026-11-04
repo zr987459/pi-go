@@ -44,9 +44,9 @@ object FormPersistence {
     fun parse(raw: String?): UiForm? = raw?.let { r -> UiForm.entries.firstOrNull { it.name == r } }
 
     /**
-     * 终端形态是否已接线（r3/term 合入、r3/app PR 2 接线后改为 true）。PR 1 阶段终端只是占位页（[TermPlaceholder]）。
+     * 终端形态是否已接线（r3/term 合入、r3/app PR 2 接线后改为 true）。PR 1 阶段终端是占位页（已删）。
      */
-    const val TERM_WIRED: Boolean = false
+    const val TERM_WIRED: Boolean = true
 
     /**
      * 启动时的形态：读回上次形态；终端形态还没接线时回落到 UI 形态，不会一启动就停在「终端形态尚未合入」占位页

@@ -37,6 +37,7 @@ import io.github.zr987459.pigo.feature.commands.CommandsGraph
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 /**
  * 手写依赖图（DESIGN.md §2.3）：持有单例，从四个 `di/XxxBindings.kt` 取实现，
@@ -59,6 +60,9 @@ class AppGraph(context: Context) {
     val runtime: RuntimeManager by lazy { RuntimeBindings.runtime(BindingMode.runtime, ctx, log) }
 
     // 引擎（W2）
+    /** pi 进程实际的 HOME（终端形态把 cwd 显示成 `~/…` 用），真引擎取 EngineConfig.homeDir，Fake 用容器默认值。 */
+    val homeDir: String get() = (((engine as? io.github.zr987459.pigo.di.GatedEngineClient)?.inner ?: engine) as? io.github.zr987459.pigo.core.engine.PiEngine)?.config?.homeDir ?: io.github.zr987459.pigo.core.engine.EngineConfig.GUEST_HOME
+
     val engine: EngineClient by lazy { EngineBindings.engine(BindingMode.engine, ctx, runtime, launchEnv, log) }
 
     // pi 其余 RPC（W1，PR #13 已合入：PiEngine 本身，套同一个预热闸门）
@@ -91,12 +95,31 @@ class AppGraph(context: Context) {
     val piSettings: PiSettings by lazy { SessionBindings.piSettings(runtime) }
 
     // r3：模型配置面板（r3/models）。/model、/login、设置 › 模型 共用同一个实例。
-    val modelPanels: ModelPanels by lazy {
-        RealModelPanels(models.catalog, models.auth, models.custom, engine, appScope, piSettings)
+    // 包一层来源记录（r3/term PanelSourceTracker）：交给 PiActionsImpl 的就是这一个，终端形态据此认出 ModelPanels 产出的面板。
+    val panelSource: io.github.zr987459.pigo.feature.term.PanelSourceTracker by lazy {
+        io.github.zr987459.pigo.feature.term.PanelSourceTracker(
+            RealModelPanels(models.catalog, models.auth, models.custom, setModelSignal, appScope, piSettings),
+        )
+    }
+    val modelPanels: ModelPanels get() = panelSource
+
+    /** 两种形态里模型面板的点击、键帽、表单、确认框 → [ModelPanels.onPanelEvent]；选中模型成功后关掉选择面板（[PickClose]）。 */
+    val modelPanelEvents: PanelEventSink by lazy {
+        ModelPanelEvents(modelPanels, switchCount = { setModelSignal.count }) { id, key, r, switched ->
+            io.github.zr987459.pigo.di.PickClose.after(sessionHost.overlay, id, key, r, switched)
+        }
     }
 
-    /** UI 形态里模型面板的点击、键帽、表单、确认框 → [ModelPanels.onPanelEvent]。 */
-    val modelPanelEvents: PanelEventSink by lazy { ModelPanelEvents(modelPanels) }
+    /** 交给模型面板的引擎（同一个 [engine]，只多数 set_model 成功次数，PickClose 的结构化信号）。 */
+    val setModelSignal: io.github.zr987459.pigo.di.SetModelSignal by lazy {
+        io.github.zr987459.pigo.di.SetModelSignal(engine).also { sig ->
+            // 后台 OAuth 完成后的自动选回（不经面板事件）：排到主线程下一轮，晚于同一帧里面板事件结果的落栈。
+            sig.onSwitched = { p -> appScope.launch(kotlinx.coroutines.Dispatchers.Main) { io.github.zr987459.pigo.di.PickClose.afterBackgroundSwitch(sessionHost.overlay, p) } }
+        }
+    }
+
+    /** 当前 pi 进程启动时注入的代理（设置 › 模型「立即重启 pi」比较用）；引擎每次启动时由导航层记下。 */
+    val effectiveProxy = kotlinx.coroutines.flow.MutableStateFlow<io.github.zr987459.pigo.contract.NetworkSettings?>(null)
 
     /** SessionOps 全部走真实引擎：PiBridge（pigo-bridge）与 PiEngine 就是 [engine] 里那一个对象，不另起引擎。 */
     val sessionOps: SessionOps by lazy { AppSessionOps.forEngine(engine, runtime, ctx.appContext.cacheDir) }

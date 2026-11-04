@@ -83,10 +83,10 @@ object PigoBridge {
     fun switchCommand(path: String, req: String? = null): String = "/pigo:switch " + reqArg(req) + path.replace(Regex("[\\r\\n]+"), "").trim()
 
     /**
-     * 容器内路径的规范形式，用于对账比较（审查 PR #16 Nit 4）：展开 `~`（[home]）、相对路径按 [cwd] 解析、
+     * 容器内路径的规范形式，用于对账比较（审查 PR #16 Nit 4）：展开 `~`（[home]，由调用方从运行环境传入，见 EngineConfig.homeDir）、相对路径按 [cwd] 解析、
      * 去掉多余的 `/`、`.`、`..` 与末尾 `/`。宿主看不到容器内的符号链接，所以只做字面规范化。
      */
-    fun normalizePath(path: String?, cwd: String? = null, home: String = "/root"): String? {
+    fun normalizePath(path: String?, cwd: String? = null, home: String): String? {
         val p = path?.trim()?.takeIf { it.isNotEmpty() } ?: return null
         val abs = when {
             p == "~" -> home

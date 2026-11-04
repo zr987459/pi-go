@@ -73,9 +73,10 @@ dependencies {
     implementation(project(":feature:models"))
     implementation(project(":feature:files"))
     implementation(project(":feature:commands"))
-    implementation(project(":feature:usage"))
     // r3/app 第 3 步：SessionHostImpl / PiActionsImpl / PiSettingsImpl / SessionCatalogImpl（r3/session）。范围外最小改动（build 文件归 r3/core），PR 描述已列。
     implementation(project(":core:session"))
+    // r3/app PR 2：终端形态（r3/term）接进 FormHost。feature/usage 已整模块删除，不再依赖。
+    implementation(project(":feature:term"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)

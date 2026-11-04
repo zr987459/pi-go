@@ -1514,8 +1514,8 @@ class PiEngine(
 
     /** 会话路径对账：规范化后比较（审查 PR #16 Nit 4）。 */
     private fun samePath(a: String?, b: String?): Boolean {
-        val na = PigoBridge.normalizePath(a, currentCwd) ?: return false
-        return na == PigoBridge.normalizePath(b, currentCwd)
+        val na = PigoBridge.normalizePath(a, currentCwd, config.homeDir) ?: return false
+        return na == PigoBridge.normalizePath(b, currentCwd, config.homeDir)
     }
 
     /**
@@ -1631,7 +1631,7 @@ class PiEngine(
         if (sessionPath.isBlank() || sessionPath.any { it == '\n' || it == '\r' }) return Outcome.Err(ErrCode.RPC_REJECTED, "会话路径不合法")
         if (!bridgeReady()) return Outcome.Err(ErrCode.UNKNOWN, unavailableReason())
         // 发给 pi 的也是规范化后的路径（展开 ~、去掉多余 / . ..），这样 get_state 回来的写法与对账比较一致。
-        val target = PigoBridge.normalizePath(sessionPath, currentCwd) ?: sessionPath.trim()
+        val target = PigoBridge.normalizePath(sessionPath, currentCwd, config.homeDir) ?: sessionPath.trim()
         return bridgeSerial("switch") {
             // 完成信号是新实例的 ready（reason=resume）；任何 cmd=switch 的回复（失败，或被别的扩展取消）也结束等待，
             // 不必等到超时（审查 Nit 2）。

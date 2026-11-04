@@ -41,7 +41,6 @@ include(":feature:settings")
 include(":feature:models")
 include(":feature:files")
 include(":feature:commands")
-include(":feature:usage")
 include(":feature:term")
 
 // 二期模块（DESIGN.md §2.1）：现在只列出，不建目录。

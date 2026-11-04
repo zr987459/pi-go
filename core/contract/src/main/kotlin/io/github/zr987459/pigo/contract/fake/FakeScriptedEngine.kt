@@ -31,11 +31,13 @@ data class RpcCall(val type: String, val args: Map<String, String> = emptyMap())
 /**
  * 可编程流式回复：[chunks] 每隔 [intervalMs] 追加一段；[stopReason] 为结束原因。
  * 例：`StreamScript.counting(200, 50)` = 每 50ms 一段，共 200 段（SessionHostFormSwitchTest 用）。
+ * [gate]（可选）在第 i 段发出前挂起，由测试控制出段时机（如仪器测试在点击期间暂停、切换完成后才放行剩余分段）。
  */
 data class StreamScript(
     val chunks: List<String>,
     val intervalMs: Long = 50,
     val stopReason: String = "stop",
+    val gate: (suspend (index: Int) -> Unit)? = null,
 ) {
     val fullText: String get() = chunks.joinToString("")
 
@@ -158,7 +160,8 @@ class FakeScriptedEngine(
 
     private suspend fun streamOne(script: StreamScript, asstKey: String) {
         val sb = StringBuilder()
-        for (chunk in script.chunks) {
+        for ((i, chunk) in script.chunks.withIndex()) {
+            script.gate?.invoke(i)
             delay(script.intervalMs)
             sb.append(chunk)
             val text = sb.toString()

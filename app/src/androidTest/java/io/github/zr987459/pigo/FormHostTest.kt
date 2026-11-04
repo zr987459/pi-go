@@ -13,7 +13,7 @@ import io.github.zr987459.pigo.contract.fake.FakeSessionHost
 import io.github.zr987459.pigo.contract.session.DraftState
 import io.github.zr987459.pigo.contract.session.UiForm
 import io.github.zr987459.pigo.form.FormHost
-import io.github.zr987459.pigo.form.TermPlaceholder
+import io.github.zr987459.pigo.feature.term.TermSurface
 import io.github.zr987459.pigo.form.toggleForm
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -42,15 +42,15 @@ class FormHostTest {
             FormHost(
                 host,
                 calm = { Button(onClick = { host.toggleForm() }, modifier = Modifier.testTag("calm:toggle")) { Text("⇄") } },
-                term = { TermPlaceholder(onBackToUi = { host.toggleForm() }) },
+                term = { TermSurface(host) },
             )
         }
         compose.onNodeWithTag("calm:toggle").performClick()
         compose.waitForIdle()
-        compose.onNodeWithTag("term:placeholder").assertIsDisplayed()
+        compose.onNodeWithTag("term:surface").assertIsDisplayed()
         assertEquals(UiForm.TERM, host.form.value)
 
-        compose.onNodeWithTag("form:toggle").performClick()
+        compose.onNodeWithTag("form:toggle", useUnmergedTree = true).performClick()
         compose.waitForIdle()
         compose.onNodeWithTag("calm:toggle").assertIsDisplayed()
         assertEquals(UiForm.CALM, host.form.value)

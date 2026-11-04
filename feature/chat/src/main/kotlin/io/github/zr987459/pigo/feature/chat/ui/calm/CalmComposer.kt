@@ -48,6 +48,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -168,7 +171,14 @@ internal fun CalmComposer(
                         textStyle = Calm.type.body.copy(color = c.text),
                         cursorBrush = SolidColor(c.accent),
                         maxLines = 8,
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 24.dp).focusRequester(focus).testTag("calm:input"),
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 24.dp).focusRequester(focus)
+                            // 命令模式下空输入退格退出（软键盘与外接键盘都会发 DEL 键事件）
+                            .onPreviewKeyEvent { e ->
+                                if (e.type == androidx.compose.ui.input.key.KeyEventType.KeyDown && e.key == androidx.compose.ui.input.key.Key.Backspace) {
+                                    bashBackspace(host.draft.value)?.let { host.draft.value = it; true } ?: false
+                                } else false
+                            }
+                            .testTag("calm:input"),
                     )
                 }
                 if (draft.text.isNotEmpty() || draft.bashMode != BashMode.NONE) {

@@ -59,6 +59,12 @@ data class EngineConfig(
     val approveProject: Boolean = false,
 ) {
     /**
+     * pi 进程实际看到的 HOME（PR #24 审查积压 Nit）：[extraEnv] 覆盖了就用它（桌面集成测试、沙箱），
+     * 否则是容器的默认 HOME（[GUEST_HOME]，与 `ProotLauncher.guestEnv` 一致）。路径规范化展开 `~` 用它，不再写死。
+     */
+    val homeDir: String get() = extraEnv["HOME"]?.takeIf { it.isNotBlank() } ?: GUEST_HOME
+
+    /**
      * 命令超时：abort、get_messages 可配置；compact（10 分钟）、bash（2 小时）、export_html/fork/clone/get_tree/get_entries（60 秒）
      * 用 [RpcTimeouts.forCommand] 的长超时（不随测试缩短的 [defaultTimeoutMs] 变短）；其余用 [defaultTimeoutMs]。
      */
@@ -99,6 +105,9 @@ data class EngineConfig(
     }
 
     companion object {
+        /** 容器内默认 HOME（core/runtime 的 ProotLauncher.guestEnv 设的值）。 */
+        const val GUEST_HOME = "/root"
+
         private const val SIX_GB = 6L * 1024 * 1024 * 1024
 
         /** 设备总内存 < 6 GB 取 768 MB，否则 1024 MB（§3.2）。 */

@@ -30,10 +30,8 @@ import io.github.zr987459.pigo.contract.ImageInput
 import io.github.zr987459.pigo.contract.Outcome
 import io.github.zr987459.pigo.contract.fake.FakeSessionExporter
 import io.github.zr987459.pigo.contract.fake.FakeWorkspaceFs
-import io.github.zr987459.pigo.feature.files.browser.FilesController
 import io.github.zr987459.pigo.feature.files.output.OutputViewerScreen
 import io.github.zr987459.pigo.feature.files.platform.FileShare
-import io.github.zr987459.pigo.feature.files.ui.FilesBrowserScreen
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
@@ -116,23 +114,7 @@ class FilesDeviceTest {
      * 真实 RootfsWorkspace 经 content:// 导入、列出、预览由 core/workspace 的
      * WorkspaceDeviceTest.importedThroughContentUriShowsInListAndPreviewMatches 覆盖。
      */
-    @Test
-    fun importedTextFileAppearsInTreeAndPreviewMatches() {
-        val text = "第一行\nsecond line\n"
-        val name = "pigo-notes-${System.nanoTime()}.txt"
-        val uri = mediaStoreText(name, text)
-        assertEquals("content", uri.scheme)
-        assertTrue("应是别的应用的 provider（media），不是本 App 的 FileProvider", uri.authority == MediaStore.AUTHORITY && uri.authority != FileShare.authority(ctx))
-        val fs = FakeWorkspaceFs()
-        val controller = FilesController(fs, CoroutineScope(Dispatchers.Main), "/root/pi-cwd")
-        compose.setContent { FilesBrowserScreen(controller, onOpenFile = {}, onOpenGit = {}, onClose = {}) }
-        compose.waitUntil(5_000) { !controller.state.value.loading }
-        compose.runOnIdle { controller.import(listOf(name to { ctx.contentResolver.openInputStream(uri) })) }
-        compose.waitUntil(5_000) { controller.state.value.entries.any { it.name == name } }
-        compose.onNodeWithTag("files.row:$name").assertIsDisplayed()
-        val p = runBlocking { (fs.preview("/root/pi-cwd/$name") as Outcome.Ok).value } as FilePreview.Text
-        assertEquals(text, p.chunk.text)
-    }
+    
 
     /** 验收：1 万行日志在输出查看器里连续滑动不卡（慢帧 < 5%，且必须真的统计到帧），搜索能定位。 */
     @Test

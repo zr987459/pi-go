@@ -3,18 +3,13 @@ package io.github.zr987459.pigo.feature.files
 import io.github.zr987459.pigo.contract.Attachment
 import io.github.zr987459.pigo.contract.AttachmentProcessor
 import io.github.zr987459.pigo.contract.ErrCode
-import io.github.zr987459.pigo.contract.GitFileChange
 import io.github.zr987459.pigo.contract.ImageInput
 import io.github.zr987459.pigo.contract.Outcome
 import io.github.zr987459.pigo.contract.fake.FakeWorkspaceFs
 import io.github.zr987459.pigo.feature.files.attach.AttachmentController
 import io.github.zr987459.pigo.feature.files.attach.SourceItem
-import io.github.zr987459.pigo.feature.files.browser.FilesController
-import io.github.zr987459.pigo.feature.files.browser.GitBadge
 import io.github.zr987459.pigo.feature.files.output.Ansi
 import io.github.zr987459.pigo.feature.files.output.OutputSearch
-import io.github.zr987459.pigo.feature.files.ui.ChangeGroup
-import io.github.zr987459.pigo.feature.files.ui.groupChanges
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
@@ -86,49 +81,6 @@ class AnsiTest {
     }
 }
 
-class FilesControllerTest {
-    private fun change(path: String, x: Char, y: Char) = GitFileChange(path, x, y)
-
-    @Test
-    fun badgesPropagateToParentDirectories() {
-        val m = FilesController.badges("/root/proj", listOf(change("src/a.kt", '.', 'M'), change("src/new.kt", '?', '?'), change("doc/x.md", 'U', 'U')))
-        assertEquals(GitBadge.MODIFIED, m["/root/proj/src/a.kt"])
-        assertEquals(GitBadge.UNTRACKED, m["/root/proj/src/new.kt"])
-        assertEquals(GitBadge.CONFLICT, m["/root/proj/doc"])
-        assertTrue(m.containsKey("/root/proj/src"))
-        assertFalse(m.containsKey("/root"))
-    }
-
-    @Test
-    fun changesAreGrouped() {
-        val g = groupChanges(listOf(change("a", 'M', '.'), change("b", '.', 'M'), change("c", 'M', 'M'), change("d", '?', '?'), change("e", 'U', 'U')))
-        assertEquals(listOf(ChangeGroup.CONFLICT, ChangeGroup.STAGED, ChangeGroup.UNSTAGED, ChangeGroup.UNTRACKED), g.keys.toList())
-        assertEquals(listOf("a", "c"), g.getValue(ChangeGroup.STAGED).map { it.path })
-        assertEquals(listOf("b", "c"), g.getValue(ChangeGroup.UNSTAGED).map { it.path })
-    }
-
-    @Test
-    fun browsingImportingAndGoingUp() = runBlocking {
-        val fs = FakeWorkspaceFs()
-        val c = FilesController(fs, CoroutineScope(Dispatchers.Unconfined), "/root/pi-cwd")
-        val s0 = c.state.value
-        assertEquals("/root/pi-cwd", s0.dir)
-        assertFalse(s0.loading)
-        assertTrue(s0.entries.isNotEmpty())
-        assertTrue("默认不显示隐藏文件", s0.entries.none { it.hidden })
-        c.toggleHidden()
-        assertTrue(c.state.value.entries.any { it.hidden })
-        c.import(listOf("新.txt" to { ByteArrayInputStream("hi".toByteArray()) as InputStream }))
-        assertTrue(c.state.value.entries.any { it.name == "新.txt" })
-        assertTrue(c.state.value.message!!.startsWith("已导入 1"))
-        c.open("/root/pi-cwd/src")
-        assertTrue(c.up())
-        assertEquals("/root/pi-cwd", c.state.value.dir)
-        assertFalse("在根上不再往上", c.up())
-        c.mkdir("../x")
-        assertEquals("文件夹名无效", c.state.value.message)
-    }
-}
 
 class AttachmentControllerTest {
     private class Proc : AttachmentProcessor {
