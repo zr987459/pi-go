@@ -104,8 +104,8 @@ class AppGraph(context: Context) {
 
     /** 两种形态里模型面板的点击、键帽、表单、确认框 → [ModelPanels.onPanelEvent]；选中模型成功后关掉选择面板（[PickClose]）。 */
     val modelPanelEvents: PanelEventSink by lazy {
-        ModelPanelEvents(modelPanels, switchCount = { setModelSignal.count }) { id, _, r, switched ->
-            io.github.zr987459.pigo.di.PickClose.after(sessionHost.overlay, id, r, switched)
+        ModelPanelEvents(modelPanels, switchCount = { setModelSignal.count }) { id, key, r, switched ->
+            io.github.zr987459.pigo.di.PickClose.after(sessionHost.overlay, id, key, r, switched)
         }
     }
 

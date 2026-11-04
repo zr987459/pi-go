@@ -23,29 +23,42 @@ class PickCloseTest {
     private fun form() = OverlayModel.Text("provider.form:a", "a", "")
 
     @Test
-    fun directPickClosesPickerWhateverTheToastSays() {
+    fun directPickUsesFailedFlagNotText() {
         val s = OverlayStack().apply { push(picker()) }
-        val r = ActionResult.Toast("Switched to b")
-        assertEquals(r, PickClose.after(s, "model.select", r, switched = true))
+        val r = ActionResult.Toast("Switched to b") // 文案随便改：只看 failed
+        assertEquals(r, PickClose.after(s, "model.select", "model:a/b", r, switched = false))
         assertEquals(emptyList<String>(), s.items.value.map { it.id })
+        // 失败（failed = true）即使文案像成功也不关
+        val s2 = OverlayStack().apply { push(picker()) }
+        PickClose.after(s2, "model.select", "select", ActionResult.Toast("已切换到 b", failed = true), switched = false)
+        assertEquals(listOf("model.select"), s2.items.value.map { it.id })
+        // 星标 / 设为默认（成功提示）不关
+        PickClose.after(s2, "model.select", "star", ActionResult.Toast("已加入常用"), switched = false)
+        PickClose.after(s2, "model.select", "default:a/b", ActionResult.Toast("已设为默认"), switched = false)
+        assertEquals(listOf("model.select"), s2.items.value.map { it.id })
     }
 
     @Test
     fun autoSelectBackAfterKeyClosesPickerAndForm() {
         val s = OverlayStack().apply { push(picker()); push(form()) }
-        PickClose.after(s, "provider.form:a", ActionResult.Toast("已切换到 b"), switched = true)
+        PickClose.after(s, "provider.form:a", "submit", ActionResult.Toast("已切换到 b"), switched = true)
         assertEquals(emptyList<String>(), s.items.value.map { it.id })
     }
 
     @Test
     fun noSwitchOrOverlayKeepsPanels() {
         val s = OverlayStack().apply { push(picker()) }
-        PickClose.after(s, "model.select", ActionResult.Toast("已切换到 b"), switched = false) // 文案像成功但没切换：不关
-        PickClose.after(s, "model.select", ActionResult.Overlay(form()), switched = true)
+        PickClose.after(s, "model.select", "model:a/b", ActionResult.Overlay(form()), switched = false) // 未配置：去填 Key，不关
+        assertEquals(listOf("model.select"), s.items.value.map { it.id })
+        // 填 Key 保存成功但没自动选回（「已保存」failed = false、set_model 没发生）：不关
+        s.push(form())
+        PickClose.after(s, "provider.form:a", "submit", ActionResult.Toast("已保存"), switched = false)
+        assertEquals(listOf("model.select", "provider.form:a"), s.items.value.map { it.id })
+        s.remove("provider.form:a")
         assertEquals(listOf("model.select"), s.items.value.map { it.id })
         // 选择面板不在栈里（例如在设置页保存 Key）：什么都不关
         val s2 = OverlayStack().apply { push(form()) }
-        PickClose.after(s2, "provider.form:a", ActionResult.Toast("已保存"), switched = true)
+        PickClose.after(s2, "provider.form:a", "submit", ActionResult.Toast("已保存"), switched = true)
         assertEquals(listOf("provider.form:a"), s2.items.value.map { it.id })
     }
 

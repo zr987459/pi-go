@@ -27,3 +27,6 @@
 ## 2026-11-04 15:30 CST
 - PR #26 第 1 轮审查（3c6aa27）一次修完：I1 ⇄UI 固定键条最右（收起时也在）；I2 FormSwitchStreamingTest 走 ChatPage 真实装配、16 次切换全经 UI、屏幕读段号、补草稿/光标/发送键/贴底断言，段数写实 100×100ms；Nit 1 终端返回键走 TermPanelRouter.close；Nit 2 PickClose 改 SetModelSignal 结构化判据并覆盖填 Key 自动选回；Nit 3 AppCoverageTest 补终端返回键与 📎；并入删 feature/usage + settings include、normalizePath home 取 EngineConfig.homeDir。
 - 本地：app/feature:term 单测、PigoBridgeTest、androidTest 编译通过。等 CI。
+
+## 2026-11-04 15:45 CST
+- 普通 merge origin/main（750e5d8，PR #25）→ 758d6ad，无冲突。PickClose 直接选中改用 Toast.failed；自动选回仍用 SetModelSignal（failed 区分不了已保存 / 已切换）。本地 app、term、models、settings、session 单测与 androidTest 编译通过。
