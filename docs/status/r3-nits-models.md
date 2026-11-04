@@ -1,24 +1,18 @@
 # r3/nits-models 状态
 
-**状态：完成，PR #25**（2026-11-04 14:23 CST，基于 main@ccee240）
+**状态：review r1 修复 已开始**（2026-11-04 14:58 CST，基于 d0b89db / 代码 143909c）
 
-## 计划（只修已审出的 Nit，每条加测试，不扩功能）
-1. [x] PR #19：服务商表单保存成功后仍提示“请重新填写 Key” → 成功时不出现
-2. [x] PR #19：模型确认框“关闭/取消”不发 cancel、残留已填 Key/待定状态 → 关闭等同取消并清理
-3. [x] PR #19：OAuth 失败后的“重试”按钮 → 核实 UI 与终端 ⌘ 两形态；缺则补在 feature/models 面板模型
-4. [x] PR #24 审查 Nit 1：isFailureToast 文案判成败 → core/contract 加结构化成败标志（默认兼容），RealModelPanels 填，SessionHostImpl.landModelPanel 改用，删文案判断
+审查评论：https://github.com/zr987459/pi-go/pull/25#issuecomment-6624614325
 
-不碰：app/**、feature/usage/**、feature/files/**（r3/app-2 在改）。
+## 第 1 轮审查修复计划
+- [ ] Important 1：终端/UI 删除、清除确认框点“取消”只关确认框、返回 Done，不动仍开着的表单（未保存修改 / 已填 Key / 待选模型保留）；只有设置页关闭整个面板时才清理残留。两形态一致（RealModelPanels.kt:325-337、TermPanels.kt:99-103/137-142）。
+- [ ] Nit 1：新建未保存服务商的确认框 id 与草稿 key 对齐；终端不再多压一层不存在服务商的表单。
+- [ ] Nit 2：RealModelPanelsFix3Test 改回正确预期。
+- [ ] Nit 3：core/contract 注释写清 ActionResult.Toast.failed 含义。
+- 每条加/调测试；CI 全绿（含模拟器）后更新 PR 描述。
 
-## 进度
-- 1 已改：RealModelPanels.onCustomEvent 在处理之后再判断 keyDropped（成功保存 forgetDraft 已清标记）。
-- 2 已改：confirm.remove:/confirm.clear: 的 cancel → 丢弃草稿与已填 Key、清该服务商的待选模型，返回清理后的表单；设置页关闭确认框发 cancel（SettingsPanelLogic.dismissEvent）。
-- 3 核实：两形态都已有「重试」（ui/calm CalmSheet PanelTextButtons `panel:retry` + CalmPanelLogic.oauthRetryable；终端 TermInput.oauthCaps FAILED → `enter 重试`，TermOverlay Enter=retry）。未改渲染器，加了 feature/models 契约测试。
-- 4 已改：core/contract `ActionResult.Toast(text, failed = false)`；RealModelPanels 失败提示全用 fail()；SessionHostImpl.landModelPanel 用 r.failed，删 isFailureToast；测试 fake（OverlayFix1Test、TermPanelRouterRealHostTest）标 failed = true。
-- 测试：RealModelPanelsNitsTest（新）、NitsCoreTest（替换文案分类测试）、SettingsPanelLogicTest.dismissingModelConfirmSendsCancel、RealModelPanelsFix3Test 取消断言更新。
-
-- PR：https://github.com/zr987459/pi-go/pull/25
-- CI @143909c：build（含全部 JVM 单测）success、真 pi 桥接 success；模拟器 job 运行中（本状态提交会触发新一轮 CI，以最新 SHA 为准）。
+## 之前（首版，已完成）
+首版 4 条 Nit 已在 143909c 完成，CI 全绿（见 PR #25 描述）。
 
 ## 下一步（若被切断，接手者）
-- 盯 PR #25 最新 SHA 的 CI（build / 查找仪器测试类 / 仪器测试（模拟器）/ realpi），红了读日志修；绿了把 CI 链接补进 PR 描述。
+- 按上面清单逐条修，看本文件“进度”。
