@@ -79,6 +79,8 @@ class RealModelPanels(
     val pending: StateFlow<ModelRef?> = _pending.asStateFlow()
 
     private val _oauth = MutableStateFlow<Map<String, OAuthStep>>(emptyMap())
+    /** 每个服务商最近一次的授权链接：NeedCode 紧跟 OpenUrl 到来，表单里要能再打开（PR #21 审查第 1 轮 Important 4，r3/app 最小改动）。 */
+    private val oauthUrls = java.util.concurrent.ConcurrentHashMap<String, String>()
     val oauthSteps: StateFlow<Map<String, OAuthStep>> = _oauth.asStateFlow()
     private val oauthJobs = mutableMapOf<String, Job>()
 
@@ -219,6 +221,7 @@ class RealModelPanels(
             _oauth.update { it + (providerId to OAuthStep.Starting) }
             oauthJobs[providerId] = scope.launch {
                 auth.login(providerId).collect { step ->
+                    if (step is OAuthStep.OpenUrl) oauthUrls[providerId] = step.url
                     _oauth.update { it + (providerId to step) }
                     oauthSubmitted.remove(providerId)
                     if (step is OAuthStep.Done) credentialsReady(providerId)
@@ -240,7 +243,11 @@ class RealModelPanels(
             OAuthStep.Starting -> OverlayModel.Text(id, title, "正在开始登录…")
             is OAuthStep.OpenUrl -> OverlayModel.Text(id, title, listOfNotNull("在浏览器中打开：", s.url, s.instructions).joinToString("\n"))
             is OAuthStep.DeviceCode -> OverlayModel.Text(id, title, "打开 ${s.verificationUri}\n输入代码：${s.userCode}")
-            is OAuthStep.NeedCode -> OverlayModel.Form(id, title, listOf(FormField("code", s.prompt, PiSettingType.Str)), submitLabel = "提交")
+            is OAuthStep.NeedCode -> OverlayModel.Form(
+                id, title,
+                listOf(FormField("code", s.prompt, PiSettingType.Str, help = oauthUrls[providerId]?.let { "授权链接：$it" })),
+                submitLabel = "提交",
+            )
             is OAuthStep.Select -> OverlayModel.SelectList(id, s.prompt, listOf(SelectGroup(null, s.options.map { SelectItem("select:$it", it) })))
             is OAuthStep.Progress -> OverlayModel.Text(id, title, s.message)
             is OAuthStep.Done -> OverlayModel.Text(id, title, "已登录" + ((s.state as? AuthState.OAuth)?.accountLabel?.let { "：$it" } ?: ""))

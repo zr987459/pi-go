@@ -125,7 +125,11 @@ internal fun CalmSheet(
             when (model) {
                 is OverlayModel.SelectList ->
                     if (model.id == COMMANDS_OVERLAY_ID) CommandCenter(host, model, onAction) else SelectListView(host, model, onAction, panel)
-                is OverlayModel.Form -> FormView(host, model, onAction, panel)
+                is OverlayModel.Form -> {
+                    FormView(host, model, onAction, panel)
+                    // OAuth 填授权码的表单：显示授权链接（PR #21 审查第 1 轮 Important 4）。
+                    if (panel != null) CalmPanelLogic.oauthUrl(model)?.let { OAuthLinkButton(it) }
+                }
                 is OverlayModel.Text -> {
                     SelectionContainer {
                         Text(model.text, style = Calm.type.label, color = c.text, modifier = Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()).testTag("overlayText:${model.id}"))
@@ -255,13 +259,30 @@ private fun ColumnScope.SelectListView(host: SessionHost, model: OverlayModel.Se
             if (visible.isEmpty()) continue
             g.title?.let { t -> item(key = "g:$gi") { Text(t, style = Calm.type.caption, color = c.secondary, modifier = Modifier.padding(top = 10.dp, bottom = 4.dp)) } }
             items(visible, key = { "i:$gi:" + it.key }) { item ->
+                // 行长按 › 面板键帽（如模型面板的「设为默认」，DESIGN-r3 §2「默认模型」）：对这一行执行，不切换当前选择、不切会话模型（PR #21 审查 Nit 2）。
+                var rowMenu by remember { mutableStateOf(false) }
+                val onRow = {
+                    update { m -> m.copy(selectedKey = item.key) }
+                    if (panel != null) panel(item.key, null) else onAction(model.id, item.key)
+                }
                 Row(
-                    Modifier.fillMaxWidth().clickable(enabled = item.enabled) {
-                        update { m -> m.copy(selectedKey = item.key) }
-                        if (panel != null) panel(item.key, null) else onAction(model.id, item.key)
-                    }.padding(vertical = 10.dp).testTag("item:${item.key}"),
+                    Modifier.fillMaxWidth().then(
+                        if (panel != null && model.keyCaps.isNotEmpty()) Modifier.combinedClickable(enabled = item.enabled, onLongClick = { rowMenu = true }, onClick = onRow)
+                        else Modifier.clickable(enabled = item.enabled, onClick = onRow),
+                    ).padding(vertical = 10.dp).testTag("item:${item.key}"),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    if (panel != null && model.keyCaps.isNotEmpty()) {
+                        androidx.compose.material3.DropdownMenu(expanded = rowMenu, onDismissRequest = { rowMenu = false }) {
+                            for (cap in model.keyCaps) {
+                                androidx.compose.material3.DropdownMenuItem(
+                                    text = { Text(cap.label, style = Calm.type.label) },
+                                    onClick = { rowMenu = false; panel(cap.actionId, item.key) },
+                                    modifier = Modifier.testTag("rowMenu:${cap.actionId}"),
+                                )
+                            }
+                        }
+                    }
                     Column(Modifier.weight(1f)) {
                         Text(item.label, style = Calm.type.body, color = if (item.enabled) c.text else c.secondary, maxLines = 1)
                         item.detail?.let { d -> Text(d, style = Calm.type.caption, color = c.secondary, maxLines = 1) }
@@ -306,6 +327,17 @@ private fun PanelTextButtons(model: OverlayModel.Text, panel: (String, String?) 
                 .padding(horizontal = 16.dp, vertical = 8.dp).testTag("panel:retry"),
         )
     }
+}
+
+@Composable
+private fun OAuthLinkButton(url: String) {
+    val c = Calm.colors
+    val uri = LocalUriHandler.current
+    Text(
+        "打开授权链接", style = Calm.type.label, color = c.accent,
+        modifier = Modifier.padding(top = 10.dp).border(1.dp, c.stroke, RoundedCornerShape(12.dp)).clickable { runCatching { uri.openUri(url) } }
+            .padding(horizontal = 12.dp, vertical = 8.dp).testTag("panel:openUrl"),
+    )
 }
 
 @Composable
@@ -412,7 +444,8 @@ private fun ConfirmView(host: SessionHost, model: OverlayModel.Confirm, onAction
         Text(
             model.confirmLabel, style = Calm.type.body, color = c.background,
             modifier = Modifier.weight(1f).background(if (model.dangerous) c.error else c.accent, RoundedCornerShape(12.dp))
-                .clickable { host.overlay.remove(model.id); if (panel != null) panel("confirm", null) else onAction(model.id, "confirm") }.padding(12.dp).testTag("confirm:ok"),
+                // 面板确认框不先自己关：由 CalmPanelLogic.apply 关确认框，Done 时连同派生它的面板一起关（PR #21 审查 Nit 1）。
+                .clickable { if (panel != null) panel("confirm", null) else { host.overlay.remove(model.id); onAction(model.id, "confirm") } }.padding(12.dp).testTag("confirm:ok"),
         )
     }
 }

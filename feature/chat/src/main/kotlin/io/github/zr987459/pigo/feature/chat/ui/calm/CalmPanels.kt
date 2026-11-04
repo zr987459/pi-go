@@ -30,20 +30,43 @@ object CalmPanelLogic {
      * - Toast：面板保持打开（不丢刚输入的内容），只显示提示；
      * - LocalBlock：显示标题作为提示。
      */
-    fun apply(stack: OverlayStack, fromId: String, r: ActionResult): String? = when (r) {
-        is ActionResult.Overlay -> {
-            val m = r.model
-            val top = stack.top
-            when {
-                m is OverlayModel.Confirm -> stack.push(m)
-                top != null && (top.id == fromId || top.id == m.id) -> stack.replaceTop(m)
-                else -> stack.push(m)
-            }
-            null
+    fun apply(stack: OverlayStack, fromId: String, r: ActionResult): String? {
+        // 确认框的回答（PR #21 审查第 1 轮 Nit 1）：确认框不再自己先关，由这里统一处理——
+        // 先关确认框；结果是 Done 时连派生出确认框的面板一起关（如删除自定义服务商后，它的编辑表单不能再「保存」重建）。
+        var from = fromId
+        val top0 = stack.top
+        if (top0 is OverlayModel.Confirm && top0.id == fromId) {
+            stack.remove(fromId)
+            val parent = stack.top
+            if (r == ActionResult.Done) { parent?.let { stack.remove(it.id) }; return null }
+            from = parent?.id ?: fromId
         }
-        ActionResult.Done -> { stack.remove(fromId); null }
-        is ActionResult.Toast -> r.text
-        is ActionResult.LocalBlock -> r.title
+        return when (r) {
+            is ActionResult.Overlay -> {
+                val top = stack.top
+                val m = keepTyped(top, r.model)
+                when {
+                    m is OverlayModel.Confirm -> stack.push(m)
+                    top != null && (top.id == from || top.id == m.id) -> stack.replaceTop(m)
+                    else -> stack.push(m)
+                }
+                null
+            }
+            ActionResult.Done -> { stack.remove(from); null }
+            is ActionResult.Toast -> r.text
+            is ActionResult.LocalBlock -> r.title
+        }
+    }
+
+    /**
+     * 同一个表单刷新时保留用户已填的值（PR #21 审查第 1 轮 Important 4）：面板方返回的新 Form 通常不带 values，
+     * 直接替换会清掉输入中的授权码等。字段集不变的才保留；新 Form 自带的值优先。
+     */
+    fun keepTyped(top: OverlayModel?, m: OverlayModel): OverlayModel {
+        if (top !is OverlayModel.Form || m !is OverlayModel.Form || top.id != m.id || top.values.isEmpty()) return m
+        val keys = m.fields.map { it.key }.toSet()
+        if (top.fields.map { it.key }.toSet() != keys) return m
+        return m.copy(values = top.values.filterKeys { it in keys } + m.values)
     }
 
     /** 表单值 JSON（与设置页 `formJson` 相同格式）：公开值 + 只在本地内存的密文字段。 */
@@ -57,9 +80,12 @@ object CalmPanelLogic {
     fun isOAuthFinal(model: OverlayModel): Boolean =
         model is OverlayModel.Text && (model.text.startsWith("已登录") || model.text.startsWith("登录失败"))
 
-    /** 没到终点的 OAuth 面板每秒发一次 `refresh` 拉取进度（与设置页一致）。 */
+    /**
+     * 没到终点的 OAuth **文字**面板每秒发一次 `refresh` 拉取进度（与设置页 `SettingsPanelLogic.needsOAuthPolling` 一致）。
+     * 等用户输入的步骤（NeedCode 表单、Select 列表）不轮询，直到用户提交（PR #21 审查第 1 轮 Important 4）。
+     */
     fun needsOAuthPolling(model: OverlayModel?): Boolean =
-        model != null && model.id.startsWith("oauth:") && !isOAuthFinal(model)
+        model is OverlayModel.Text && model.id.startsWith("oauth:") && !isOAuthFinal(model)
 
     /** OAuth 失败时显示「重试」（发 `retry`，重新开始登录）。 */
     fun oauthRetryable(model: OverlayModel?): Boolean =
@@ -68,8 +94,13 @@ object CalmPanelLogic {
     private val URL = Regex("https?://\\S+")
 
     /** OAuth 面板里的授权链接：给一个「打开链接」按钮。 */
-    fun oauthUrl(model: OverlayModel?): String? =
-        (model as? OverlayModel.Text)?.takeIf { it.id.startsWith("oauth:") }?.let { URL.find(it.text)?.value }
+    fun oauthUrl(model: OverlayModel?): String? = when {
+        model == null || !model.id.startsWith("oauth:") -> null
+        model is OverlayModel.Text -> URL.find(model.text)?.value
+        // NeedCode 表单：授权链接在字段说明里（r3/models 最小改动），用户可以随时再打开。
+        model is OverlayModel.Form -> model.fields.firstNotNullOfOrNull { f -> f.help?.let { URL.find(it)?.value } }
+        else -> null
+    }
 
     /** 关闭面板时要发的事件：OAuth 未完成 → 取消登录；自定义服务商 → 丢弃草稿与 Key。 */
     fun dismissEvent(model: OverlayModel): String? = when {

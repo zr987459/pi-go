@@ -86,3 +86,7 @@
 4. Important 4：OAuth 轮询不覆盖输入中的表单；NeedCode 显示授权链接；PKCE UI 形态测试。
 5. Nit 1–4：删除确认关编辑表单；模型行长按›设为默认；运行环境修复/导出 HTML/关于 入口；终端未合入时回落 UI。
 下一步：读审查评论与代码。
+
+### 12:10 CST 进度
+- 已改（推送中）：Important 4（CalmPanelLogic 只轮询 OAuth 文字面板；同 id 表单刷新保留已填值 keepTyped；NeedCode 表单字段说明带授权链接 + 「打开授权链接」按钮；RealModelPanels 记住 OpenUrl 链接——feature/models 最小改动）；Nit 1（确认框由 apply 统一关，Done 连同父面板一起关）；Nit 2（面板行长按 › 键帽菜单，如「设为默认」，不切当前选择）。
+- 下一步：Important 1（attach.image → 系统相册）、Important 3（BackHandler）、Important 2（代理并入 设置›模型）、Nit 3/4，然后补测试。
