@@ -183,7 +183,8 @@ class SessionHostImpl(
             is ActionResult.LocalBlock -> addLocalBlock(sourceId, r.title, r.text)
             // 提示不关面板：失败时已填的值不丢。终端形态提交前已弹栈的表单**只在失败时**按提交值压回（审查第 1 轮 N2；
             // 密钥字段不回填）；保存成功（「已保存…」）不再弹回一个 Key 已清空的表单（PR #23 第 2 轮 Nit 1）。
-            is ActionResult.Toast -> if (key == "submit" && source is OverlayModel.Form && isFailureToast(r.text) &&
+            // 成败按面板方给的结构化标志 [ActionResult.Toast.failed] 判断，不再按文案猜（PR #24 审查 Nit 1）。
+            is ActionResult.Toast -> if (key == "submit" && source is OverlayModel.Form && r.failed &&
                 overlay.items.value.none { it.id == sourceId }) {
                 val secret = source.fields.filter { it.secret }.map { it.key }.toSet()
                 val submitted = OverlayPanels.parseForm(value, OverlayPanels.fieldKeys(source)) - secret
@@ -318,14 +319,6 @@ class SessionHostImpl(
     }
 
     companion object {
-        /**
-         * ModelPanels 的结果没有成功标记，按提示文字区分（RealModelPanels：失败为「…失败：」「请填写…」「✗ …」「未知…」「没有…」「先…」，
-         * 成功为「已保存…」「已切换…」「已登录」等）。
-         */
-        internal fun isFailureToast(text: String): Boolean =
-            text.contains("失败") || text.startsWith("请填写") || text.startsWith("✗") || text.startsWith("未知") ||
-                text.startsWith("没有") || text.startsWith("先") || text.startsWith("无效")
-
         const val EDITOR_OFFER_ID = "overlay:editor-text-offer"
         /** 结果面板来自 ModelPanels 的动作。 */
         val MODEL_PANEL_ACTIONS = setOf("model.select", "model.scoped", "auth.login", "auth.logout", "provider.custom")

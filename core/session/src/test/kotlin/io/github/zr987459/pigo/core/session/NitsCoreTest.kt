@@ -46,14 +46,35 @@ class NitsCoreTest {
         assertEquals("provider.form:x", c.host.overlay.top?.id)
         c.host.overlay.pop() // 终端：提交前先弹栈
         val r = c.run("provider.form:x", "apiKey=sk-1\nnote=备注")
-        assertTrue("保存成功：$r", r is ActionResult.Toast && !SessionHostImpl.isFailureToast(r.text))
+        assertTrue("保存成功：$r", r is ActionResult.Toast && !r.failed)
         assertEquals("保存成功后表单不再弹回（Key 已清空的表单会让人以为没保存）", listOf("auth.login"), c.ids())
         assertEquals(Triple("provider.form:x", "submit", null as String?), c.panels.events.last().let { Triple(it.first, it.second, null) })
     }
 
-    @Test fun failureToastClassification() {
-        for (t in listOf("保存失败：网络", "请填写名称", "✗ 测试失败（未保存）", "未知操作：x", "没有模型可测试", "先选中一个模型")) assertTrue(t, SessionHostImpl.isFailureToast(t))
-        for (t in listOf("已保存", "已保存 my", "✓ 连接成功", "x 已登录", "已切换到 m1")) assertFalse(t, SessionHostImpl.isFailureToast(t))
+    // ---------------------------------------------------------------- PR #24 审查 Nit 1：结构化成败标志，不按文案判断
+
+    @Test fun landModelPanel_successWhoseTextSaysFailure_isNotPushedBack() = runTest {
+        val c = ctx()
+        // 服务商名里带「失败」：旧的文案判断会误判为失败并把表单压回
+        c.panels.formSubmit = ActionResult.Toast("已保存 失败测试")
+        c.run("auth.login"); c.run("auth.login", "provider:x")
+        c.host.overlay.pop() // 终端：提交前先弹栈
+        val r = c.run("provider.form:x", "apiKey=sk-1\nnote=备注")
+        assertTrue("$r", r is ActionResult.Toast && !r.failed)
+        assertEquals(listOf("auth.login"), c.ids())
+    }
+
+    @Test fun landModelPanel_failedFlagWithNeutralText_pushesFormBackWithoutSecret() = runTest {
+        val c = ctx()
+        // 新增的失败文案没有任何「失败」字样：旧判断会漏标并丢掉已填内容；现在按 failed 标志压回
+        c.panels.formSubmit = ActionResult.Toast("服务商暂时不可用", failed = true)
+        c.run("auth.login"); c.run("auth.login", "provider:x")
+        c.host.overlay.pop()
+        c.run("provider.form:x", "apiKey=sk-1\nnote=备注")
+        val back = c.host.overlay.top as OverlayModel.Form
+        assertEquals("provider.form:x", back.id)
+        assertEquals("备注", back.values["note"])
+        assertFalse("密钥字段不回填", back.values.containsKey("apiKey"))
     }
 
     // ---------------------------------------------------------------- PR #23 第 2 轮 Nit 2
