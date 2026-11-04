@@ -99,7 +99,11 @@ class PiActionsImpl(
             "abort" -> when {
                 host.chat.value.retry != null -> ops.abortRetry().toResult()
                 // 经聊天端口停止：撤回的排队消息进共享草稿（含「已撤回」芯片），两种形态一致（审查第 2 轮 I2）。
-                else -> host.chatPort.stop().toResult()
+                // 停止失败时端口已经发过一条 notices（「停止失败：…」），这里不再返回同样的提示（PR #20 R3-N1：只提示一次）。
+                else -> when (val r = host.chatPort.stop()) {
+                    is Outcome.Ok -> r.toResult()
+                    is Outcome.Err -> ActionResult.Done
+                }
             }
             "retry.abort" -> ops.abortRetry().toResult()
             "queue.dequeue" -> ops.dequeueAll().let { r ->
@@ -450,12 +454,12 @@ class PiActionsImpl(
         return when {
             // /tree：选中节点 = 原地切换（必要时先问是否摘要）
             panelId == P.TREE -> if (v.isEmpty()) keep("先选中一条记录") else {
-                val tree = openTree()
+                val tree = openTreeSeq()
                 treeNav(v).let { r ->
                     when {
                         r is ActionResult.Overlay -> OverlayPanels.Result(r)
                         isFailure(r) || r == NAV_BUSY -> OverlayPanels.Result(r)
-                        else -> OverlayPanels.Result(r, closeInstances = listOfNotNull(tree))
+                        else -> OverlayPanels.Result(r, closeOpened = listOfNotNull(tree))
                     }
                 }
             }
@@ -464,10 +468,10 @@ class PiActionsImpl(
                 val summarize = when (v) { P.SUMMARIZE_YES, "confirm" -> true; P.SUMMARIZE_NO -> false; else -> return keep("请选择是否摘要") }
                 if (navInFlight.get()) return OverlayPanels.Result(NAV_BUSY)
                 // 摘要可能要几十秒：先移除这个选择框（不能再点第二次），只关闭开始时打开的那棵树（审查第 1 轮 N1）。
-                val tree = openTree()
+                val tree = openTreeSeq()
                 host.overlay.remove(panelId)
                 val r = treeNav("$entry ${if (summarize) P.SUMMARIZE_YES else P.SUMMARIZE_NO}")
-                if (isFailure(r) || r == NAV_BUSY) OverlayPanels.Result(r) else OverlayPanels.Result(r, closeInstances = listOfNotNull(tree))
+                if (isFailure(r) || r == NAV_BUSY) OverlayPanels.Result(r) else OverlayPanels.Result(r, closeOpened = listOfNotNull(tree))
             }
             panelId.startsWith(P.LABEL) -> {
                 val entry = panelId.removePrefix(P.LABEL)
@@ -608,8 +612,8 @@ class PiActionsImpl(
     /** 原地切换（`tree_nav`）进行中：重复点击不再发第二次（审查第 1 轮 N1）。 */
     private val navInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
 
-    /** 当前打开的分支树实例（按引用关闭用）。 */
-    private fun openTree(): OverlayModel? = host.overlay.items.value.lastOrNull { it.id == OverlayPanels.TREE }
+    /** 当前这一次打开的分支树（id 与打开序号）：切换结束时只关它；期间筛选 / 折叠换了实例也照关，重新打开过则不关。 */
+    private fun openTreeSeq(): Pair<String, Long>? = host.panelOpenSeq(OverlayPanels.TREE)?.let { OverlayPanels.TREE to it }
 
     private fun closeOnOk(r: Outcome<*>, panelId: String, okText: String) = when (r) {
         is Outcome.Ok -> OverlayPanels.Result(ActionResult.Toast(okText), listOf(panelId))

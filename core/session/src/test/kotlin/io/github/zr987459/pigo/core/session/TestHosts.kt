@@ -74,7 +74,14 @@ class TestChatPort(private val engine: io.github.zr987459.pigo.contract.EngineCl
     override fun editOutgoing(id: String) {}
     override fun discardOutgoing(id: String) {}
 
+    /** 非空时 stop() 直接返回它（模拟停止失败）。与真实端口一样：失败时自己发一条 notices。 */
+    var stopResult: Outcome<QueueSnapshot>? = null
+
     override suspend fun stop(): Outcome<QueueSnapshot> {
+        stopResult?.let { forced ->
+            if (forced is Outcome.Err) notices.tryEmit("停止失败：" + forced.message)
+            return forced
+        }
         val r = engine.stop()
         if (r is Outcome.Ok) draft.value = QueueRecall.merge(draft.value, r.value.steering + r.value.followUp)
         return r

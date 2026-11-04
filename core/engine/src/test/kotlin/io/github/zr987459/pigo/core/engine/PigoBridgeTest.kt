@@ -110,4 +110,52 @@ class PigoBridgeTest {
         assertEquals(listOf("pi", "--mode", "rpc", "-a"), c.copy(approveProject = true).spec(null, null, emptyMap()).argv)
         assertEquals(listOf("pi", "--mode", "rpc"), c.copy(bridgeExtension = null).spec(null, null, emptyMap(), withBridge = true).argv)
     }
+
+    // ---------------------------------------------------------------- r3/nits-core：请求序号与路径规范化
+
+    @Test
+    fun commandsCarryRequestId() {
+        assertEquals("/pigo:tree-nav --req=r1 e1 --summarize", PigoBridge.treeNavCommand("e1", true, "r1"))
+        assertEquals("/pigo:label --req=r2 e1 a b", PigoBridge.labelCommand("e1", "a\nb", "r2"))
+        assertEquals("/pigo:label --req=r2 e1", PigoBridge.labelCommand("e1", null, "r2"))
+        assertEquals("/pigo:reload --req=r3", PigoBridge.reloadCommand("r3"))
+        assertEquals("/pigo:switch --req=r4 /a b/c.jsonl", PigoBridge.switchCommand("/a b/c.jsonl", "r4"))
+        val reply = PigoBridge.parse("""pigo-bridge:{"cmd":"tree-nav","ok":true,"req":"r1"}""") as PigoBridge.Message.Reply
+        assertEquals("r1", reply.req)
+        assertEquals(PigoBridge.Message.Ready(1, "resume", "/s.jsonl", "r4"), PigoBridge.parse("""pigo-bridge:{"event":"ready","version":1,"reason":"resume","sessionFile":"/s.jsonl","req":"r4"}"""))
+    }
+
+    @Test
+    fun waitersClaimOnlyTheirOwnRequestIdAndUnclaimedIsDropped() = kotlinx.coroutines.runBlocking {
+        val dropped = mutableListOf<PigoBridge.Message>()
+        val ch = BridgeChannel { dropped += it }
+        val old = ch.expectReply("tree-nav", "r1")
+        val cur = ch.expectReply("tree-nav", "r2")
+        assertTrue(ch.onNotify("""pigo-bridge:{"cmd":"tree-nav","ok":true,"req":"r1","leafId":"a"}"""))
+        assertTrue("r1 的回复只给 r1", old.isDone)
+        assertFalse("r2 不被 r1 的回复认领", cur.isDone)
+        ch.onNotify("""pigo-bridge:{"cmd":"tree-nav","ok":true,"req":"r2","leafId":"b"}""")
+        assertEquals("b", ((cur.await(100) as Outcome.Ok).value as PigoBridge.Message.Reply).str("leafId"))
+        assertTrue(dropped.isEmpty())
+        ch.onNotify("""pigo-bridge:{"cmd":"tree-nav","ok":true,"req":"r9"}""")
+        assertEquals("没人认领 → 丢弃并回调", 1, dropped.size)
+        // ready：带序号只认同一序号；不带序号按 fallback
+        val sw = ch.expectReadyOrReply("resume", "switch", "r5") { it.sessionFile == "/b.jsonl" }
+        ch.onNotify("""pigo-bridge:{"event":"ready","version":1,"reason":"resume","req":"r4","sessionFile":"/a.jsonl"}""")
+        assertFalse(sw.isDone)
+        ch.onNotify("""pigo-bridge:{"event":"ready","version":1,"reason":"resume","sessionFile":"/a.jsonl"}""")
+        assertFalse("不带序号、会话不是目标：不认", sw.isDone)
+        ch.onNotify("""pigo-bridge:{"event":"ready","version":1,"reason":"resume","sessionFile":"/b.jsonl"}""")
+        assertTrue(sw.isDone)
+        assertEquals("startup 这类不带序号的 ready 不算丢弃", 2, dropped.size)
+    }
+
+    @Test
+    fun normalizePath() {
+        assertEquals("/root/.pi/a.jsonl", PigoBridge.normalizePath("~/.pi/a.jsonl"))
+        assertEquals("/root/.pi/a.jsonl", PigoBridge.normalizePath("/root//.pi/./x/../a.jsonl/"))
+        assertEquals("/proj/s/a.jsonl", PigoBridge.normalizePath("s/a.jsonl", cwd = "/proj"))
+        assertEquals("/root", PigoBridge.normalizePath("~"))
+        assertEquals(null, PigoBridge.normalizePath("  "))
+    }
 }

@@ -179,6 +179,23 @@ class ChatControllerReview2Test {
     }
 
     @Test
+    fun legacySubmitImageMessageKeepsImagesWhenEditedBackThroughHost() = runTest {
+        // PR #20 R3-N2：带图消息经旧入口 ChatController.submit 发出、失败后经 SessionHost.editOutgoing 退回 → 图片不丢。
+        val r = rig()
+        r.extras.failNext = Outcome.Err(ErrCode.NETWORK, "断网")
+        val img = ImageInput("image/png", "b64:legacy")
+        r.controller.addImages(listOf(img))
+        r.host.draft.value = DraftState(text = "旧入口看图")
+        r.controller.submit(); settle()
+        val failed = r.host.outgoing.value.single()
+        assertEquals(OutgoingStatus.FAILED, failed.status)
+        assertTrue("发出后附件已清", r.controller.state.value.attachments.isEmpty())
+        r.host.editOutgoing(failed.id); settle()
+        assertEquals("旧入口看图", r.host.draft.value.text)
+        assertEquals("图片回到它原来所在的附件", listOf(img), r.controller.state.value.attachments)
+    }
+
+    @Test
     fun failedImageSendKeepsImagesAndEditPutsUrisBackIntoDraft() = runTest {
         val r = rig()
         r.extras.failNext = Outcome.Err(ErrCode.NETWORK, "断网")

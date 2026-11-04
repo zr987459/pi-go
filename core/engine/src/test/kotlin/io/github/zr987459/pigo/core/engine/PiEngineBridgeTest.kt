@@ -57,7 +57,20 @@ class PiEngineBridgeTest {
 
     private val history = """{"messages":[{"role":"user","content":"第一句"},{"role":"assistant","provider":"p","model":"m1","content":[{"type":"text","text":"答一"}],"stopReason":"stop"}]}"""
 
-    private fun ScriptedPi.notify(payload: String) =
+    /** 最近一条桥接命令的请求序号（`--req=`）。像真扩展一样：回复里没写 req 时自动带上它。 */
+    @Volatile private var curReq: String? = null
+    private val reqArg = Regex("--req=([A-Za-z0-9_-]+) ?")
+
+    private fun withReq(payload: String): String {
+        val rq = curReq ?: return payload
+        if (payload.contains("\"req\"")) return payload
+        val needs = payload.contains("\"cmd\"") || payload.contains("\"reason\":\"reload\"") || payload.contains("\"reason\":\"resume\"")
+        return if (needs) "{\"req\":\"$rq\"," + payload.removePrefix("{") else payload
+    }
+
+    private fun ScriptedPi.notify(payload: String) = rawNotify(withReq(payload))
+
+    private fun ScriptedPi.rawNotify(payload: String) =
         emit("""{"type":"extension_ui_request","id":"n${System.nanoTime()}","method":"notify","message":${JsonPrimitive("pigo-bridge:$payload")},"notifyType":"info"}""")
 
     /**
@@ -75,7 +88,7 @@ class PiEngineBridgeTest {
         return { cmd ->
             when (cmd.str("type")) {
                 "get_state" -> {
-                    if (ready && !announced) { announced = true; notify("""{"event":"ready","version":1,"reason":"startup"}""") }
+                    if (ready && !announced) { announced = true; rawNotify("""{"event":"ready","version":1,"reason":"startup"}""") }
                     ok(cmd, state())
                 }
                 "get_tree" -> ok(cmd, """{"tree":[],"leafId":"pi-leaf"}""")
@@ -85,7 +98,10 @@ class PiEngineBridgeTest {
                 "get_commands" -> ok(cmd, """{"commands":[{"name":"pigo:label","source":"extension"},{"name":"tpl","source":"prompt"},{"name":"pigo:reload","source":"extension"}]}""")
                 "fork" -> ok(cmd, """{"text":"第一句","cancelled":false}""")
                 "prompt" -> {
-                    val m = cmd.str("message").orEmpty()
+                    val raw = cmd.str("message").orEmpty()
+                    val found = if (raw.startsWith("/pigo:")) reqArg.find(raw) else null
+                    if (found != null) curReq = found.groupValues[1]
+                    val m = if (found != null) raw.removeRange(found.range).trimEnd() else raw
                     if (promptAfterMs != null && m.startsWith("/pigo:")) {
                         onBridge(m)
                         later(promptAfterMs) { ok(cmd, """{"disposition":"handled"}""") }
@@ -183,7 +199,8 @@ class PiEngineBridgeTest {
         val itemsBefore = e.chat.value.items.size
         assertEquals(Outcome.Ok(Unit), e.setEntryLabel("e2", "书签\n一"))
         val sent = rt.last.received.last { it.str("type") == "prompt" }
-        assertEquals("换行压成空格", "/pigo:label e2 书签 一", sent.str("message"))
+        assertEquals("换行压成空格", "/pigo:label e2 书签 一", sent.str("message")!!.replace(reqArg, ""))
+        assertTrue("带请求序号", sent.str("message")!!.startsWith("/pigo:label --req="))
         assertEquals("不进聊天时间线", itemsBefore, e.chat.value.items.size)
         delay(100)
         assertTrue("桥接 notify 不交给界面", seen.none { it.message?.startsWith("pigo-bridge:") == true })
@@ -393,6 +410,92 @@ class PiEngineBridgeTest {
         assertEquals(Outcome.Ok(Unit), a.await())
         val rb = b.await()
         assertTrue("e2 的失败不被 e1 的成功吞掉：$rb", rb is Outcome.Err && rb.message.contains("e2"))
+        e.close()
+    }
+
+    // ---------------------------------------------------------------- r3/nits-core（PR #16 第 2 轮 Nit）
+
+    @Test
+    fun lateTreeNavReplyIsNotClaimedByNextRequest_andLateEditorTextIsOffered() = runBlocking {
+        // Nit 1：第一次切换超时后，它的迟到回复在第二次切换进行中到达 → 只交给第一次的迟到处理，第二次拿到自己的 e2。
+        // Nit 2：迟到的成功回复带的原文按 set_editor_text 交给聊天层（草稿为空才写入，否则先询问）。
+        bridgeFile.parentFile.mkdirs(); bridgeFile.writeText("// x")
+        val rt = ScriptedRuntime {
+            script { m ->
+                val rq = curReq
+                if (m.contains(" e1")) later(1_200) { rawNotify("""{"cmd":"tree-nav","req":"$rq","ok":true,"cancelled":false,"leafId":"e1","sessionFile":"/s1.jsonl","editorText":"原文一"}""") }
+                else later(600) { rawNotify("""{"cmd":"tree-nav","req":"$rq","ok":true,"cancelled":false,"leafId":"e2","sessionFile":"/s1.jsonl","editorText":"原文二"}""") }
+            }
+        }
+        val e = PiEngine(rt, StaticEnv(), log, scope, config(slowMs = 1_000, lateMs = 5_000))
+        val seen = CopyOnWriteArrayList<ExtUiRequest>()
+        scope.launch { e.uiRequests.collect { seen += it } }
+        assertTrue(e.start() is Outcome.Ok)
+        val first = (e.treeNavigate("e1") as Outcome.Ok).value
+        assertTrue("第一次超时 → unconfirmed", first.unconfirmed)
+        val second = (e.treeNavigate("e2") as Outcome.Ok).value
+        assertFalse(second.unconfirmed)
+        assertEquals("第二次拿到自己的回复，不是第一次迟到的 e1", "e2", second.leafId)
+        assertEquals("原文二", second.editorText)
+        waitFor { seen.any { it.method == "set_editor_text" && it.prefill == "原文一" } }
+        assertTrue("迟到回复被认领（交给第一次），不算丢弃", log.lines.none { it.message.contains("无人认领") })
+        e.close()
+    }
+
+    @Test
+    fun unclaimedReplyIsDroppedAndLogged() = runBlocking {
+        bridgeFile.parentFile.mkdirs(); bridgeFile.writeText("// x")
+        val rt = ScriptedRuntime {
+            script { m ->
+                // 先来一条别的请求序号的同类回复（例如更早一次超时的迟到回复），再来自己的。
+                rawNotify("""{"cmd":"label","req":"r999","ok":true,"entryId":"e1","label":"旧"}""")
+                notify("""{"cmd":"label","ok":true,"entryId":"e1","label":"新"}""")
+            }
+        }
+        val e = PiEngine(rt, StaticEnv(), log, scope, config())
+        assertTrue(e.start() is Outcome.Ok)
+        assertEquals(Outcome.Ok(Unit), e.setEntryLabel("e1", "新"))
+        waitFor { log.lines.any { it.message.contains("无人认领") && it.message.contains("req=r999") } }
+        e.close()
+    }
+
+    @Test
+    fun switchReconcileComparesNormalizedPaths() = runBlocking {
+        // Nit 4：调用方的写法（~、多余的 /、./）与 get_state 不同，但其实已在目标会话 → 对账成功。
+        bridgeFile.parentFile.mkdirs(); bridgeFile.writeText("// x")
+        val target = "/root/.pi/agent/sessions/--root-pi-cwd--/big.jsonl"
+        val switched = java.util.concurrent.atomic.AtomicBoolean(false)
+        val rt = ScriptedRuntime {
+            script(promptAfterMs = 2_000, state = {
+                if (switched.get()) ScriptedPi.STATE.replace("/root/.pi/agent/sessions/--root-pi-cwd--/s1.jsonl", target) else ScriptedPi.STATE
+            }) { switched.set(true) }
+        }
+        val e = PiEngine(rt, StaticEnv(), log, scope, config(slowMs = 300))
+        assertTrue(e.start() is Outcome.Ok)
+        assertEquals(Outcome.Ok(Unit), e.switchSessionViaBridge("~/.pi/agent//sessions/./--root-pi-cwd--/big.jsonl"))
+        assertEquals(target, e.currentSessionFile)
+        e.close()
+    }
+
+    @Test
+    fun lateSwitchReadyDoesNotCompleteNextSwitch() = runBlocking {
+        // Nit 1（switch）：切到 A 超时 → 改切 B；A 迟到的 ready 在 B 进行中到达，不能让 B 提前「成功」。
+        bridgeFile.parentFile.mkdirs(); bridgeFile.writeText("// x")
+        val a = "/root/.pi/agent/sessions/a.jsonl"
+        val b = "/root/.pi/agent/sessions/b.jsonl"
+        val rt = ScriptedRuntime {
+            script { m ->
+                val rq = curReq
+                if (m.endsWith(a)) later(1_100) { rawNotify("""{"event":"ready","version":1,"reason":"resume","req":"$rq","sessionFile":"$a"}""") }
+                else later(800) { rawNotify("""{"event":"ready","version":1,"reason":"resume","req":"$rq","sessionFile":"$b"}""") }
+            }
+        }
+        val e = PiEngine(rt, StaticEnv(), log, scope, config(slowMs = 1_000))
+        assertTrue(e.start() is Outcome.Ok)
+        assertTrue("A 超时（get_state 仍不是 A）", e.switchSessionViaBridge(a) is Outcome.Err)
+        val t0 = System.currentTimeMillis()
+        assertEquals(Outcome.Ok(Unit), e.switchSessionViaBridge(b))
+        assertTrue("等到 B 自己的 ready（约 800 ms），没有被 A 迟到的 ready（约 100 ms 后）提前完成", System.currentTimeMillis() - t0 >= 600)
         e.close()
     }
 

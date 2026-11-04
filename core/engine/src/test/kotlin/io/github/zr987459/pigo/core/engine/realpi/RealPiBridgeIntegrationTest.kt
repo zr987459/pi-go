@@ -62,10 +62,21 @@ class RealPiBridgeIntegrationTest {
 
     private suspend fun until(timeoutMs: Long = 30_000, cond: () -> Boolean) = withTimeout(timeoutMs) { while (!cond()) delay(20) }
 
+    /** 会话里已写盘的助手消息数（get_entries）；取不到为 -1。 */
+    private suspend fun assistantEntries(): Int =
+        (engine.entries() as? Outcome.Ok)?.value?.entries?.count { it.role == "assistant" } ?: -1
+
+    /**
+     * 跑完一轮。不再等「running 变成 true」：本机假模型对 `#text` 几乎立即答完，整轮可能落在两次 20 ms 轮询之间，
+     * 从来观察不到 running=true（CI 偶发 TimeoutCancellationException 的根因）。改为等单调信号：
+     * 助手消息数比发送前多、且不在生成中。
+     */
     private suspend fun turn(text: String) {
+        val before = assistantEntries()
         assertTrue(engine.send(text) is Outcome.Ok)
-        until { engine.chat.value.running }
-        until(60_000) { !engine.chat.value.running }
+        withTimeout(60_000) {
+            while (engine.chat.value.running || assistantEntries() <= before) delay(50)
+        }
     }
 
     private suspend fun startReady() {
@@ -100,6 +111,20 @@ class RealPiBridgeIntegrationTest {
         // 审查 Nit 3：选中用户消息 → 原文随回复带回，r3/session 放回共享草稿（pi /tree 的行为）。
         assertEquals("第一句 #text", nav.editorText)
         assertFalse(nav.unconfirmed)
+    }
+
+    @Test
+    fun switchViaBridgeReturnsToEarlierSession() = runBlocking {
+        startReady()
+        turn("会话一 #text")
+        val first = engine.currentSessionFile
+        assertNotNull(first)
+        assertTrue(engine.newSession(null) is Outcome.Ok)
+        turn("会话二 #text")
+        assertNotEquals(first, engine.currentSessionFile)
+        // 请求序号经 globalThis 随新实例的 ready（reason=resume）带回；路径换一种写法也能对上（规范化比较）。
+        assertEquals(Outcome.Ok(Unit), engine.switchSessionViaBridge(first!!.replace("/sessions/", "//sessions/./")))
+        assertEquals(first, engine.currentSessionFile)
     }
 
     @Test

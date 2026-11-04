@@ -78,10 +78,18 @@ class ChatControllerPort(
 
     override fun retryOutgoing(id: String) = controller.retry(id)
 
-    /** 失败的消息退回共享草稿：文字按撤回规则（不覆盖草稿），图片 URI 放回草稿。 */
+    /**
+     * 失败的消息退回共享草稿：文字按撤回规则（不覆盖草稿），经本端口发出的图片 URI 放回草稿。
+     * 经旧入口 [ChatController.submit] 发出的带图消息（端口不知道它的图片 URI）：图片放回控制器的附件，也就是它原来所在的地方，
+     * 不再丢失（PR #20 R3-N2）。
+     */
     override fun editOutgoing(id: String) {
-        controller.editFailed(id, restoreAttachments = false) ?: return
-        sentImages.remove(id)?.let { imgs -> draft.update { it.copy(images = it.images + imgs.filterNot { i -> i in it.images }) } }
+        val viaPort = sentImages.remove(id)
+        if (controller.editFailed(id, restoreAttachments = viaPort == null) == null) {
+            viaPort?.let { sentImages[id] = it }
+            return
+        }
+        viaPort?.let { imgs -> draft.update { it.copy(images = it.images + imgs.filterNot { i -> i in it.images }) } }
     }
 
     override fun discardOutgoing(id: String) {
