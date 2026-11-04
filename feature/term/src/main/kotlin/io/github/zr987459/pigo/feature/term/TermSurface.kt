@@ -78,7 +78,10 @@ import io.github.zr987459.pigo.feature.term.ui.TermOverlay
 import io.github.zr987459.pigo.feature.term.ui.monoStyle
 import io.github.zr987459.pigo.feature.term.ui.rememberPiTokens
 import io.github.zr987459.pigo.feature.term.ui.spansToAnnotated
+import io.github.zr987459.pigo.feature.term.ui.overlayEnter
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -103,14 +106,41 @@ fun TermSurface(
     gitBranch: String? = null,
     piVersion: String = "1.5.0",
     userKeybindingsJson: String? = null,
+    env: TermEnv = TermEnv(),
 ) {
     val settings by host.settings.values.collectAsState()
     val themeName = (settings["theme"] as? JsonPrimitive)?.contentOrNull
     val tokens = rememberPiTokens(themeName)
+    val enabledModels = remember(settings) {
+        (settings["enabledModels"] as? kotlinx.serialization.json.JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty()
+    }
     CompositionLocalProvider(LocalPiTokens provides tokens) {
-        TermScreen(host, modifier, cwd, home, gitBranch, piVersion, userKeybindingsJson, settings.mapValues { (it.value as? JsonPrimitive)?.contentOrNull })
+        TermScreen(host, modifier, cwd, home, gitBranch, piVersion, userKeybindingsJson, settings.mapValues { (it.value as? JsonPrimitive)?.contentOrNull }, env, enabledModels)
     }
 }
+
+/**
+ * 装配层（r3/app）注入的、[SessionHost] 契约里没有的终端形态数据（审查第 1 轮 Important 2、5，Nit 4）。全部有缺省值，
+ * 不注入时功能退化但不出错。
+ *
+ * @param fileSearch `@` 文件模糊搜索：给查询词（`@` 之后的文字）返回候选，按 pi 的打分排好序。装配层用 r3/core 的
+ *   `WorkspaceSearch.searchFiles(cwd, query)` 映射成 [FileMatch]；null = 只插入 `@`。
+ * @param bashRunning `!` / `!!` 命令正在运行（引擎侧 `bash` 命令在途）；Esc 据此选 `bash.abort`。
+ *   终端形态自己发出的 `!` 命令在 `runAction("send")` 返回前也视为运行中，未注入时也能停。
+ * @param contextFiles 已加载的上下文文件（AGENTS.md / CLAUDE.md / SYSTEM.md 等，容器内路径），页眉 `[Context]` 段。
+ * @param availableProviderCount 已配置的服务商数（页脚 `(provider)` 前缀只在多于 1 个时显示，同 pi）。
+ * @param latestCacheHitRate 最后一条助手消息的缓存命中率（%），页脚 `CH%`。
+ */
+/** `@` 候选（与 r3/core `contract.workspace.FileMatch` 同义的最小子集，终端形态不依赖其契约版本）。 */
+data class FileMatch(val path: String, val isDir: Boolean, val completion: String)
+
+data class TermEnv(
+    val fileSearch: (suspend (String) -> List<FileMatch>)? = null,
+    val bashRunning: StateFlow<Boolean> = MutableStateFlow(false),
+    val contextFiles: List<String> = emptyList(),
+    val availableProviderCount: Int = 1,
+    val latestCacheHitRate: Double? = null,
+)
 
 private val SPINNER = listOf("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 
@@ -124,6 +154,8 @@ private fun TermScreen(
     piVersion: String,
     userKeybindingsJson: String?,
     settings: Map<String, String?>,
+    env: TermEnv,
+    enabledModels: List<String>,
 ) {
     val tokens = LocalPiTokens.current
     val scope = rememberCoroutineScope()
@@ -136,6 +168,9 @@ private fun TermScreen(
     val surfaceExt by host.extras.extensionSurface.collectAsState()
     val usage by host.extras.usageState.collectAsState()
     val catalog = host.actions.all
+    val bashRunningExt by env.bashRunning.collectAsState()
+    var localBashJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    val bashActive = bashRunningExt || localBashJob?.isActive == true
 
     // ---- 纯视图状态 ----
     var fontSp by rememberSaveable { mutableFloatStateOf(13f) }
@@ -157,7 +192,7 @@ private fun TermScreen(
 
     LaunchedEffect(Unit) { (host.extras.commands() as? Outcome.Ok)?.let { commands = it.value } }
 
-    fun run(id: String, args: String? = null) = scope.launch {
+    fun run(id: String, args: String? = null): kotlinx.coroutines.Job = scope.launch {
         when (val r = host.runAction(id, args)) {
             is io.github.zr987459.pigo.contract.actions.ActionResult.Toast -> toast = r.text
             else -> Unit
@@ -175,6 +210,24 @@ private fun TermScreen(
         host.draft.value = host.draft.value.copy(text = text, selectionStart = cursor, selectionEnd = cursor, bashMode = mode)
     }
 
+    // ---- @ 文件模糊搜索（pi-tui CombinedAutocompleteProvider 的 @ 前缀补全，§3.3；候选源由装配层注入） ----
+    val atQuery = remember(draft.text, draft.safeSelectionStart) { TermInput.atQuery(draft.text, draft.safeSelectionStart) }
+    var atMatches by remember { mutableStateOf(emptyList<FileMatch>()) }
+    LaunchedEffect(atQuery, env.fileSearch) {
+        val q = atQuery
+        val fs = env.fileSearch
+        if (q == null || fs == null) { atMatches = emptyList(); return@LaunchedEffect }
+        delay(100)
+        atMatches = runCatching { fs(q.query) }.getOrDefault(emptyList())
+    }
+    fun pickAt(m: FileMatch) {
+        val d = host.draft.value
+        val q = TermInput.atQuery(d.text, d.safeSelectionStart) ?: return
+        // 文件补全后加空格（pi 同样）；目录保留结尾 `/` 继续往下找
+        val ins = m.completion + if (m.isDir) "" else " "
+        setDraftText(d.text.substring(0, q.start) + ins + d.text.substring(q.end), q.start + ins.length)
+    }
+
     fun submit(followUp: Boolean = false) {
         val text = host.draft.value.text
         if (text.trim() == "/ui" || text.trim() == "/term") {
@@ -189,7 +242,9 @@ private fun TermScreen(
             return
         }
         historyIndex = -1
-        run(if (followUp) "send.followUp" else "send")
+        val bash = host.draft.value.bashMode != BashMode.NONE
+        val job = run(if (followUp) "send.followUp" else "send")
+        if (bash) { localBashJob = job; job.invokeOnCompletion { if (localBashJob === job) localBashJob = null } }
     }
 
     fun onEsc() {
@@ -203,7 +258,7 @@ private fun TermScreen(
                 }
                 host.overlay.pop()
             }
-            chat.running || chat.retry != null -> TermInput.actionForKey("Esc", catalog, chat)?.let { run(it) }
+            chat.running || chat.retry != null || bashActive -> TermInput.actionForKey("Esc", catalog, chat, bashActive)?.let { run(it) }
             double -> run("session.tree") // pi：空闲时双击 Esc 打开 /tree（doubleEscapeAction 默认 tree）
             else -> Unit
         }
@@ -212,6 +267,7 @@ private fun TermScreen(
     fun historyStep(up: Boolean) {
         if (host.draft.value.text.isNotEmpty() && historyIndex == -1) return
         if (history.isEmpty()) return
+        if (!up && historyIndex == -1) return
         historyIndex = if (up) (if (historyIndex == -1) history.size - 1 else (historyIndex - 1).coerceAtLeast(0))
         else (historyIndex + 1).let { if (it >= history.size) -1 else it }
         setDraftText(if (historyIndex == -1) "" else history[historyIndex])
@@ -220,8 +276,12 @@ private fun TermScreen(
     fun onStripKey(key: String) {
         when (key) {
             TermInput.KEY_FORM -> toggleForm()
-            TermInput.KEY_TAB -> TermInput.slashQuery(host.draft.value.text)?.let { q ->
-                TermInput.slashCandidates(q, catalog, commands).firstOrNull()?.let { setDraftText("/${it.name} ") }
+            TermInput.KEY_TAB -> {
+                val atPick = atMatches.firstOrNull()
+                if (atPick != null) pickAt(atPick)
+                else TermInput.slashQuery(host.draft.value.text)?.let { q ->
+                    TermInput.slashCandidates(q, catalog, commands).firstOrNull()?.let { setDraftText("/${it.name} ") }
+                }
             }
             TermInput.KEY_SLASH, TermInput.KEY_AT, TermInput.KEY_BANG -> {
                 val d = host.draft.value
@@ -232,38 +292,45 @@ private fun TermScreen(
             "⏎" -> submit()
             "⇣" -> submit(followUp = true)
             "↑↓" -> historyStep(up = true)
+            "↑↓:down" -> historyStep(up = false)
+            "⇞⇟" -> run("transcript.jump", "prev")
+            "⇞⇟:next" -> run("transcript.jump", "next")
             "⌃O" -> { toolsExpanded = !toolsExpanded; run("tools.expandAll") }
             else -> TermInput.actionForKey(key, catalog, chat)?.let { run(it) }
         }
     }
 
-    // ---- 阅读位置：进入时恢复，滚动时写回 host.scrollAnchor（§5.3） ----
+    // ---- 阅读位置：进入时恢复，用户滚动时写回 host.scrollAnchor（§5.3） ----
+    // followBottom 只由用户手势改写（手势结束时是否在底部）；程序触发的滚动（贴底跟随、恢复）不改它（审查第 1 轮 Important 3）。
     val items = chat.items
     val listState = rememberLazyListState()
     val headerCount = 1
+    var follow by remember { mutableStateOf(host.scrollAnchor.value?.followBottom ?: true) }
+    suspend fun scrollToBottom() {
+        val last = (items.size + localBlocks.size + headerCount).coerceAtLeast(1) - 1
+        // 偏移给极大值：LazyList 会夹到最大可滚动位置，长回复也停在末尾，而不是停在这条回复的开头。
+        listState.scrollToItem(last, Int.MAX_VALUE)
+    }
     LaunchedEffect(Unit) {
         val anchor = host.scrollAnchor.value
         val idx = anchor?.let { a -> items.indexOfFirst { it.key == a.itemKey } }?.takeIf { it >= 0 }
-        if (anchor == null || anchor.followBottom || idx == null) listState.scrollToItem((items.size + localBlocks.size + headerCount).coerceAtLeast(1) - 1)
+        if (anchor == null || anchor.followBottom || idx == null) scrollToBottom()
         else listState.scrollToItem(idx + headerCount, anchor.offsetPx)
     }
     LaunchedEffect(listState) {
-        snapshotFlow { Triple(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, listState.canScrollForward) }.collect { (i, off, more) ->
-            val key = host.chat.value.items.getOrNull(i - headerCount)?.key ?: return@collect
-            host.scrollAnchor.value = ScrollAnchor(key, off, followBottom = !more)
+        snapshotFlow { listState.isScrollInProgress }.collect { scrolling ->
+            if (!scrolling) follow = !listState.canScrollForward
         }
     }
-    // 贴底跟随：新内容到来且原来在底部时滚到底。
-    LaunchedEffect(items.size, items.lastOrNull()) {
-        val anchor = host.scrollAnchor.value
-        if (anchor == null || anchor.followBottom) listState.scrollToItem((items.size + localBlocks.size + headerCount).coerceAtLeast(1) - 1)
+    LaunchedEffect(listState) {
+        snapshotFlow { Triple(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, follow) }.collect { (i, off, f) ->
+            val key = host.chat.value.items.getOrNull(i - headerCount)?.key ?: host.chat.value.items.firstOrNull()?.key ?: return@collect
+            host.scrollAnchor.value = ScrollAnchor(key, if (i < headerCount) 0 else off, followBottom = f)
+        }
     }
-
-    // ---- 计时（loader 上的秒数，与 pi 一致） ----
-    var tick by remember { mutableStateOf(0) }
-    var runStart by remember { mutableLongStateOf(0L) }
-    LaunchedEffect(chat.running) {
-        if (chat.running) { runStart = System.currentTimeMillis(); while (true) { delay(80); tick++ } }
+    // 贴底跟随：新内容（含同一条回复变长）到来且原来贴底时滚到底。
+    LaunchedEffect(items.size, items.lastOrNull(), localBlocks.size) {
+        if (follow && !listState.isScrollInProgress) scrollToBottom()
     }
 
     val focus = remember { FocusRequester() }
@@ -278,14 +345,21 @@ private fun TermScreen(
                 val chord = KeyChords.chordOf(ev) ?: return@onPreviewKeyEvent false
                 if (KeyBindings.normalize(chord) == KeyBindings.SWITCH_CHORD) { toggleForm(); return@onPreviewKeyEvent true }
                 val ids = bindings.idsFor(chord)
+                val top = host.overlay.top
                 when {
                     "app.interrupt" in ids -> { onEsc(); true }
-                    "tui.input.submit" in ids && host.overlay.top == null -> { submit(); true }
+                    // overlay 打开时 Enter 提交 / 确认（Nit 7）
+                    "tui.input.submit" in ids && top != null -> overlayEnter(host, top, scope) { id, a -> run(id, a) }
+                    "tui.input.submit" in ids && atMatches.isNotEmpty() -> { pickAt(atMatches.first()); true }
+                    "tui.input.submit" in ids -> { submit(); true }
+                    // 编辑器单行时 ↑ / ↓ 翻历史（Nit 2，pi 的 tui.editor.cursorUp 在首行时翻历史）
+                    (chord == "up" || chord == "down") && top == null && !host.draft.value.text.contains('\n') &&
+                        (host.draft.value.text.isEmpty() || historyIndex != -1) -> { historyStep(up = chord == "up"); true }
                     "app.message.followUp" in ids -> { submit(followUp = true); true }
                     "app.tools.expand" in ids && host.overlay.top == null -> { toolsExpanded = !toolsExpanded; run("tools.expandAll"); true }
                     else -> {
-                        val id = ids.firstNotNullOfOrNull { KeyBindings.ACTION_FOR[it] }
-                        if (id != null && host.overlay.top == null) { run(id); true } else false
+                        val hit = ids.firstNotNullOfOrNull { b -> KeyBindings.ACTION_FOR[b]?.let { it to KeyBindings.ACTION_ARGS[b] } }
+                        if (hit != null && top == null) { run(hit.first, hit.second); true } else false
                     }
                 }
             },
@@ -319,7 +393,9 @@ private fun TermScreen(
                             }
                         },
                 ) {
-                    item(key = "term:header") { Header(piVersion, cols, fontSp, tokens, bindings) { run("about") } }
+                    item(key = "term:header") {
+                        Header(piVersion, cols, fontSp, tokens, bindings, TermInput.startupResources(env.contextFiles, commands, enabledModels, home), quiet = settings["quietStartup"] == "true") { run("about") }
+                    }
                     items(items, key = { it.key }) { item ->
                         val lines = remember(item, opts) { TermFormatter.format(item, opts) }
                         Column(Modifier.testTag("term:item:${item.key}")) {
@@ -348,7 +424,7 @@ private fun TermScreen(
 
             // ---- 编辑器上方的固定区：状态行、队列、widget、overlay、补全 ----
             Column(Modifier.align(androidx.compose.ui.Alignment.BottomStart).fillMaxWidth()) {
-                StatusLine(chat, tick, runStart, cols, fontSp, tokens)
+                StatusLine(chat, cols, fontSp, tokens)
                 if (!chat.queue.isEmpty) {
                     Column(Modifier.testTag("term:queue")) {
                         (chat.queue.steering.map { "Steering: $it" } + chat.queue.followUp.map { "Follow-up: $it" }).forEach {
@@ -363,6 +439,7 @@ private fun TermScreen(
                 overlays.lastOrNull()?.let { top ->
                     TermOverlay(host, top, cols, fontSp, tokens, catalog, onRun = { id, a -> run(id, a) })
                 }
+                if (atMatches.isNotEmpty() && overlays.isEmpty()) AtCompletion(atMatches.take(maxVisible.coerceAtLeast(5)), cols, fontSp, tokens, ::pickAt)
                 TermInput.slashQuery(draft.text)?.let { q ->
                     val cands = TermInput.slashCandidates(q, catalog, commands).take(maxVisible)
                     if (cands.isNotEmpty() && overlays.isEmpty()) Completion(cands, cols, fontSp, tokens, catalog) { c ->
@@ -398,11 +475,13 @@ private fun TermScreen(
                 cwd = cwd, home = home, gitBranch = gitBranch, sessionName = chat.sessionName,
                 input = tokensUsed?.input ?: 0, output = tokensUsed?.output ?: 0, cacheRead = tokensUsed?.cacheRead ?: 0, cacheWrite = tokensUsed?.cacheWrite ?: 0,
                 cost = usage?.costUsd ?: 0.0,
-                contextPercent = usage?.context?.let { it.percent } ?: chat.contextPercent ?: 0.0,
+                // 压缩后上下文未知：显示 `?`（Nit 4）
+                contextPercent = usage?.context.let { c -> if (c != null) c.percent else chat.contextPercent },
+                latestCacheHitRate = env.latestCacheHitRate,
                 contextWindow = usage?.context?.contextWindow ?: chat.model?.contextWindow ?: 0,
                 autoCompact = settings["compaction.enabled"] != "false",
                 modelId = chat.model?.id, provider = chat.model?.provider, reasoning = chat.model?.reasoning == true,
-                thinkingLevel = chat.thinkingLevel, availableProviderCount = 2,
+                thinkingLevel = chat.thinkingLevel, availableProviderCount = env.availableProviderCount,
                 extensionStatuses = surfaceExt.statuses,
             )
             val lines = Footer.render(input, cols, reserveFirstLine = 5)
@@ -419,7 +498,8 @@ private fun TermScreen(
                                         var total = 0f
                                         detectHorizontalDragGestures(
                                             onDragStart = { total = 0f },
-                                            onDragEnd = { if (kotlin.math.abs(total) > 12.dp.toPx()) run("model.cycle") },
+                                            // 左滑 = Ctrl+P（下一个），右滑 = Shift+Ctrl+P（上一个）（§3.4，Nit 1）
+                                            onDragEnd = { if (kotlin.math.abs(total) > 12.dp.toPx()) run("model.cycle", if (total > 0) "backward" else null) },
                                         ) { change, d -> total += d; change.consume() }
                                     }
                                     .testTag("term:footer:model")
@@ -448,29 +528,76 @@ private fun TermScreen(
 }
 
 @Composable
-private fun Header(version: String, cols: Int, fontSp: Float, tokens: PiTokens, bindings: KeyBindings, onVersion: () -> Unit) {
+private fun Header(
+    version: String,
+    cols: Int,
+    fontSp: Float,
+    tokens: PiTokens,
+    bindings: KeyBindings,
+    resources: List<TermInput.ResourceSection>,
+    quiet: Boolean,
+    onVersion: () -> Unit,
+) {
     fun k(id: String, fallback: String) = bindings.keysOf(id).firstOrNull() ?: fallback
     val hints = listOf(
         "${k("app.interrupt", "escape")} to interrupt", "${k("app.clear", "ctrl+c")} to clear", "${k("app.thinking.cycle", "shift+tab")} to cycle thinking",
         "${k("app.model.select", "ctrl+l")} to select model", "${k("app.tools.expand", "ctrl+o")} to expand tools", "/ for commands", "! to run bash",
     )
+    // pi 启动区：已加载的上下文文件、技能、提示模板、扩展、模型范围；quietStartup 时默认收起，点标题行展开 / 收起。
+    var expanded by rememberSaveable(quiet) { mutableStateOf(!quiet) }
     Column(Modifier.testTag("term:header")) {
         TermLineText(TermLine(emptyList()), fontSp.sp, tokens)
         TermLineText(
             TermLine(listOf(Span(" "), Span("pi", "accent", bold = true), Span(" v$version", "dim"))), fontSp.sp, tokens,
             Modifier.clickable(onClick = onVersion).testTag("term:keycap:header:版本号"),
         )
-        for (l in TermFormatter.wrapSpans(listOf(Span(hints.joinToString(" · "), "dim")), cols - 2)) TermLineText(TermLine(listOf(Span(" ")) + l), fontSp.sp, tokens)
+        if (!quiet) for (l in TermFormatter.wrapSpans(listOf(Span(hints.joinToString(" · "), "dim")), cols - 2)) TermLineText(TermLine(listOf(Span(" ")) + l), fontSp.sp, tokens)
+        if (resources.isNotEmpty()) {
+            val summary = resources.joinToString(", ") { "${it.items.size} ${it.title.lowercase()}" }
+            TermLineText(
+                TermLine(listOf(Span(" "), Span(if (expanded) "▾ " else "▸ ", "dim"), Span(if (expanded) "Loaded" else "Loaded: $summary", "dim"))), fontSp.sp, tokens,
+                Modifier.clickable { expanded = !expanded }.testTag("term:header:resources"),
+            )
+            if (expanded) for (sec in resources) {
+                TermLineText(TermLine(listOf(Span(" "), Span("[${sec.title}]", "mdHeading", bold = true))), fontSp.sp, tokens, Modifier.testTag("term:header:section:${sec.title}"))
+                for (item in sec.items) TermLineText(TermLine(listOf(Span("   "), Span(CellWidth.truncate(item, cols - 4), "dim"))), fontSp.sp, tokens)
+            }
+        }
     }
 }
 
 @Composable
-private fun StatusLine(chat: io.github.zr987459.pigo.contract.ChatState, tick: Int, runStart: Long, cols: Int, fontSp: Float, tokens: PiTokens) {
+private fun AtCompletion(matches: List<FileMatch>, cols: Int, fontSp: Float, tokens: PiTokens, onPick: (FileMatch) -> Unit) {
+    Column(Modifier.background(tokens.bg).testTag("term:at")) {
+        matches.forEachIndexed { i, m ->
+            val label = if (m.isDir) m.path + "/" else m.path
+            TermLineText(
+                TermLine(listOf(Span(" "), Span(CellWidth.truncate(label, cols - 2), if (i == 0) "accent" else null, bold = i == 0)), if (i == 0) "selectedBg" else null),
+                fontSp.sp, tokens,
+                Modifier.clickable { onPick(m) }.testTag("term:at:${m.path}"),
+            )
+        }
+    }
+}
+
+@Composable
+private fun StatusLine(chat: io.github.zr987459.pigo.contract.ChatState, cols: Int, fontSp: Float, tokens: PiTokens) {
+    // 计时只在这里读（审查第 1 轮 Nit 6：动画帧不再让整屏重组）
+    var tick by remember { mutableStateOf(0) }
+    var runStart by remember { mutableLongStateOf(0L) }
     val retry = chat.retry
+    val retryStart = remember(retry) { System.currentTimeMillis() }
+    LaunchedEffect(chat.running, retry) {
+        if (chat.running || retry != null) {
+            if (chat.running && runStart == 0L) runStart = System.currentTimeMillis()
+            while (true) { delay(80); tick++ }
+        } else runStart = 0L
+    }
     val text: List<Span>? = when {
         retry != null -> listOf(
             Span(SPINNER[tick % SPINNER.size] + " ", "warning"),
-            Span("Retrying (${retry.attempt}/${retry.maxAttempts}) in ${(retry.delayMs / 1000.0).let { "%.0f".format(it) }}s", "warning"),
+            // 倒计时（Nit 5）：从横幅出现起倒数，向上取整，同 pi 的 `Retrying (n/m) in Ns`
+            Span("Retrying (${retry.attempt}/${retry.maxAttempts}) in ${TermInput.retrySecondsLeft(retry.delayMs, System.currentTimeMillis() - retryStart + 0L * tick)}s", "warning"),
             Span(retry.errorMessage?.let { " · $it" } ?: "", "dim"),
             Span(" (escape to cancel)", "dim"),
         )
@@ -558,10 +685,17 @@ private fun Editor(
 private fun KeyStrip(keys: List<TermInput.StripKey>, fontSp: Float, tokens: PiTokens, onKey: (String) -> Unit, onCollapse: () -> Unit) {
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).testTag("term:strip")) {
         keys.forEach { k ->
+            // ↑↓、⇞⇟ 拆成两个键帽（Nit 2、3）：第一个沿用原测试标签（上 / 上一条），第二个加 `:down` / `:next`
+            val second = when (k.key) { "↑↓" -> "↓" to "↑↓:down"; "⇞⇟" -> "⇟" to "⇞⇟:next"; else -> null }
             Text(
-                k.label,
+                if (second != null) k.label.take(1) else k.label,
                 style = monoStyle(fontSp.sp, tokens).copy(color = tokens.fgOf(if (k.key == "⏎") "accent" else "muted")),
                 modifier = Modifier.clickable { onKey(k.key) }.padding(horizontal = 10.dp, vertical = 8.dp).testTag(if (k.key == TermInput.KEY_FORM) "form:toggle" else "term:key:${k.key}"),
+            )
+            if (second != null) Text(
+                second.first,
+                style = monoStyle(fontSp.sp, tokens).copy(color = tokens.fgOf("muted")),
+                modifier = Modifier.clickable { onKey(second.second) }.padding(horizontal = 10.dp, vertical = 8.dp).testTag("term:key:${second.second}"),
             )
         }
         Text("▾", color = tokens.fgOf("dim"), modifier = Modifier.clickable(onClick = onCollapse).padding(horizontal = 10.dp, vertical = 8.dp).testTag("term:strip:hide"))

@@ -98,4 +98,52 @@ object TermInput {
 
     /** 页眉、编辑器、补全浮层、消息里常驻的键帽所属选择器。 */
     val INLINE_SELECTORS = setOf("header", "editor", "slash", "message")
+
+    /** 光标处的 `@` 查询：[start] 是 `@` 的位置，[end] 是该词结尾（光标后的非空白也算），[query] 去掉 `@` 与开头引号。 */
+    data class AtQuery(val start: Int, val end: Int, val query: String)
+
+    /**
+     * pi-tui 的 `@` 前缀补全：光标所在的词以 `@` 开头（`@` 在行首或前面是空白）时返回查询，否则 null。
+     * 支持 `@"含 空格` 这种已加引号的写法（引号内的空格不断词）。
+     */
+    fun atQuery(text: String, cursor: Int): AtQuery? {
+        val c = cursor.coerceIn(0, text.length)
+        // 已加引号：`@"含 空格`（引号内空格不断词，直到闭合引号）
+        val qi = if (c >= 2) text.lastIndexOf("@\"", c - 1) else -1
+        if (qi >= 0 && qi + 2 <= c && (qi == 0 || text[qi - 1].isWhitespace()) && '"' !in text.substring(qi + 2, c)) {
+            val close = text.indexOf('"', c).let { if (it < 0) text.length else it + 1 }
+            return AtQuery(qi, close, text.substring(qi + 2, c))
+        }
+        var i = c
+        while (i > 0 && !text[i - 1].isWhitespace()) i--
+        if (i >= text.length || text[i] != '@' || i >= c) return null
+        var e = c
+        while (e < text.length && !text[e].isWhitespace()) e++
+        return AtQuery(i, e, text.substring(i + 1, c))
+    }
+
+    /** 重试倒计时剩余秒数（向上取整，不小于 0）。 */
+    fun retrySecondsLeft(delayMs: Long, elapsedMs: Long): Long = ((delayMs - elapsedMs).coerceAtLeast(0) + 999) / 1000
+
+    /** 页眉的一段（pi 启动区 `[Context]`、`[Skills]`、`[Prompts]`、`[Extensions]`、`[Models]`）。 */
+    data class ResourceSection(val title: String, val items: List<String>)
+
+    /**
+     * pi 启动区列出的已加载资源：上下文文件（装配层注入）、`get_commands` 里的技能 / 模板 / 扩展（扩展按文件去重，
+     * 不列随包的 pigo-bridge）、`settings.json` 的 `enabledModels`（模型范围）。路径里的家目录缩成 `~`。空段不显示。
+     */
+    fun startupResources(contextFiles: List<String>, commands: List<SlashCommand>, enabledModels: List<String>, home: String?): List<ResourceSection> {
+        fun short(p: String) = if (home != null && (p == home || p.startsWith("$home/"))) "~" + p.removePrefix(home) else p
+        val skills = commands.filter { it.source == io.github.zr987459.pigo.contract.CommandSource.SKILL }.map { it.path?.let(::short) ?: it.name.removePrefix("skill:") }.distinct()
+        val prompts = commands.filter { it.source == io.github.zr987459.pigo.contract.CommandSource.PROMPT }.map { "/" + it.name }.distinct()
+        val exts = commands.filter { it.source == io.github.zr987459.pigo.contract.CommandSource.EXTENSION && !it.name.startsWith("pigo:") }
+            .map { it.path?.let(::short) ?: "/" + it.name }.filterNot { it.endsWith("pigo-bridge.ts") }.distinct()
+        return listOf(
+            ResourceSection("Context", contextFiles.map(::short)),
+            ResourceSection("Skills", skills),
+            ResourceSection("Prompts", prompts),
+            ResourceSection("Extensions", exts),
+            ResourceSection("Models", enabledModels),
+        ).filter { it.items.isNotEmpty() }
+    }
 }

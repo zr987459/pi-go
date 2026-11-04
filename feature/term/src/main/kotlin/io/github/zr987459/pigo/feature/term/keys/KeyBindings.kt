@@ -69,6 +69,7 @@ class KeyBindings(private val bindings: Map<String, List<String>>) {
             "app.clear" to "editor.clear",
             "app.thinking.cycle" to "thinking.cycle",
             "app.model.cycleForward" to "model.cycle",
+            "app.model.cycleBackward" to "model.cycle",
             "app.model.select" to "model.select",
             "app.tools.expand" to "tools.expandAll",
             "app.thinking.toggle" to "thinking.toggle",
@@ -80,6 +81,13 @@ class KeyBindings(private val bindings: Map<String, List<String>>) {
             "tui.altScreen.search" to "transcript.search",
             "tui.altScreen.previousPrompt" to "transcript.jump",
             "tui.altScreen.nextPrompt" to "transcript.jump",
+        )
+
+        /** 同一动作带方向参数的绑定（Shift+Ctrl+P 反向循环模型；上一条 / 下一条提示，审查第 1 轮 Nit 1、3）。 */
+        val ACTION_ARGS: Map<String, String> = mapOf(
+            "app.model.cycleBackward" to "backward",
+            "tui.altScreen.previousPrompt" to "prev",
+            "tui.altScreen.nextPrompt" to "next",
         )
     }
 }

@@ -274,3 +274,42 @@ private fun KeyCapRow(
         }
     }
 }
+
+/**
+ * 外接键盘在 overlay 打开时按 Enter（审查第 1 轮 Nit 7）：与点「enter …」键帽 / 选中项相同。
+ * 返回 true 表示已处理。扩展 `editor`（多行）对话框里 Enter 仍是换行，交给输入框。
+ */
+fun overlayEnter(host: SessionHost, model: OverlayModel, scope: kotlinx.coroutines.CoroutineScope, onRun: (String, String?) -> Unit): Boolean {
+    when (model) {
+        is OverlayModel.SelectList -> {
+            val q = model.query.lowercase()
+            val visible = model.groups.flatMap { g -> g.items.filter { q.isEmpty() || it.label.lowercase().contains(q) || it.key.lowercase().contains(q) || (it.detail?.lowercase()?.contains(q) == true) } }
+                .filter { it.enabled }
+            val pick = visible.firstOrNull { it.key == model.selectedKey } ?: visible.firstOrNull() ?: return true
+            host.overlay.replaceTop(model.copy(selectedKey = pick.key))
+            onRun(model.id, pick.key)
+        }
+        is OverlayModel.Form -> {
+            val vals = model.values
+            host.overlay.pop()
+            onRun(model.id, vals.entries.joinToString("\n") { "${it.key}=${it.value}" })
+        }
+        is OverlayModel.Confirm -> { host.overlay.pop(); onRun(model.id, "confirm") }
+        is OverlayModel.Text -> host.overlay.pop()
+        is OverlayModel.ExtDialog -> {
+            val r = model.request
+            when (r.method) {
+                "select" -> {
+                    val v = model.value.takeIf { it in r.options } ?: r.options.firstOrNull() ?: return true
+                    scope.launch { host.engine.answerUi(r.id, value = v) }
+                }
+                "confirm" -> scope.launch { host.engine.answerUi(r.id, confirmed = true) }
+                "input" -> { val v = model.value; scope.launch { host.engine.answerUi(r.id, value = v) } }
+                else -> return false
+            }
+            host.overlay.remove(model.id)
+        }
+        else -> return false
+    }
+    return true
+}
