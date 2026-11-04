@@ -36,7 +36,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import io.github.zr987459.pigo.contract.AppSettingsStore
-import io.github.zr987459.pigo.contract.CostDisplaySettings
 import io.github.zr987459.pigo.contract.CustomModel
 import io.github.zr987459.pigo.contract.CustomProvider
 import io.github.zr987459.pigo.contract.CustomProviderStore
@@ -199,15 +198,19 @@ internal fun apiLabel(a: ProviderApi) = when (a) {
     ProviderApi.GOOGLE_GENERATIVE_AI -> "Google Gemini"
 }
 
-/** 代理（M9）与费用显示（决策 3）。保存后需重启 pi 才生效。 */
+/**
+ * 代理（M9）。费用显示（汇率）已按 DESIGN-r3 X2 删除，这里只剩代理。
+ *
+ * 交接给 r3/app：本页目前仍是**唯一**的代理入口。等 `PiSettings` 的 `httpProxy` 在 ⌘ › pi 设置有入口、
+ * r3/app 去掉 `WiredPages` 的 network 路由后，由 r3/app 删除本函数（DESIGN-r3 §8.2 第 2、4 条）。
+ */
+@Deprecated("r3: 代理迁到 PiSettings.httpProxy、r3/app 断开 network 路由后，由 r3/app 删除")
 @Composable
 fun NetworkAndCostScreen(settings: AppSettingsStore, modifier: Modifier = Modifier) {
     val scope = rememberCoroutineScope()
     val net by settings.network.collectAsState()
-    val cost by settings.costDisplay.collectAsState()
     var proxy by remember(net) { mutableStateOf(net.proxyUrl.orEmpty()) }
     var noProxy by remember(net) { mutableStateOf(net.noProxy) }
-    var rate by remember(cost) { mutableStateOf(cost.usdToCny.toString()) }
     var message by remember { mutableStateOf<String?>(null) }
 
     Column(modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
@@ -227,23 +230,6 @@ fun NetworkAndCostScreen(settings: AppSettingsStore, modifier: Modifier = Modifi
                 }
             }
         }, modifier = Modifier.padding(top = 8.dp)) { Text("保存代理") }
-
-        Spacer(Modifier.height(24.dp))
-        Text("费用显示", style = MaterialTheme.typography.titleLarge)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("同时显示人民币", modifier = Modifier.weight(1f))
-            Switch(cost.showCny, { scope.launch { settings.setCostDisplay(cost.copy(showCny = it)) } }, modifier = Modifier.testTag("settings.cny"))
-        }
-        OutlinedTextField(rate, { rate = it }, label = { Text("汇率（1 美元 = ? 元）") }, singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth())
-        Button(onClick = {
-            val r = rate.toDoubleOrNull()
-            if (r == null || r <= 0) message = "汇率要大于 0，例如 ${CostDisplaySettings.DEFAULT_USD_TO_CNY}"
-            else scope.launch {
-                message = try { settings.setCostDisplay(cost.copy(usdToCny = r)); "示例：" + cost.copy(usdToCny = r, showCny = true).format(1.0) }
-                catch (e: IllegalArgumentException) { e.message }
-            }
-        }, modifier = Modifier.padding(top = 8.dp)) { Text("保存汇率") }
         message?.let { Text(it, modifier = Modifier.padding(top = 8.dp)) }
     }
 }

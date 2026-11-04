@@ -40,6 +40,8 @@ class RealCustomProviderStore(
                     reasoning = m.reasoning ?: false,
                     input = if (m.supportsImages == true) setOf("text", "image") else setOf("text"),
                     cost = m.cost?.let { ModelCost(it.input, it.output, it.cacheRead, it.cacheWrite) },
+                    reasoningExplicit = m.reasoning,
+                    imagesExplicit = m.supportsImages,
                 )
             },
             headers = c.headers,
@@ -47,6 +49,7 @@ class RealCustomProviderStore(
     }
 
     override suspend fun upsert(provider: CustomProvider, rawKey: String?): Outcome<Unit> = try {
+        val old = config.customProviders()[provider.id]?.models.orEmpty().associateBy { it.id }
         config.upsertCustomProvider(
             id = provider.id,
             baseUrl = provider.baseUrl,
@@ -56,8 +59,8 @@ class RealCustomProviderStore(
                 PiProviderConfigStore.CustomModel(
                     id = m.id,
                     name = m.name,
-                    reasoning = m.reasoning,
-                    supportsImages = "image" in m.input,
+                    reasoning = capability(m.reasoningExplicit, m.reasoning, old[m.id]?.reasoning),
+                    supportsImages = capability(m.imagesExplicit, "image" in m.input, old[m.id]?.supportsImages),
                     contextWindow = m.contextWindow,
                     maxTokens = m.maxTokens,
                     cost = m.cost?.let { BuiltinCatalog.Cost(it.input, it.output, it.cacheRead, it.cacheWrite) },
@@ -123,5 +126,19 @@ class RealCustomProviderStore(
             ProviderTester.testBuiltIn(rt, ref.provider, envVar, key, ref.id, extraEnv = env)
         }
         return Outcome.Ok(ProbeOutcome(r.ok, r.message, r.httpStatus, r.elapsedMs.takeIf { it > 0 } ?: (clock() - start)))
+    }
+
+    companion object {
+        /**
+         * 写盘时一个能力字段的值（null = 不写该字段）：
+         * - [explicit] 非 null：用户显式开 / 关，照写（显式关闭写 false，不会被抹成「未指定」）；
+         * - 否则按推断值 [inferred]：true 写 true；原文件有值（[old] 非 null）时写 false；原来就没写时写 null。
+         */
+        internal fun capability(explicit: Boolean?, inferred: Boolean, old: Boolean?): Boolean? = when {
+            explicit != null -> explicit
+            inferred -> true
+            old != null -> false
+            else -> null
+        }
     }
 }

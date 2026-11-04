@@ -33,13 +33,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import io.github.zr987459.pigo.core.ui.AppBackdrop
-import io.github.zr987459.pigo.core.ui.AppIcons
-import io.github.zr987459.pigo.core.ui.ChromeIconButton
-import io.github.zr987459.pigo.core.ui.DshTheme
-import io.github.zr987459.pigo.core.ui.GlassTier
-import io.github.zr987459.pigo.feature.settings.ui.DshFilledButton
-import io.github.zr987459.pigo.feature.settings.ui.DshOutlinedButton
+import io.github.zr987459.pigo.feature.settings.ui.PlainBackdrop
+import io.github.zr987459.pigo.feature.settings.ui.BackButton
+import io.github.zr987459.pigo.feature.settings.ui.SettingsColors
+import io.github.zr987459.pigo.feature.settings.ui.PlainFilledButton
+import io.github.zr987459.pigo.feature.settings.ui.PlainOutlinedButton
 import io.github.zr987459.pigo.feature.settings.ui.ExpandRow
 import io.github.zr987459.pigo.feature.settings.ui.LargeTitle
 import io.github.zr987459.pigo.feature.settings.ui.SettingsHues
@@ -57,7 +55,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
  *
  * 「首次进入聊天时引导」：聊天页（mvp/chat-ui）或 mvp/integration 在进入聊天时调用
  * `if (BackgroundGuide.shouldShow(context)) 显示 BackgroundGuideDialog`，关闭后自动记为已提示。
- * 界面照 dsh-Go `app/lib/ui/settings/background_guide_page.dart`：分组卡 + 编号步骤 + 可展开的其他品牌说明。
+ * 界面：分组 + 编号步骤 + 可展开的其他品牌说明（极简 Material 3）。
  */
 object BackgroundGuide {
     private const val PREFS = "pigo_background_guide"
@@ -113,7 +111,7 @@ object BackgroundGuide {
 }
 
 /**
- * 引导内容（设置页的后台运行页与首次弹窗共用），dsh-Go 后台引导页的分组：
+ * 引导内容（设置页的后台运行页与首次弹窗共用），分组：
  * 「你的手机」厂商自启动入口 →「系统」电池优化状态 →「保持在线」分步说明 → 其他品牌（可展开）→ Android 12+ 子进程限制。
  */
 @Composable
@@ -131,7 +129,6 @@ fun BackgroundGuideContent(modifier: Modifier = Modifier) {
         SettingsSection(vendor.label, footer = autostartHint) {
             SettingsTile(
                 title = "允许自启动 / 后台活动",
-                icon = AppIcons.autostart,
                 tint = SettingsHues.GENERAL,
                 subtitle = RomGuide.steps(vendor).first(),
                 chevron = true,
@@ -145,10 +142,9 @@ fun BackgroundGuideContent(modifier: Modifier = Modifier) {
         SettingsSection("系统") {
             SettingsTile(
                 title = "电池优化",
-                icon = AppIcons.keepAlive,
                 tint = SettingsHues.GENERAL,
                 value = if (ignoring) "已关闭" else "未关闭",
-                valueColor = if (ignoring) DshTheme.colors.success else DshTheme.colors.warning,
+                valueColor = if (ignoring) SettingsColors.success else SettingsColors.warning,
                 onTap = if (ignoring) {
                     null
                 } else {
@@ -184,16 +180,16 @@ fun PhantomProcessNotice(modifier: Modifier = Modifier) {
 }
 
 /**
- * 「后台运行」整页（dsh-Go `BackgroundGuidePage` 的 AppPage.list：返回圆钮 + 大标题 + 副标题 + 分组）。
+ * 「后台运行」整页（返回键 + 大标题 + 副标题 + 分组）。
  * 设置页没有自己的导航，所以用全屏 Dialog 承载；[footer] 放首次弹窗的按钮。
  */
 @Composable
 fun BackgroundGuidePage(onClose: () -> Unit, footer: (@Composable () -> Unit)? = null) {
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        AppBackdrop(Modifier.testTag("page:backgroundGuide")) {
+        PlainBackdrop(Modifier.testTag("page:backgroundGuide")) {
             Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
                 Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    ChromeIconButton(AppIcons.back, "返回", onClose, size = 44.dp, tier = GlassTier.Pill)
+                    BackButton(onClose)
                 }
                 Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
                     LargeTitle(
@@ -220,8 +216,8 @@ fun BackgroundGuideDialog(onDismiss: () -> Unit) {
     }
     BackgroundGuidePage(onClose = close) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            DshFilledButton("设置好了", close, Modifier.fillMaxWidth())
-            DshOutlinedButton("以后再说（可在设置里找到）", close, Modifier.fillMaxWidth())
+            PlainFilledButton("设置好了", close, Modifier.fillMaxWidth())
+            PlainOutlinedButton("以后再说", close, Modifier.fillMaxWidth())
         }
     }
 }

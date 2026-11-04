@@ -11,12 +11,11 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.doubleOrNull
 import java.io.File
 
 /**
  * 模型选择相关的界面偏好（宿主私有文件，不进容器、不含任何凭据）：
- * - 费用显示：默认美元（pi 给的就是美元）；可选同时显示人民币，汇率可配置，默认 7.1（调度方决策 3）；
+ * - 费用一律照 pi 显示美元，这里不再保存任何换算设置（DESIGN-r3 X2；旧文件里的相关键读取时忽略、下次保存时丢弃）；
  * - 最近使用的模型（最多 [MAX_RECENT] 个，选择页置顶）。
  */
 class ModelPrefsStore(
@@ -24,8 +23,6 @@ class ModelPrefsStore(
     private val io: CoroutineDispatcher = Dispatchers.IO,
 ) {
     data class Prefs(
-        val showCny: Boolean = false,
-        val cnyPerUsd: Double = DEFAULT_RATE,
         /** `provider/modelId`，最近的在前。 */
         val recent: List<String> = emptyList(),
     )
@@ -33,13 +30,6 @@ class ModelPrefsStore(
     private val mutex = Mutex()
     private val _prefs = MutableStateFlow(load())
     val prefs: StateFlow<Prefs> = _prefs.asStateFlow()
-
-    suspend fun setShowCny(show: Boolean) = update { it.copy(showCny = show) }
-
-    suspend fun setRate(rate: Double) {
-        require(rate.isFinite() && rate > 0 && rate < 1000) { "汇率要大于 0，例如 7.1" }
-        update { it.copy(cnyPerUsd = rate) }
-    }
 
     suspend fun touchRecent(provider: String, modelId: String) {
         val key = "$provider/$modelId"
@@ -59,8 +49,6 @@ class ModelPrefsStore(
             return Prefs()
         }
         return Prefs(
-            showCny = (o["showCny"] as? JsonPrimitive)?.content == "true",
-            cnyPerUsd = (o["cnyPerUsd"] as? JsonPrimitive)?.doubleOrNull?.takeIf { it > 0 } ?: DEFAULT_RATE,
             recent = (o["recent"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.content }?.take(MAX_RECENT) ?: emptyList(),
         )
     }
@@ -70,8 +58,6 @@ class ModelPrefsStore(
             file,
             JsonObject(
                 mapOf(
-                    "showCny" to JsonPrimitive(p.showCny),
-                    "cnyPerUsd" to JsonPrimitive(p.cnyPerUsd),
                     "recent" to JsonArray(p.recent.map { JsonPrimitive(it) }),
                 ),
             ),
@@ -79,7 +65,6 @@ class ModelPrefsStore(
     }
 
     companion object {
-        const val DEFAULT_RATE = 7.1
         const val MAX_RECENT = 5
 
     }

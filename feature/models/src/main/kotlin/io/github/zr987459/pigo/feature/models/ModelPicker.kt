@@ -37,7 +37,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.zr987459.pigo.contract.AppSettingsStore
 import io.github.zr987459.pigo.contract.CatalogEntry
-import io.github.zr987459.pigo.contract.CostDisplaySettings
 import io.github.zr987459.pigo.contract.ModelCatalog
 import io.github.zr987459.pigo.contract.ModelRef
 import io.github.zr987459.pigo.contract.Outcome
@@ -57,7 +56,7 @@ object ModelTags {
  * 模型选择页（M2、M4、M5）：放在全屏底部弹层里用。W5 把顶栏「模型▾」接到这里。
  *
  * - 列出 pi 目录里**全部**模型（含未配凭据的，灰显），可用的在前，最近使用 5 个置顶；
- * - 显示上下文窗口、是否推理、是否看图、单价（美元，可选同时显示人民币）；
+ * - 显示上下文窗口、是否推理、是否看图、单价（美元，照 pi 显示）；
  * - 点可用模型 → [onSelect]（调用方执行 `set_model`；生成中切换下一轮生效，[generating] 为真时提示）；
  *   点未配置模型 → [onConfigure]（跳到该服务商的 Key / 登录页），同时 [onConfigureModel] 收到被点的那个模型，
  *   供调用方在配置完成后自动选中它（W5 验收①）；服务商标题上的「去配置」只回调 [onConfigure]；
@@ -85,7 +84,6 @@ fun ModelPicker(
     var error by remember { mutableStateOf<String?>(null) }
     var query by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
-    val cost = settings?.costDisplay?.collectAsState()?.value ?: CostDisplaySettings()
 
     LaunchedEffect(catalog) {
         when (val p = catalog.providers()) { is Outcome.Ok -> providers = p.value; is Outcome.Err -> error = p.message }
@@ -126,7 +124,7 @@ fun ModelPicker(
                     }
                 }
                 items(s.rows, key = { s.key + "/" + it.model.ref.toString() }) { e ->
-                    ModelRow(e, providers.firstOrNull { it.id == e.model.provider }?.displayName, cost, selected = e.model.ref == current) {
+                    ModelRow(e, providers.firstOrNull { it.id == e.model.provider }?.displayName, selected = e.model.ref == current) {
                         when (val c = PickerLogic.onClick(e)) {
                             is PickerLogic.Click.Select -> {
                                 scope.launch { catalog.markUsed(c.ref) }
@@ -159,7 +157,7 @@ fun ModelPicker(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ModelRow(e: CatalogEntry, providerName: String?, cost: CostDisplaySettings, selected: Boolean, onClick: () -> Unit) {
+private fun ModelRow(e: CatalogEntry, providerName: String?, selected: Boolean, onClick: () -> Unit) {
     val ready = e.availability == io.github.zr987459.pigo.contract.ModelAvailability.READY
     Column(
         Modifier.fillMaxWidth()
@@ -183,7 +181,7 @@ private fun ModelRow(e: CatalogEntry, providerName: String?, cost: CostDisplaySe
             if (e.model.supportsImages) AssistChip(onClick = onClick, label = { Text("看图") })
             if (!ready) AssistChip(onClick = onClick, label = { Text("未配置") })
         }
-        PickerLogic.priceText(e.model.cost, cost)?.let {
+        PickerLogic.priceText(e.model.cost)?.let {
             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
         }
     }
