@@ -16,4 +16,4 @@
   - 新增 `PiActionsImpl.onPanel`，逐个面板实现真实行为
   - `SessionHostImpl.runAction` 路由：overlay:* 面板 → onPanel；ModelPanels 面板 → onPanelEvent；同 id 面板改为替换，不再层层叠加
 - 本地：`:core:session:testDebugUnitTest` 全部通过（含新增 OverlayPanelsTest 20 例）；`:feature:chat`、`:feature:term` 编译通过
-- 下一步：开 PR，等 CI（含模拟器）
+- PR #23 已开（2026-11-04 11:26 CST），等 CI（含模拟器）
