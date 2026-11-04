@@ -61,7 +61,7 @@ class PiEngineTest {
 
     /** 记录前台服务启停调用。 */
     private class RecordingForeground : ForegroundPort {
-        val calls: MutableList<Boolean> = java.util.Collections.synchronizedList(mutableListOf())
+        val calls: MutableList<Boolean> = java.util.concurrent.CopyOnWriteArrayList()
         override fun onEngineActive(active: Boolean) {
             calls += active
         }
