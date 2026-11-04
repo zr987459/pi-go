@@ -174,6 +174,10 @@ class LocalBlocksNotPersistedTest {
         }
         assertEquals(3, host.localBlocks.value.size)
         assertEquals(emptyList<String>(), engine.commands.value.map { it.type })
+        // EngineExtras 的调用不进 engine.commands（审查 N2）：单独核对，只允许只读的 get_session_stats。
+        val extrasCalls = (host.extras as io.github.zr987459.pigo.contract.fake.FakeEngineExtras).calls
+        assertTrue("session.info 应读统计：$extrasCalls", "usage" in extrasCalls)
+        assertEquals("只允许只读调用：$extrasCalls", setOf("usage"), extrasCalls.toSet())
         assertEquals(itemsBefore, host.chat.value.items)
     }
 }

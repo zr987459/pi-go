@@ -1,6 +1,5 @@
 package io.github.zr987459.pigo.feature.files.output
 
-// r3/session：Ansi / OutputSearch 已移到 core/session（最小改动：只改引用位置，见 r3/session PR 描述）
 import io.github.zr987459.pigo.core.session.text.Ansi
 import io.github.zr987459.pigo.core.session.text.OutputSearch
 import io.github.zr987459.pigo.feature.files.ui.BackHandler
