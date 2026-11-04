@@ -123,3 +123,40 @@ GPL/LGPL 义务：mvp/runtime 引入时在 `core/runtime/NOTICE-runtime.md` 记�
 - **未拷贝**：吉祥物（鲸娘、Deepy 小鲸鱼）、品牌标识与鲸鱼尾图形（dsh-Go `ASSETS.md` 声明不在 AGPL 授权内；所有者 2026-11-03 要求先不用）。
 - 后续工作流（聊天页、抽屉、设置、引导页）移植的文件在此追加。
   - ui/dsh-panels（抽屉内容、设置、安装引导；只翻译界面结构与尺寸，未拷贝资源）：`app/lib/ui/shell/sessions_drawer.dart`、`shell/drawer/session_tile.dart`、`shell/drawer/drawer_filter_bar.dart`、`shell/session_search_page.dart`、`ui/common/capsule_chip.dart`、`state/drawer_view_state.dart`（按日分组）→ `feature/sessions/.../SessionsScreen.kt`、`DrawerStyle.kt`、`DrawerGrouping.kt`；`app/lib/ui/settings/settings_widgets.dart`、`settings_screen.dart`、`background_guide_page.dart`、`ui/common/app_sheet.dart`、`overview_card.dart`、`shell/page_frame.dart` → `feature/settings/.../ui/DshComponents.kt`、`SettingsScreen.kt`、`BackgroundGuide.kt`；`app/lib/ui/onboarding/onboarding_scaffold.dart`、`local_install.dart`、`runtime_setup_page.dart`、`setup_progress.dart`、`ui/common/progress_halo.dart` → `feature/onboarding/.../OnboardingUi.kt`、`OnboardingScreen.kt`。
+
+## 9. 第三轮重设计（r3，2026-11）
+
+由 r3/app 合并各分支的 `docs/notices/r3-*.md`（原文件保留作明细）。授权依据：pi 1.5.0 的 npm 包 `package.json` 的 `license` 字段为 MIT（版权方以 earendil-works/pi 仓库 LICENSE 为准）；所有者 2026-11-03 决定自用、不商用。
+
+### 9.1 随 APK 原样打包的 pi 数据（r3/term）
+- **pi 主题 JSON**：`feature/term/src/main/assets/pi-theme/dark.json`、`light.json` ← `@earendil-works/pi-coding-agent@1.5.0` `dist/modes/interactive/theme/{dark,light}.json`，原样打包，MIT。
+- **pi 默认键位表**：`feature/term/src/main/assets/pi-default-keybindings.json`（测试夹具 `src/test/resources/pi/default-keybindings.json` 相同）← pi-coding-agent 1.5.0 `dist/core/keybindings.js` 的 `KEYBINDINGS`（含 pi-tui `TUI_KEYBINDINGS`）各项 `defaultKeys`（非 Windows），用 node 导出，MIT。
+
+### 9.2 生成的数据表
+- **东亚宽度表（wcwidth）**：`feature/term/.../text/CellWidth.kt` 的 `WIDE` 区间表 ← `get-east-asian-width` 1.6.0（sindresorhus，MIT；pi-tui 的依赖）：用 node 对 U+0000–U+10FFFF 逐码点调用 `eastAsianWidth()`，宽度为 2 的码点压成 123 个区间。格宽规则（ASCII 1 列、制表符 3 列、区域指示符 2 列、组合符号 0 列）对照 pi-tui `utils.js` 的 `graphemeWidth`。
+- **拼音首字母表**：`core/ui/.../calm/PinyinTable.kt` ← 用 pypinyin（mozillazg/python-pinyin，MIT）离线生成（GB2312 一级常用字 3755 个），运行时不依赖 pypinyin（r3/calm）。
+
+### 9.3 移植 / 按行为改写（Kotlin 重写，未拷贝源文件）
+- earendil-works/pi（npm `@earendil-works/pi-tui@1.5.0`），MIT：
+  - `feature/term/.../theme/PiColor.kt` ← `dist/oklab.js`、`dist/colors.js`（okhsl / oklch → sRGB，逐函数移植，数值常量原样）（r3/term）
+  - `core/workspace/.../FileSearch.kt` ← `dist/autocomplete.js` 的 `CombinedAutocompleteProvider.getFuzzyFileSuggestions` 与 `scoreEntry`（候选集、smart-case、打分常数、排序规则）（r3/core）
+  - `core/session/.../AtFileExpansion.kt` ← `dist/autocomplete.js` 的 `buildCompletionValue` / `applyCompletion` 与 `dist/utils.js` 的 `autocompleteSeparatorRegex`（只按行为实现）（r3/session）
+  - `feature/term/.../format/Markdown.kt` ← pi-tui `Markdown` 组件的输出行为（r3/term）
+- earendil-works/pi（npm `@earendil-works/pi-coding-agent@1.5.0`），MIT：
+  - `feature/term/.../format/Footer.kt`、`format/TermFormatter.kt` ← `components/footer.js`、`user-message.js`、`assistant-message.js`、`tool-execution.js`、`core/tools/renderers/*.js`（footer 的排版与截断顺序逐行对照）（r3/term）
+  - `core/workspace/.../RootfsWorkspace.kt` `branchNameBlocking()` ← `dist/core/footer-data-provider.js` 的 `findGitPaths`、`resolveGitBranchSync`（r3/core）
+  - `core/engine/.../ProjectTrustFile.kt` ← `dist/core/trust-manager.js` 的 `ProjectTrustStore`（`trust.json` 格式、祖先查找、`trust.json.lock` 锁协议）（r3/core）
+  - `core/session/.../PiSettingsImpl.kt`（`PiSettingsSchemaV150`）键名与默认值 ← `docs/pi-features.md` §8（整理自 pi 文档）（r3/session）
+  - `core/engine/src/main/assets/pi/pigo-bridge.ts`：本项目自写，调用 pi 公开扩展 API（`registerCommand`、`on("session_start")`、`ctx.navigateTree`、`ctx.switchSession`、`ctx.reload`、`pi.setLabel`、`ctx.ui.notify`、`ctx.sessionManager.*`），接口形状参照 `docs/extensions.md` 与 `dist/core/extensions/types.d.ts`（r3/core）
+- 移入（来源见 §7 既有条目）：`core/session/.../text/LineDiff.kt`、`SessionTreeRows.kt`（原 `feature/usage`）；`core/session/.../text/Ansi.kt`（原 `feature/files`，去转义正则参考 Pi-Web `lib/ansi.ts`，MIT）（r3/session）。
+
+### 9.4 测试夹具（可复现，r3/term）
+- `feature/term/src/test/resources/pi/theme-tokens-golden.json`（node 跑 pi-tui `parseColor` + `colorToHex`）、`footer-golden.json`（node 直接 new pi 的 `FooterComponent` 后 `render(width)` 去 ANSI）、`term-format-golden.json`（node 直接 new `UserMessageComponent`、`AssistantMessageComponent`、`ToolExecutionComponent`，`render(80)` 去 ANSI 与行尾空格）。均派生自 pi 1.5.0（MIT）。
+
+### 9.5 字体与图标
+- JetBrains Mono（SIL OFL 1.1）：`core/ui/src/main/res/font/jetbrains_mono_*.ttf`，两种形态只读引用（来源见 §8）。
+- `core/ui/.../calm/CalmIcons.kt`：自绘线性图标（24dp 画布、2dp 圆头线），风格参照 Material Symbols Rounded，未复制其路径数据（r3/calm）。
+
+### 9.6 r3 删除的旧代码（来源条目仍在 §7、§8 作历史记录）
+- `feature/usage` 整模块、`feature/files` 的文件浏览器 / 预览 / Git 页 / 高亮 / 旧导出弹层、`app` 的旧抽屉与旧页面（`WiredPages.kt`、`PiGoDrawer.kt`）已在 r3/app PR 2 删除；§7、§8 中指向这些文件的条目不再对应仓库内文件。
+- 本 PR（r3/app）无新增移植代码、素材或第三方依赖。
