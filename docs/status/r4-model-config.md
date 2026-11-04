@@ -1,6 +1,6 @@
 # r4/model-config：模型配置极简化 + 修「配好用不了」
 
-状态：进行中（06:22）。根因已定位（见下），QuickModelSetup + 极简页 + 单测已写，本地编译/单测中。
+状态：代码完成（06:33），本地 QuickModelSetupTest 全过、androidTest 编译通过；开 PR、等 CI。
 
 根因：① AppGraph 构造 RealModelPanels 没传 onCredentialsChanged（默认空操作），保存 Key 后不重启 pi，而 Key 只在 pi 启动时经环境变量注入（pi docs/models.md:217）；② 只写 settings.json 默认模型，续接会话仍用会话里的旧模型，没发 set_model。
 

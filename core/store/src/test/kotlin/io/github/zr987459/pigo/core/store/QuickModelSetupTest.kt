@@ -1,12 +1,14 @@
 package io.github.zr987459.pigo.core.store
 
-import com.sun.net.httpserver.HttpServer
 import io.github.zr987459.pigo.contract.ErrCode
 import io.github.zr987459.pigo.contract.Outcome
 import io.github.zr987459.pigo.contract.SecretStore
 import io.github.zr987459.pigo.core.store.QuickModelSetup.Verdict
 import java.io.File
-import java.net.InetSocketAddress
+import java.net.InetAddress
+import java.net.ServerSocket
+import java.net.Socket
+import kotlin.concurrent.thread
 import java.nio.file.Files
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
@@ -41,7 +43,7 @@ class QuickModelSetupTest {
     private val calls = mutableListOf<String>()
     private var restartResult: Outcome<Unit> = Outcome.Ok(Unit)
     private val key = "sk-test-0123456789abcdef"
-    private var server: HttpServer? = null
+    private var server: Tiny? = null
 
     private fun setup(
         catalog: List<String> = listOf("deepseek-chat", "deepseek-reasoner"),
@@ -59,7 +61,7 @@ class QuickModelSetupTest {
     }
 
     @After fun tearDown() {
-        server?.stop(0)
+        server?.stop()
         rootfs.deleteRecursively()
     }
 
@@ -133,22 +135,51 @@ class QuickModelSetupTest {
 
     // ---------------------------------------------------------------- 拉模型列表 / 测试连接的成败分类
 
-    /** 本机假 OpenAI 兼容服务：`/v1/models` 与 `/v1/chat/completions` 按 [chat] 返回。 */
+    /** 本机假 OpenAI 兼容服务（单测跑在 android.jar 上，没有 com.sun.net.httpserver，同 ProviderProbeTest 用 ServerSocket）。 */
+    private inner class Tiny(private val chat: (String) -> Pair<Int, String>) {
+        private val socket = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))
+        val port: Int get() = socket.localPort
+        private val worker = thread(isDaemon = true) {
+            while (!socket.isClosed) {
+                val c = runCatching { socket.accept() }.getOrNull() ?: break
+                c.use { runCatching { handle(it) } }
+            }
+        }
+
+        private fun handle(c: Socket) {
+            val input = c.getInputStream().buffered()
+            val head = StringBuilder()
+            while (!head.endsWith("\r\n\r\n")) {
+                val b = input.read()
+                if (b < 0) return
+                head.append(b.toChar())
+            }
+            val lines = head.toString().split("\r\n")
+            val path = lines[0].split(" ")[1]
+            val headers = lines.drop(1).filter { ':' in it }.associate { it.substringBefore(':').trim().lowercase() to it.substringAfter(':').trim() }
+            val len = headers["content-length"]?.toIntOrNull() ?: 0
+            val body = ByteArray(len).also { var off = 0; while (off < len) { val n = input.read(it, off, len - off); if (n < 0) break; off += n } }
+            val ok = headers["authorization"] == "Bearer $key"
+            val (code, resp) = when {
+                !ok && path.endsWith("/models") -> 401 to """{"error":"bad key"}"""
+                !ok -> 401 to """{"error":"invalid api key"}"""
+                path.endsWith("/models") -> 200 to """{"data":[{"id":"m-b"},{"id":"m-a"}]}"""
+                else -> chat(String(body))
+            }
+            val bytes = resp.toByteArray()
+            val out = c.getOutputStream()
+            out.write("HTTP/1.1 $code X\r\nContent-Type: application/json\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n".toByteArray())
+            out.write(bytes)
+            out.flush()
+        }
+
+        fun stop() { socket.close(); worker.join(1000) }
+    }
+
     private fun fakeServer(chat: (String) -> Pair<Int, String>): String {
-        val s = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
-        s.createContext("/v1/models") { ex ->
-            val ok = ex.requestHeaders.getFirst("Authorization") == "Bearer $key"
-            val body = if (ok) """{"data":[{"id":"m-b"},{"id":"m-a"}]}""" else """{"error":"bad key"}"""
-            val bytes = body.toByteArray(); ex.sendResponseHeaders(if (ok) 200 else 401, bytes.size.toLong()); ex.responseBody.use { it.write(bytes) }
-        }
-        s.createContext("/v1/chat/completions") { ex ->
-            val req = ex.requestBody.readBytes().decodeToString()
-            val (code, body) = if (ex.requestHeaders.getFirst("Authorization") != "Bearer $key") 401 to """{"error":"invalid api key"}""" else chat(req)
-            val bytes = body.toByteArray(); ex.sendResponseHeaders(code, bytes.size.toLong()); ex.responseBody.use { it.write(bytes) }
-        }
-        s.start()
+        val s = Tiny(chat)
         server = s
-        return "http://127.0.0.1:${s.address.port}/v1"
+        return "http://127.0.0.1:${s.port}/v1"
     }
 
     @Test fun modelListAndConnectionVerdicts() = runBlocking {
@@ -172,8 +203,9 @@ class QuickModelSetupTest {
         assertEquals(Verdict.MODEL_NOT_FOUND, q.test(QuickModelSetup.CUSTOM, key, "m-gone", url).verdict)
         assertEquals(Verdict.MODEL_NOT_FOUND, q.test(QuickModelSetup.CUSTOM, key, "m-404", url).verdict)
         assertEquals(Verdict.QUOTA, q.test(QuickModelSetup.CUSTOM, key, "m-busy", url).verdict)
-        val port = server!!.address.port
-        server!!.stop(0); server = null
+        val s = server!!
+        val port = s.port
+        s.stop(); server = null
         val down = q.test(QuickModelSetup.CUSTOM, key, "m-a", "http://127.0.0.1:$port/v1")
         assertEquals(Verdict.NETWORK, down.verdict)
         assertTrue(down.message.startsWith("网络不通"))

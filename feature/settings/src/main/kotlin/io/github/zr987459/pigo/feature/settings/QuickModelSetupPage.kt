@@ -69,6 +69,7 @@ class QuickSetupActions(
 
 object QuickTags {
     const val PAGE = "page:quickModels"
+    const val LIST = "quick.list"
     fun preset(id: String) = "quick.preset:$id"
     const val BASE_URL = "quick.baseUrl"
     const val KEY = "quick.key"
@@ -126,7 +127,7 @@ fun QuickModelSetupPage(
     }
 
     PlainBackdrop(modifier.testTag(QuickTags.PAGE)) {
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = 8.dp, bottom = 40.dp)) {
+        LazyColumn(Modifier.fillMaxSize().testTag(QuickTags.LIST), contentPadding = PaddingValues(top = 8.dp, bottom = 40.dp)) {
             if (onBack != null) item { BackButton(onBack, Modifier.padding(start = 12.dp).testTag("settings:back")) }
             item { LargeTitle("模型", subtitle = "选服务商、填 Key、选模型，保存后马上就能聊") }
             item {
