@@ -42,27 +42,44 @@ class PiSettingsImpl(
     private val _values = MutableStateFlow<Map<String, JsonElement>>(emptyMap())
     override val values: StateFlow<Map<String, JsonElement>> = _values.asStateFlow()
 
+    /** 对象 / 数组类型的键：flatten 不往里展开，整体按 JSON 结构读写（审查第 1 轮 I5）。 */
+    private val structuralKeys: Set<String> = schema.specs.filter { PiSettingsCodec.isStructural(it) }.map { it.key }.toSet()
+
     override suspend fun refresh(): Outcome<Unit> = withContext(Dispatchers.IO) {
-        runCatching { _values.value = SettingsJson.flatten(SettingsJson.read(file)) }
+        runCatching { _values.value = SettingsJson.flatten(SettingsJson.read(file), stopAt = structuralKeys) }
             .fold({ Outcome.Ok(Unit) }, { Outcome.Err(ErrCode.UNKNOWN, "读取 settings.json 失败：${it.message}") })
     }
 
     override suspend fun set(key: String, value: JsonElement?): Outcome<Unit> {
         if (isSideKey(key)) return sideKeys(key, value)
+        val spec = schema.specs.firstOrNull { it.key == key }
+            ?: return Outcome.Err(ErrCode.RPC_REJECTED, "未知的 pi 设置键：$key")
+        var changed = false
         val r = withContext(Dispatchers.IO) {
             runCatching {
                 SettingsJson.locked(file) {
                     val root = SettingsJson.read(file)
-                    val next = SettingsJson.put(root, key.split('.'), value)
-                    SettingsJson.write(file, next)
-                    _values.value = SettingsJson.flatten(next)
+                    val current = SettingsJson.get(root, key.split('.'))
+                    when (val enc = PiSettingsCodec.encode(spec, value, current)) {
+                        is PiSettingsCodec.Encoded.Invalid -> throw IllegalArgumentException(enc.reason)
+                        PiSettingsCodec.Encoded.NoChange -> Unit
+                        is PiSettingsCodec.Encoded.Value -> if (enc.value != current) {
+                            val next = SettingsJson.put(root, key.split('.'), enc.value)
+                            SettingsJson.write(file, next)
+                            changed = true
+                        }
+                    }
+                    _values.value = SettingsJson.flatten(SettingsJson.read(file), stopAt = structuralKeys)
                 }
             }
         }
         return r.fold({
-            runCatching { reload() }
+            if (changed) runCatching { reload() }
             Outcome.Ok(Unit)
-        }, { Outcome.Err(ErrCode.UNKNOWN, "写入 settings.json 失败：${it.message}") })
+        }, {
+            if (it is IllegalArgumentException) Outcome.Err(ErrCode.RPC_REJECTED, "${spec.label}：${it.message}")
+            else Outcome.Err(ErrCode.UNKNOWN, "写入 settings.json 失败：${it.message}")
+        })
     }
 }
 
@@ -96,12 +113,22 @@ object SettingsJson {
         return JsonObject(m)
     }
 
-    /** 嵌套对象展开成点分路径（叶子为非对象值）；`retry.provider.*` 这类对象值也展开。 */
-    fun flatten(obj: JsonObject, prefix: String = ""): Map<String, JsonElement> {
+    /** 读 [path] 指向的值；不存在为 null。 */
+    fun get(root: JsonObject, path: List<String>): JsonElement? {
+        var cur: JsonElement = root
+        for (seg in path) cur = (cur as? JsonObject)?.get(seg) ?: return null
+        return cur
+    }
+
+    /**
+     * 嵌套对象展开成点分路径（叶子为非对象值）；`retry.provider.*` 这类分组对象也展开。
+     * [stopAt] 里的键（`modelThinkingLevels` 等对象型设置）整体保留为一个值，不往里展开。
+     */
+    fun flatten(obj: JsonObject, prefix: String = "", stopAt: Set<String> = emptySet()): Map<String, JsonElement> {
         val out = LinkedHashMap<String, JsonElement>()
         for ((k, v) in obj) {
             val key = if (prefix.isEmpty()) k else "$prefix.$k"
-            if (v is JsonObject && v.isNotEmpty()) out.putAll(flatten(v, key)) else out[key] = v
+            if (v is JsonObject && v.isNotEmpty() && key !in stopAt) out.putAll(flatten(v, key, stopAt)) else out[key] = v
         }
         return out
     }
@@ -117,6 +144,67 @@ object SettingsJson {
                 raf.channel.lock().use { return block() }
             }
         }
+    }
+}
+
+/**
+ * 表单文本 ↔ settings.json 值（审查第 1 轮 I5）。两种形态的表单都提交字符串，这里按 schema 转成 pi 1.5.0 要的类型：
+ * 布尔、数字、枚举（`"true"`/`"false"` 转布尔、`"0"`/`"1"` 转数字）、「数字或关键字」、字符串列表、JSON 对象 / 数组。
+ * 对象 / 数组键留空 = 不改，非法 JSON 或类型不对直接拒绝，**绝不用字符串覆盖用户原有的对象**。
+ */
+object PiSettingsCodec {
+    sealed interface Encoded {
+        data object NoChange : Encoded
+        data class Value(val value: JsonElement?) : Encoded
+        data class Invalid(val reason: String) : Encoded
+    }
+
+    fun isStructural(spec: PiSettingSpec) = spec.help == PiSettingsSchemaV150.OBJECT_HELP || spec.help == PiSettingsSchemaV150.ARRAY_HELP
+    private fun isArray(spec: PiSettingSpec) = spec.help == PiSettingsSchemaV150.ARRAY_HELP
+    private fun isMixed(spec: PiSettingSpec) = spec.help == PiSettingsSchemaV150.MIXED_HELP
+
+    fun encode(spec: PiSettingSpec, value: JsonElement?, current: JsonElement?): Encoded {
+        if (value == null) return if (isStructural(spec) && current != null) Encoded.Invalid("对象型设置不能整体清空，请编辑 JSON") else Encoded.Value(null)
+        if (isStructural(spec)) {
+            val parsed = when {
+                value is JsonPrimitive && value.isString -> {
+                    val t = value.content.trim()
+                    if (t.isEmpty()) return Encoded.NoChange
+                    runCatching { Json.parseToJsonElement(t) }.getOrElse { return Encoded.Invalid("不是合法的 JSON") }
+                }
+                else -> value
+            }
+            val ok = if (isArray(spec)) parsed is kotlinx.serialization.json.JsonArray else parsed is JsonObject
+            return if (ok) Encoded.Value(parsed) else Encoded.Invalid(if (isArray(spec)) "需要 JSON 数组" else "需要 JSON 对象")
+        }
+        if (value !is JsonPrimitive || !value.isString) return Encoded.Value(value)
+        val t = value.content
+        val type = spec.type
+        // 表单把未设置的键显示成默认值；原样提交回来时不写文件（只改用户真正改过的键）。
+        if (current == null && spec.default != null && t == display(spec, spec.default)) return Encoded.NoChange
+        if (t.isBlank() && type !is PiSettingType.Str) return if (current == null) Encoded.NoChange else Encoded.Value(null)
+        return when (type) {
+            PiSettingType.Bool -> t.trim().toBooleanStrictOrNull()?.let { Encoded.Value(JsonPrimitive(it)) } ?: Encoded.Invalid("需要 true 或 false")
+            is PiSettingType.Number -> t.trim().let { n -> n.toLongOrNull()?.let { Encoded.Value(JsonPrimitive(it)) } ?: n.toDoubleOrNull()?.let { Encoded.Value(JsonPrimitive(it)) } } ?: Encoded.Invalid("需要数字")
+            is PiSettingType.Enum -> if (t !in type.values) Encoded.Invalid("可选值：${type.values.joinToString("、")}") else Encoded.Value(scalar(t))
+            PiSettingType.StrList -> Encoded.Value(kotlinx.serialization.json.JsonArray(t.split('\n', ',').map { it.trim() }.filter { it.isNotEmpty() }.map { JsonPrimitive(it) }))
+            PiSettingType.Str -> when {
+                t.isEmpty() -> if (current == null) Encoded.NoChange else Encoded.Value(null)
+                isMixed(spec) -> Encoded.Value(scalar(t.trim()))
+                else -> Encoded.Value(JsonPrimitive(t))
+            }
+        }
+    }
+
+    /** 枚举 / 混合类型的文字转回 JSON：布尔、整数、其余为字符串。 */
+    private fun scalar(t: String): JsonElement = t.toBooleanStrictOrNull()?.let { JsonPrimitive(it) } ?: t.toLongOrNull()?.let { JsonPrimitive(it) } ?: JsonPrimitive(t)
+
+    /** 表单显示用：字符串原样，其余（布尔、数字、对象、数组）用 JSON 文本；字符串列表每行一个。 */
+    fun display(spec: PiSettingSpec, v: JsonElement?): String = when {
+        v == null -> ""
+        spec.type == PiSettingType.StrList && v is kotlinx.serialization.json.JsonArray -> v.joinToString("\n") { (it as? JsonPrimitive)?.content ?: it.toString() }
+        v is JsonPrimitive -> v.content
+        else -> v.toString()
     }
 }
 
@@ -149,7 +237,7 @@ object PiSettingsForms {
     fun valuesFor(s: PiSettings, group: String): Map<String, String> =
         s.schema.specs.filter { it.group == group }.associate { spec ->
             val v = s.values.value[spec.key] ?: spec.default
-            spec.key to when (v) { null -> ""; is JsonPrimitive -> v.content; else -> v.toString() }
+            spec.key to PiSettingsCodec.display(spec, v)
         }
 }
 
@@ -164,86 +252,97 @@ object PiSettingsSchemaV150 : PiSettingsSchema {
         PiSettingSpec(key, group, label, PiSettingType.Number(min = 0.0, integer = integer), def?.let { JsonPrimitive(it) }, featureRef = "§8 $group")
     private fun s(group: String, key: String, label: String, def: String? = null, help: String? = null) =
         PiSettingSpec(key, group, label, PiSettingType.Str, def?.let { JsonPrimitive(it) }, help, featureRef = "§8 $group")
-    private fun e(group: String, key: String, label: String, values: List<String>, def: String? = null) =
-        PiSettingSpec(key, group, label, PiSettingType.Enum(values), def?.let { JsonPrimitive(it) }, featureRef = "§8 $group")
+    private fun e(group: String, key: String, label: String, values: List<String>, def: String? = null, help: String? = null) =
+        PiSettingSpec(key, group, label, PiSettingType.Enum(values), def?.let { JsonPrimitive(it) }, help, featureRef = "§8 $group")
+    /** 「数字或关键字」混合类型（如 `"auto"` | number、number | `"disabled"`）：文本输入，保存时按值转成数字或字符串。 */
+    private fun x(group: String, key: String, label: String, def: String? = null, help: String? = null) =
+        PiSettingSpec(key, group, label, PiSettingType.Str, def?.let { JsonPrimitive(it) }, help ?: MIXED_HELP, featureRef = "§8 $group")
+    /** 对象 / 数组类型的键：按 JSON 结构编辑，保存前校验，空白 = 不改（绝不用字符串覆盖原对象）。 */
+    private fun o(group: String, key: String, label: String, array: Boolean = false) =
+        PiSettingSpec(key, group, label, PiSettingType.Str, null, if (array) ARRAY_HELP else OBJECT_HELP, featureRef = "§8 $group")
     private fun l(group: String, key: String, label: String) =
         PiSettingSpec(key, group, label, PiSettingType.StrList, featureRef = "§8 $group")
 
     private const val NOT_MOBILE = "手机上不适用（只读）"
     private const val TERM_ONLY = "仅终端形态"
+    const val OBJECT_HELP = "JSON 对象；保存前校验，留空不改"
+    const val ARRAY_HELP = "JSON 数组；保存前校验，留空不改"
+    const val MIXED_HELP = "数字或关键字"
 
     override val specs: List<PiSettingSpec> = listOf(
         s("模型", "defaultProvider", "默认服务商"),
         s("模型", "defaultModel", "默认模型"),
-        e("模型", "defaultThinkingLevel", "默认思考强度", listOf("off", "minimal", "low", "medium", "high", "xhigh"), "medium"),
-        s("模型", "modelThinkingLevels", "每模型思考档"),
-        s("模型", "thinkingBudgets", "思考预算"),
+        e("模型", "defaultThinkingLevel", "默认思考强度", listOf("off", "minimal", "low", "medium", "high", "xhigh", "max"), "medium"),
+        o("模型", "modelThinkingLevels", "每模型思考档（provider/modelId → 档位）"),
+        o("模型", "thinkingBudgets", "思考预算（minimal/low/medium/high → token）"),
         l("模型", "enabledModels", "常用模型"),
         b("显示", "hideThinkingBlock", "隐藏思考块", false),
         b("显示", "showCacheMissNotices", "显示缓存未命中提示", false),
-        b("显示", "quietStartup", "安静启动"),
+        e("显示", "quietStartup", "安静启动", listOf("false", "true", "header"), "false"),
         s("显示", "theme", "主题（终端形态）", "system"),
-        e("缓存", "cacheWarming", "缓存预热", listOf("off", "streaming", "always"), "streaming"),
+        e("缓存", "cacheWarming", "缓存预热", listOf("off", "streaming", "idle"), "streaming"),
         e("队列", "steeringMode", "引导消息投递", listOf("all", "one-at-a-time"), "one-at-a-time"),
         e("队列", "followUpMode", "排队消息投递", listOf("all", "one-at-a-time"), "one-at-a-time"),
         s("编辑器", "externalEditor", "外部编辑器", help = NOT_MOBILE),
         e("编辑器", "doubleEscapeAction", "双击 Esc", listOf("tree", "fork", "none"), "tree"),
         n("编辑器", "autocompleteMaxVisible", "补全最多显示", 5),
         n("编辑器", "editorPaddingX", "编辑器左右留白", 0),
-        b("编辑器", "showHardwareCursor", "硬件光标", help = NOT_MOBILE),
+        b("编辑器", "showHardwareCursor", "硬件光标", false, help = NOT_MOBILE),
         e("树", "treeFilterMode", "分支树筛选", listOf("default", "no-tools", "user-only", "labeled-only", "all"), "default"),
-        n("树", "branchSummary.reserveTokens", "分支摘要预留 token"),
-        b("树", "branchSummary.skipPrompt", "分支摘要不再询问"),
-        e("信任", "defaultProjectTrust", "项目信任默认", listOf("ask", "trust", "distrust"), "ask"),
+        n("树", "branchSummary.reserveTokens", "分支摘要预留 token", 16384),
+        b("树", "branchSummary.skipPrompt", "分支摘要不再询问", false),
+        e("信任", "defaultProjectTrust", "项目信任默认", listOf("ask", "always", "never"), "ask"),
         l("工具", "defaultTools", "默认工具"),
-        e("工具", "codemode.mode", "codemode 模式", listOf("off", "inline", "tool")),
-        n("工具", "codemode.inlineBudget", "codemode 内联预算"),
+        e("工具", "codemode.mode", "codemode 模式", listOf("on", "only"), "on"),
+        n("工具", "codemode.inlineBudget", "codemode 内联预算", 3000),
         s("会话", "sessionDir", "会话目录"),
-        e("会话", "sessionShareDestination", "分享目标", listOf("auto", "gist", "viewer"), "auto"),
+        e("会话", "sessionShareDestination", "分享目标", listOf("auto", "gist", "radius"), "auto"),
         b("压缩", "compaction.enabled", "自动压缩", true),
         n("压缩", "compaction.reserveTokens", "压缩预留 token", 16384),
         n("压缩", "compaction.keepRecentTokens", "保留最近 token", 20000),
-        s("压缩", "compaction.modelOverrides", "压缩用模型"),
-        s("全屏 TUI", "tuiMode", "TUI 模式", help = TERM_ONLY),
-        b("全屏 TUI", "fullscreenExitOutput", "退出时输出", help = TERM_ONLY),
-        b("全屏 TUI", "fullscreenScrollbar", "滚动条", help = TERM_ONLY),
-        b("全屏 TUI", "fullscreenCopyOnSelect", "选中即复制", help = TERM_ONLY),
-        n("全屏 TUI", "fullscreenWheelScrollLines", "滚轮行数"),
-        n("全屏 TUI", "outputPad", "输出留白"),
-        b("终端", "terminal.showImages", "内联图片", help = TERM_ONLY),
-        n("终端", "terminal.imageWidthCells", "图片宽度（列）"),
-        b("终端", "terminal.clearOnShrink", "缩小时清屏", help = TERM_ONLY),
-        b("终端", "terminal.showTerminalProgress", "终端进度", help = TERM_ONLY),
-        b("终端", "terminal.hyperlinks", "超链接", help = TERM_ONLY),
-        s("终端", "terminal.images", "图片协议", help = TERM_ONLY),
-        b("终端", "terminal.trueColor", "真彩色", help = TERM_ONLY),
+        o("压缩", "compaction.modelOverrides", "按模型的压缩 token 设置（provider/modelId → 对象）"),
+        e("全屏 TUI", "tuiMode", "TUI 模式", listOf("regular", "fullscreen"), "fullscreen", help = TERM_ONLY),
+        e("全屏 TUI", "fullscreenExitOutput", "退出时输出", listOf("transcript", "resume-hint"), help = TERM_ONLY),
+        e("全屏 TUI", "fullscreenScrollbar", "滚动条", listOf("auto", "always", "hidden"), "auto", help = TERM_ONLY),
+        b("全屏 TUI", "fullscreenCopyOnSelect", "选中即复制", true, help = TERM_ONLY),
+        x("全屏 TUI", "fullscreenWheelScrollLines", "滚轮行数（auto 或数字，仅终端形态）", "auto"),
+        e("全屏 TUI", "outputPad", "输出留白", listOf("0", "1"), help = TERM_ONLY),
+        b("终端", "terminal.showImages", "内联图片", true, help = TERM_ONLY),
+        n("终端", "terminal.imageWidthCells", "图片宽度（列）", 60),
+        b("终端", "terminal.clearOnShrink", "缩小时清屏", false, help = TERM_ONLY),
+        b("终端", "terminal.showTerminalProgress", "终端进度", false, help = TERM_ONLY),
+        e("终端", "terminal.hyperlinks", "超链接", listOf("true", "false", "auto"), help = TERM_ONLY),
+        e("终端", "terminal.images", "图片协议", listOf("auto", "kitty", "iterm2", "false"), "auto", help = TERM_ONLY),
+        e("终端", "terminal.trueColor", "真彩色", listOf("true", "false", "auto"), help = TERM_ONLY),
         b("图片", "images.autoResize", "自动缩放（最大 2000×2000）", true),
         b("图片", "images.blockImages", "不发送图片", false),
-        n("Markdown", "markdown.codeBlockIndent", "代码块缩进"),
+        s("Markdown", "markdown.codeBlockIndent", "代码块缩进前缀", "  "),
         e("Markdown", "markdown.mermaid", "Mermaid", listOf("off", "streaming", "final"), "streaming"),
-        e("网络", "transport", "传输", listOf("auto", "sse", "websocket"), "auto"),
+        e("网络", "transport", "传输", listOf("auto", "sse", "websocket", "websocket-cached"), "auto"),
         s("网络", "httpProxy", "HTTP 代理"),
-        n("网络", "httpIdleTimeoutMs", "HTTP 空闲超时（毫秒）", 300000),
-        n("网络", "websocketConnectTimeoutMs", "WebSocket 连接超时（毫秒）", 15000),
+        x("网络", "httpIdleTimeoutMs", "HTTP 空闲超时（毫秒或 disabled）", "300000"),
+        x("网络", "websocketConnectTimeoutMs", "WebSocket 连接超时（毫秒或 disabled）", "15000"),
         b("重试", "retry.enabled", "自动重试", true),
         n("重试", "retry.maxRetries", "最多重试次数", 3),
         n("重试", "retry.baseDelayMs", "首次重试间隔（毫秒）", 2000),
-        n("重试", "retry.maxAgentDelayMs", "最长等待（毫秒）"),
-        s("重试", "retry.provider", "按服务商重试设置"),
+        n("重试", "retry.maxAgentDelayMs", "最长等待（毫秒）", 60000),
+        n("重试", "retry.provider.timeoutMs", "服务商请求超时（毫秒）"),
+        n("重试", "retry.provider.maxRetries", "服务商层重试次数", 0),
+        n("重试", "retry.provider.maxRetryDelayMs", "服务商建议等待上限（毫秒，0 = 不限）", 60000),
         s("Shell", "shellPath", "Shell 路径"),
         s("Shell", "shellCommandPrefix", "命令前缀"),
-        s("包与资源", "npmCommand", "npm 命令"),
-        s("包与资源", "selfUpdateCommand", "自更新命令"),
-        l("包与资源", "packages", "包"),
+        l("包与资源", "npmCommand", "npm 命令（每行一个参数）"),
+        l("包与资源", "selfUpdateCommand", "自更新命令（每行一个参数）"),
+        o("包与资源", "packages", "包（JSON 数组，可含对象）", array = true),
         l("包与资源", "extensions", "扩展"),
         l("包与资源", "skills", "技能"),
         l("包与资源", "prompts", "提示模板"),
         l("包与资源", "themes", "主题"),
         b("包与资源", "enableSkillCommands", "技能斜杠命令", true),
-        b("其他", "collapseChangelog", "折叠更新日志"),
+        b("其他", "collapseChangelog", "折叠更新日志", false),
         b("其他", "enableInstallTelemetry", "安装遥测", true),
         b("其他", "enableAnalytics", "使用统计", false),
-        b("其他", "warnings.anthropicExtraUsage", "Anthropic 额外用量提醒"),
+        b("其他", "warnings.anthropicExtraUsage", "Anthropic 额外用量提醒", true),
         // 进程环境变量类：改了要重启引擎（§5.5，唯一允许重启的路径）。
         PiSettingSpec("env.PI_OFFLINE", "网络", "离线启动（PI_OFFLINE）", PiSettingType.Bool, restartsEngine = true, featureRef = "§8.1 进程"),
         PiSettingSpec("env.PI_TELEMETRY", "其他", "遥测（PI_TELEMETRY）", PiSettingType.Bool, restartsEngine = true, featureRef = "§8.1 进程"),
