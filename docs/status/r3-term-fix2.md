@@ -11,4 +11,8 @@
 
 ## 进度
 - [x] merge main（10:13）
-- [ ] 读审查评论与前任 status
+- [x] 读审查评论与前任 status（10:16）
+- [x] 10:30 推送 Important 1 第一批与 Important 2（本地没有 JDK 和 Android SDK，靠 CI 编译）：
+  - 慢帧：整屏只订阅去掉 items 的 ChatState（derivedStateOf），流式 delta 只让时间线子组合重组；贴底只在行数变化时滚动（行高固定）；流式 Markdown 用「稳定前缀缓存 + 只排最后一段」（Markdown.stableCut、TermFormatter.mdLines），前缀的行对象跨 delta 复用。测试 TermStreamingFormatTest（每个前缀长度都与整段排版逐行相同、行对象复用）。
+  - ↑↓：HistoryNav（开始翻时保存草稿、编辑即退出浏览、↓ 越过最新一条恢复草稿），TermSurface 接入；测试 HistoryNavTest（3 条）。
+- [ ] 下一步：看 CI；Nit 1–3、Form.actions、确认框、OAuth 重试

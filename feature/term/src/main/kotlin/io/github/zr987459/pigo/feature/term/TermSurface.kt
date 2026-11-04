@@ -27,6 +27,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.structuralEqualityPolicy
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -167,7 +169,10 @@ private fun TermScreen(
     val tokens = LocalPiTokens.current
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    val chat by host.chat.collectAsState()
+    // 审查第 2 轮慢帧：整屏只订阅「去掉 items 的会话元数据」，流式 delta（只改 items）不再让页眉、编辑器、页脚、状态行重组；
+    // items 只在时间线（下面 BoxWithConstraints 的子组合）里读。
+    val chatFull = host.chat.collectAsState()
+    val chat by remember { derivedStateOf(structuralEqualityPolicy()) { chatFull.value.copy(items = emptyList()) } }
     val draft by host.draft.collectAsState()
     val overlays by host.overlay.items.collectAsState()
     val localBlocks by host.localBlocks.collectAsState()
@@ -183,7 +188,7 @@ private fun TermScreen(
     var fontSp by rememberSaveable { mutableFloatStateOf(13f) }
     var toolsExpanded by rememberSaveable { mutableStateOf(false) }
     var expandedKeys by remember { mutableStateOf(emptySet<String>()) }
-    var historyIndex by remember { mutableStateOf(-1) }
+    val historyNav = remember { HistoryNav() }
     var stripVisible by rememberSaveable { mutableStateOf(true) }
     var toast by remember { mutableStateOf<String?>(null) }
     var commands by remember { mutableStateOf(emptyList<SlashCommand>()) }
@@ -265,7 +270,7 @@ private fun TermScreen(
             run(id, args)
             return
         }
-        historyIndex = -1
+        historyNav.reset()
         val bash = host.draft.value.bashMode != BashMode.NONE
         val job = run(if (followUp) "send.followUp" else "send")
         if (bash) { localBashJob = job; job.invokeOnCompletion { if (localBashJob === job) localBashJob = null } }
@@ -288,14 +293,21 @@ private fun TermScreen(
         }
     }
 
-    fun historyStep(up: Boolean) {
-        if (host.draft.value.text.isNotEmpty() && historyIndex == -1) return
-        if (history.isEmpty()) return
-        if (!up && historyIndex == -1) return
-        historyIndex = if (up) (if (historyIndex == -1) history.size - 1 else (historyIndex - 1).coerceAtLeast(0))
-        else (historyIndex + 1).let { if (it >= history.size) -1 else it }
-        setDraftText(if (historyIndex == -1) "" else history[historyIndex])
+    /**
+     * ↑↓ 翻历史（审查第 2 轮 Important 2，照 pi-tui）：开始翻时保存草稿；编辑调出的文字即退出浏览（见下方 LaunchedEffect）；
+     * ↓ 越过最新一条恢复保存的草稿。[fromKeyboard] 为真时（外接键盘）只在草稿为空或正在浏览时翻，否则 ↑ 留给光标移动。
+     */
+    fun historyStep(up: Boolean, fromKeyboard: Boolean = false): Boolean {
+        val text = host.draft.value.text
+        historyNav.onDraftChanged(text) // 同步检查一次：编辑后立刻按键时 LaunchedEffect 可能还没跑
+        if (fromKeyboard && text.isNotEmpty() && !historyNav.browsing) return false
+        val next = if (up) historyNav.up(history, text) else historyNav.down(history)
+        next?.let { setDraftText(it) }
+        return next != null
     }
+
+    // 草稿被编辑（本形态输入或另一形态写入）→ 与调出的历史条目不同即退出浏览，之后 ↑↓ 不再覆盖它。
+    LaunchedEffect(draft.text) { historyNav.onDraftChanged(draft.text) }
 
     fun onStripKey(key: String) {
         when (key) {
@@ -325,7 +337,6 @@ private fun TermScreen(
     }
 
     // ---- 阅读位置（§5.3）与贴底跟随：在下面的 BoxWithConstraints 里（要用按行拆分后的 rows） ----
-    val items = chat.items
     val listState = rememberLazyListState()
     val headerCount = 1
     var follow by remember { mutableStateOf(host.scrollAnchor.value?.followBottom ?: true) }
@@ -359,7 +370,7 @@ private fun TermScreen(
                     "tui.input.submit" in ids -> { submit(); true }
                     // 编辑器单行时 ↑ / ↓ 翻历史（Nit 2，pi 的 tui.editor.cursorUp 在首行时翻历史）
                     (chord == "up" || chord == "down") && top == null && !host.draft.value.text.contains('\n') &&
-                        (host.draft.value.text.isEmpty() || historyIndex != -1) -> { historyStep(up = chord == "up"); true }
+                        (host.draft.value.text.isEmpty() || historyNav.browsing) -> historyStep(up = chord == "up", fromKeyboard = true)
                     "app.message.followUp" in ids -> { submit(followUp = true); true }
                     "app.tools.expand" in ids && host.overlay.top == null -> { toolsExpanded = !toolsExpanded; run("tools.expandAll"); true }
                     else -> {
@@ -375,6 +386,7 @@ private fun TermScreen(
             val style = monoStyle(fontSp.sp, tokens)
             val charW = remember(fontSp, tokens) { measurer.measure("M", style).size.width.coerceAtLeast(1) }
             val cols = with(density) { (maxWidth.toPx() / charW).toInt() }.coerceAtLeast(20)
+            val items = chatFull.value.items
             val opts = FormatOptions(width = cols, hideThinking = hideThinking, toolsExpanded = toolsExpanded, expandedKeys = expandedKeys, cwd = cwd, home = home, expandKey = expandKey)
             // 按行拆分（审查第 1 轮慢帧修复）：只重排变化的消息，LazyColumn 只组合可见行。
             val rows = remember(items, opts) { rowCache.rows(items, opts) }
@@ -424,8 +436,9 @@ private fun TermScreen(
                     host.scrollAnchor.value = ScrollAnchor(key, offPx, followBottom = f)
                 }
             }
-            // 贴底跟随：新行（含同一条回复变长）到来且原来贴底时滚到底。
-            LaunchedEffect(rows.size, rows.lastOrNull(), localRows.size) {
+            // 贴底跟随：行数变化且原来贴底时滚到底。每行固定同一高度，末行内容变化不改变内容总高度，
+            // 所以同一行内的 delta 不触发滚动（审查第 2 轮慢帧：原来每个 delta 都 scrollToItem，多一次布局）。
+            LaunchedEffect(rows.size, localRows.size) {
                 if (follow && !listState.isScrollInProgress) scrollToBottom()
             }
 

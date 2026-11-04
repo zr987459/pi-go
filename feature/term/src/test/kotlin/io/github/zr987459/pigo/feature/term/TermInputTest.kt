@@ -109,3 +109,41 @@ class TermInputTest {
         org.junit.Assert.assertEquals("next", io.github.zr987459.pigo.feature.term.keys.KeyBindings.ACTION_ARGS["tui.altScreen.nextPrompt"])
     }
 }
+
+/** PR #18 审查第 2 轮 Important 2：↑↓ 翻历史不覆盖、不清空共享草稿（pi-tui 行为）。 */
+class HistoryNavTest {
+    private val history = listOf("第一条", "修一下 foo")
+
+    @org.junit.Test
+    fun upSavesDraftAndDownPastNewestRestoresIt() {
+        val nav = HistoryNav()
+        org.junit.Assert.assertEquals("修一下 foo", nav.up(history, "写到一半的草稿"))
+        org.junit.Assert.assertEquals("第一条", nav.up(history, "修一下 foo"))
+        org.junit.Assert.assertEquals("第一条", nav.up(history, "第一条")) // 顶部停住
+        org.junit.Assert.assertEquals("修一下 foo", nav.down(history))
+        org.junit.Assert.assertEquals("写到一半的草稿", nav.down(history)) // 越过最新一条 → 恢复草稿而不是清空
+        org.junit.Assert.assertFalse(nav.browsing)
+        org.junit.Assert.assertNull(nav.down(history)) // 不在浏览时 ↓ 不改草稿
+    }
+
+    @org.junit.Test
+    fun editingRecalledEntryExitsBrowsingAndKeepsEdit() {
+        val nav = HistoryNav()
+        nav.up(history, "")
+        nav.onDraftChanged("修一下 foo") // 自己写进去的那次，不算编辑
+        org.junit.Assert.assertTrue(nav.browsing)
+        nav.onDraftChanged("修一下 foo 和 bar") // 用户编辑
+        org.junit.Assert.assertFalse(nav.browsing)
+        org.junit.Assert.assertNull(nav.down(history)) // ↓ 不再动草稿
+        // 再按 ↑：从编辑后的文字开始翻，越过最新一条时回到它
+        org.junit.Assert.assertEquals("修一下 foo", nav.up(history, "修一下 foo 和 bar"))
+        org.junit.Assert.assertEquals("修一下 foo 和 bar", nav.down(history))
+    }
+
+    @org.junit.Test
+    fun emptyHistoryDoesNothing() {
+        val nav = HistoryNav()
+        org.junit.Assert.assertNull(nav.up(emptyList(), "草稿"))
+        org.junit.Assert.assertFalse(nav.browsing)
+    }
+}

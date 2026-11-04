@@ -95,6 +95,40 @@ object Markdown {
         return idx >= 0 && next >= 0 && !src.substring(idx + lastText.length, next).contains("\n\n")
     }
 
+    /**
+     * 流式增量的切分点（审查第 2 轮慢帧）：最后一个「代码围栏之外的空行」之前那个换行的位置；没有返回 -1。
+     * 空行总是结束一个块（段落、列表、引用都在空行处断开，围栏内除外），而 [render] 在块之间固定空一行，所以
+     * `render(全文) == render(前缀) + 空行 + render(其余)`。流式时前缀的排版结果可以缓存，每个 delta 只排最后一段。
+     */
+    fun stableCut(text: String): Int {
+        var pos = 0
+        var fence: String? = null
+        var cut = -1
+        var seenContent = false
+        val n = text.length
+        while (pos <= n) {
+            var end = text.indexOf('\n', pos)
+            if (end < 0) end = n
+            var a = pos
+            while (a < end && (text[a] == ' ' || text[a] == '\t')) a++
+            val blank = a == end
+            if (fence != null) {
+                if (text.startsWith(fence.take(3), a)) fence = null
+            } else if (blank) {
+                if (seenContent && pos > 0) cut = pos - 1
+            } else {
+                seenContent = true
+                if (text.startsWith("```", a) || text.startsWith("~~~", a)) {
+                    FENCE.matchEntire(text.substring(pos, end))?.let { fence = it.groupValues[1] }
+                }
+            }
+            if (end == n) break
+            pos = end + 1
+        }
+        // 围栏没闭合：切分点之后在围栏里也没关系（前缀在围栏之前），但切分点本身必须在围栏外——上面只在围栏外记录。
+        return cut
+    }
+
     // ---------------- 行内 ----------------
 
     private val INLINE = Regex("""(\*\*|__)(.+?)\1|(?<![*\w])([*_])(?!\s)(.+?)(?<!\s)\3(?![*\w])|`([^`]+)`|\[([^\]]*)]\(([^)\s]+)(?:\s+"[^"]*")?\)|~~(.+?)~~""")

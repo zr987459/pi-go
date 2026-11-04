@@ -85,10 +85,10 @@ object TermFormatter {
             when (b) {
                 is ContentBlock.Thinking -> {
                     if (o.hideThinking) out += padded(listOf(Span("Thinking...", "thinkingText", italic = true)), o.width, action = "thinking.toggle")
-                    else for (l in Markdown.render(b.text.trim(), inner, baseToken = "thinkingText", italic = true)) out += padded(l, o.width, action = "thinking.toggle")
+                    else out += mdLines(b.text.trim(), o, "thinkingText", italic = true, action = "thinking.toggle", streaming = a.streaming)
                     if (idx < visible.size - 1) out += blank()
                 }
-                is ContentBlock.Text -> for (l in Markdown.render(b.text.trim(), inner)) out += padded(l, o.width)
+                is ContentBlock.Text -> out += mdLines(b.text.trim(), o, null, italic = false, action = null, streaming = a.streaming)
                 else -> Unit
             }
         }
@@ -100,6 +100,37 @@ object TermFormatter {
             }
         }
         return out
+    }
+
+    private class StreamMemo(val prefix: String, val lines: List<TermLine>)
+
+    /** 流式中消息的前缀排版缓存（键 = 列宽 | token | 斜体 | 动作）。只在流式时用；结束后整段重排。 */
+    private val streamMemo = object : LinkedHashMap<String, StreamMemo>(8, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, StreamMemo>?): Boolean = size > 8
+    }
+
+    /**
+     * Markdown 文本 → 带内边距的行。流式时（审查第 2 轮慢帧）按 [Markdown.stableCut] 切成「稳定前缀 + 最后一段」：
+     * 前缀的行对象从缓存复用（同一实例，行缓存与 Compose 都以引用相等跳过），每个 delta 只解析、折行最后一段。
+     * 结果与整段排版逐行相同（`TermStreamingFormatTest`）。
+     */
+    internal fun mdLines(text: String, o: FormatOptions, base: String?, italic: Boolean, action: String?, streaming: Boolean): List<TermLine> {
+        val inner = o.width - 2 * PAD
+        fun full(t: String): List<TermLine> = Markdown.render(t, inner, baseToken = base, italic = italic).map { padded(it, o.width, action = action) }
+        if (!streaming) return full(text)
+        val cut = Markdown.stableCut(text)
+        if (cut <= 0) return full(text)
+        val prefix = text.substring(0, cut)
+        val k = "${o.width}|$base|$italic|$action"
+        val head = synchronized(streamMemo) { streamMemo[k]?.takeIf { it.prefix == prefix }?.lines }
+            ?: full(prefix).also { h -> synchronized(streamMemo) { streamMemo[k] = StreamMemo(prefix, h) } }
+        val tail = text.substring(cut)
+        val rest = if (tail.isBlank()) emptyList() else full(tail)
+        return when {
+            head.isEmpty() -> rest
+            rest.isEmpty() -> head
+            else -> head + padded(emptyList(), o.width, action = action) + rest
+        }
     }
 
     // ---------------- 工具块 ----------------

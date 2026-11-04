@@ -147,3 +147,45 @@ object TermInput {
         ).filter { it.items.isNotEmpty() }
     }
 }
+
+/**
+ * ↑↓ 翻历史（pi-tui Editor 的 history 行为，PR #18 审查第 2 轮 Important 2）：
+ * - 开始翻（[index] 从 -1 到最新一条）时保存当前草稿；
+ * - 用户在调出的历史上一旦编辑（草稿 ≠ 当前显示的历史条目），就退出浏览，这段文字成为新草稿（[onDraftChanged]）；
+ * - ↓ 越过最新一条时恢复保存的草稿，而不是清空。
+ * 返回值是要写进草稿的文字；null 表示不处理（不改草稿）。
+ */
+class HistoryNav {
+    var index: Int = -1
+        private set
+    private var saved: String = ""
+    private var shown: String? = null
+
+    val browsing: Boolean get() = index != -1
+
+    fun up(history: List<String>, draft: String): String? {
+        if (history.isEmpty()) return null
+        if (index == -1) { saved = draft; index = history.size - 1 }
+        else if (index > 0) index-- else return history[0].also { shown = it }
+        index = index.coerceIn(0, history.size - 1)
+        return history[index].also { shown = it }
+    }
+
+    fun down(history: List<String>): String? {
+        if (index == -1) return null
+        return if (index + 1 >= history.size) {
+            index = -1; shown = null
+            saved.also { saved = "" }
+        } else {
+            index++
+            history[index].also { shown = it }
+        }
+    }
+
+    /** 草稿变了（编辑器输入或另一形态写入）：与当前显示的历史条目不同就退出浏览，不再覆盖它。 */
+    fun onDraftChanged(text: String) {
+        if (index != -1 && text != shown) reset()
+    }
+
+    fun reset() { index = -1; saved = ""; shown = null }
+}
