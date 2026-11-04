@@ -18,7 +18,7 @@ import io.github.zr987459.pigo.contract.session.FormField
 import io.github.zr987459.pigo.contract.session.OverlayModel
 import io.github.zr987459.pigo.contract.session.SelectGroup
 import io.github.zr987459.pigo.contract.session.SelectItem
-import io.github.zr987459.pigo.contract.session.TreeNode
+import io.github.zr987459.pigo.contract.session.TreeFilter
 import io.github.zr987459.pigo.contract.session.UiForm
 import kotlinx.coroutines.flow.toList
 import kotlinx.serialization.json.JsonPrimitive
@@ -42,7 +42,37 @@ interface SessionOps {
 
     /** 重新加载资源（桥接 `/pigo:reload`）。 */
     suspend fun reload(): Outcome<Unit>
+
+    /**
+     * `/tree` 选中一条记录：同一会话文件内把叶子切过去（r3/core `PiBridge.treeNavigate`，桥接 `/pigo:tree-nav`；
+     * 桥接不可用时由实现退化为 fork，见 [TreeNav.viaFork]）。
+     */
+    suspend fun treeNavigate(entryId: String, summarize: Boolean): Outcome<TreeNav>
+
+    /**
+     * 在运行环境（PRoot）里直接执行一条命令，**不经 RPC `bash`**，所以不会写进当前会话文件（审查 N4）。
+     * 用于 `pi list`、`pi update --models`、`pi -p`、`gh gist create`、读包内 CHANGELOG.md 等。
+     */
+    suspend fun runGuest(command: String, timeoutMs: Long = 120_000): Outcome<GuestOutput>
+
+    /** 把文字写进 App 缓存目录下的文件（问题报告），返回宿主路径，供分享。 */
+    suspend fun writeReport(fileName: String, text: String): Outcome<String>
+
+    /** 在另一个工作目录新建会话（pi 的 cwd 是进程目录，必须重启引擎；调用方已先确认，§5.5）。 */
+    suspend fun newSessionInDir(dir: String): Outcome<Unit>
 }
+
+/** [SessionOps.treeNavigate] 的结果（字段与 r3/core 的 `TreeNavResult` 一致）。 */
+data class TreeNav(
+    val leafId: String?,
+    val cancelled: Boolean = false,
+    val viaFork: Boolean = false,
+    val editorText: String? = null,
+    val unconfirmed: Boolean = false,
+)
+
+/** [SessionOps.runGuest] 的结果。 */
+data class GuestOutput(val exitCode: Int, val output: String)
 
 /**
  * [PiActions] 的唯一实现（DESIGN-r3 §5.4）：两种形态共用。**只返回结果**，压栈与本地块由
@@ -91,7 +121,11 @@ class PiActionsImpl(
                     FormField("prompt", "问题", io.github.zr987459.pigo.contract.settings.PiSettingType.Str),
                     FormField("json", "输出 JSON 事件流", io.github.zr987459.pigo.contract.settings.PiSettingType.Bool),
                 ), submitLabel = "提问"))
-            } else runBash(OneShot.command(args, json = false), exclude = true, title = "一次性提问")
+            } else {
+                // args：问题文本；以 "--json " 开头时输出 JSON 事件流（pi --mode json -p）。
+                val json = args.startsWith(OneShot.JSON_PREFIX)
+                guest(OneShot.command(args.removePrefix(OneShot.JSON_PREFIX), json), "一次性提问", timeoutMs = 600_000)
+            }
 
             // ---- 会话 ----
             "session.new" -> host.sessions.newSession(false).toResult()
@@ -109,7 +143,14 @@ class PiActionsImpl(
                 }
             } else x.fork(args).toResult()
             "session.clone" -> x.clone().toResult()
-            "session.tree", "tree.filter", "tree.fold", "tree.time" -> treeOverlay(id)
+            "session.tree" -> if (args.isNullOrBlank()) treeOverlay(TreeView()) else treeNav(args)
+            "tree.filter" -> treeOverlay(treeView.copy(filter = TreeFilter.entries.firstOrNull { it.piName == args?.trim() } ?: nextFilter(treeView.filter)))
+            "tree.fold" -> treeOverlay(treeView.copy(collapsed = when {
+                args.isNullOrBlank() -> if (treeView.collapsed.isEmpty()) ALL_COLLAPSED else emptySet()
+                args.trim() in treeView.collapsed -> treeView.collapsed - args.trim()
+                else -> treeView.collapsed + args.trim()
+            }))
+            "tree.time" -> treeOverlay(treeView.copy(showTime = !treeView.showTime))
             "tree.label" -> if (args == null) ActionResult.Toast("在分支树里长按一条记录设置标签") else {
                 val (entry, label) = args.split(' ', limit = 2).let { it[0] to it.getOrNull(1) }
                 ops.setLabel(entry, label).toResult()
@@ -126,11 +167,24 @@ class PiActionsImpl(
                     is Outcome.Err -> ActionResult.Toast("删除失败：${r.message}")
                 }
             }
-            "session.cwd" -> ActionResult.Toast("选择新会话的工作目录")
+            "session.cwd" -> when {
+                args.isNullOrBlank() -> ActionResult.Overlay(OverlayModel.Form("overlay:session.cwd", spec.title,
+                    listOf(FormField("dir", "工作目录（运行环境里的路径，如 /root/proj）", io.github.zr987459.pigo.contract.settings.PiSettingType.Str,
+                        "pi 的工作目录是进程目录：在其他目录新建会话会重启引擎（当前生成会中止）")),
+                    values = mapOf("dir" to ""), submitLabel = "下一步"))
+                args.startsWith(CONFIRM_PREFIX) -> ops.newSessionInDir(args.removePrefix(CONFIRM_PREFIX).trim()).toResult()
+                else -> ActionResult.Overlay(OverlayModel.Confirm("overlay:session.cwd.confirm:${args.trim()}", "在其他目录新建会话",
+                    "将在 ${args.trim()} 重启引擎并新建会话；正在生成的回复会中止。", confirmLabel = "重启并新建", dangerous = true))
+            }
             "session.info" -> sessionInfo()
-            "session.share" -> runBash("pi --share ${shellQuote(host.chat.value.sessionFile ?: "")}", exclude = true, title = "分享")
+            "session.share" -> share()
             "copy.last" -> when (val r = x.lastAssistantText()) {
-                is Outcome.Ok -> if (r.value.isNullOrEmpty()) ActionResult.Toast("还没有助手回复") else { lastCopied = r.value; ActionResult.Toast("已复制最后一条回复") }
+                is Outcome.Ok -> when {
+                    r.value.isNullOrEmpty() -> ActionResult.Toast("还没有助手回复")
+                    // 文字交给形态写进系统剪贴板（SessionHost.clipboardRequests）；没有形态在收集就不说「已复制」。
+                    host.requestClipboard(r.value!!) -> ActionResult.Toast("已复制最后一条回复")
+                    else -> ActionResult.Toast("复制失败：界面未就绪")
+                }
                 is Outcome.Err -> ActionResult.Toast(r.message)
             }
             "transcript.search" -> ActionResult.Overlay(OverlayModel.SelectList("overlay:transcript.search", spec.title, query = args.orEmpty()))
@@ -150,8 +204,17 @@ class PiActionsImpl(
             "auth.login" -> modelPanels?.let { ActionResult.Overlay(if (args.isNullOrBlank()) it.providerList() else it.oauthFlow(args)) } ?: modelFallback()
             "auth.logout" -> modelPanels?.let { ActionResult.Overlay(it.logoutPicker()) } ?: modelFallback()
             "provider.custom" -> modelPanels?.let { ActionResult.Overlay(it.customProviderForm(args)) } ?: modelFallback()
-            "model.setDefault", "model.thinkingAdvanced", "model.refreshCatalog" -> modelPanels?.let { ActionResult.Overlay(it.providerList()) } ?: modelFallback()
-            "ext.llama" -> modelPanels?.let { ActionResult.Overlay(it.providerForm("llama")) } ?: modelFallback()
+            "model.setDefault" -> setDefaultModel(args)
+            "model.thinkingAdvanced" -> ActionResult.Overlay(OverlayModel.Form("overlay:model.thinkingAdvanced", spec.title,
+                PiSettingsForms.fieldsFor(host.settings, "模型").filter { it.key in THINKING_ADVANCED_KEYS },
+                PiSettingsForms.valuesFor(host.settings, "模型").filterKeys { it in THINKING_ADVANCED_KEYS }, submitLabel = "保存"))
+            "model.refreshCatalog" -> when (val r = ops.runGuest("pi update --models", timeoutMs = 300_000)) {
+                is Outcome.Ok -> if (r.value.exitCode == 0) { runCatching { e.models() }; ActionResult.Toast("模型目录已刷新") }
+                    else ActionResult.LocalBlock("刷新模型目录失败", r.value.output)
+                is Outcome.Err -> ActionResult.Toast("刷新模型目录失败：${r.message}")
+            }
+            // /llama、/mcp 是 pi 内置扩展注册的命令：经 RPC prompt 发送会立即执行，界面走 extension_ui_request（清单 §3）。
+            "ext.llama" -> extCommand("llama", args)
 
             // ---- pi 设置（schema 生成的表单）----
             "settings" -> ActionResult.Overlay(PiSettingsForms.groups(host.settings))
@@ -165,8 +228,8 @@ class PiActionsImpl(
             "skills" -> commandsOverlay(id, spec.title, CommandSource.SKILL)
             "templates" -> commandsOverlay(id, spec.title, CommandSource.PROMPT)
             "ext.commands" -> commandsOverlay(id, spec.title, CommandSource.EXTENSION)
-            "packages" -> runBash("pi list", exclude = true, title = spec.title)
-            "mcp" -> runBash("pi mcp list", exclude = true, title = spec.title)
+            "packages" -> packages(args, spec.title)
+            "mcp" -> extCommand("mcp", args)
 
             // ---- 编辑器（只动共享草稿，不发 RPC）----
             "editor.clear" -> { host.draft.value = io.github.zr987459.pigo.contract.session.DraftState(recalled = host.draft.value.recalled); ActionResult.Done }
@@ -178,32 +241,120 @@ class PiActionsImpl(
             // ---- 帮助与诊断（本地块，不写会话）----
             "help" -> ActionResult.LocalBlock("帮助", helpText())
             "hotkeys" -> ActionResult.LocalBlock("快捷键", Hotkeys.TEXT)
-            "changelog" -> ActionResult.LocalBlock("更新日志", "pi 1.5.0（@earendil-works/pi-coding-agent）。完整更新日志：在终端形态运行 !pi --version 后查看 CHANGELOG。")
+            "changelog" -> when (val r = ops.runGuest(CHANGELOG_CMD)) {
+                is Outcome.Ok -> if (r.value.exitCode == 0 && r.value.output.isNotBlank()) ActionResult.LocalBlock("更新日志", r.value.output)
+                    else ActionResult.Toast("读取包内 CHANGELOG.md 失败：${r.value.output.lineSequence().firstOrNull().orEmpty()}")
+                is Outcome.Err -> ActionResult.Toast("读取更新日志失败：${r.message}")
+            }
             "about" -> ActionResult.LocalBlock("关于", "pi-go：pi 1.5.0 的安卓客户端。引擎：pi --mode rpc。")
             "debug" -> ActionResult.LocalBlock("诊断", "引擎状态：${e.status.value::class.simpleName}；PID：${host.debugEnginePid() ?: "—"}；会话：${host.chat.value.sessionFile ?: "—"}")
-            "bug" -> runBash("pi --version", exclude = true, title = "问题反馈")
+            "bug" -> bugReport(args)
             "engine.stop" -> ops.stopEngine().toResult()
             else -> ActionResult.Toast("「${spec.title}」暂未实现")
         }
     }
 
-    /** 最近一次「复制最后一条回复」得到的文字（形态负责写剪贴板）。 */
-    var lastCopied: String? = null
-        private set
-
     private fun explainOf(spec: PiActionSpec): String? =
         (spec.ui as? UiEntry.Explain)?.text ?: (spec.term as? TermEntry.Explain)?.text
 
-    private suspend fun runBash(command: String, exclude: Boolean, title: String = "命令"): ActionResult {
+    /** `!` 命令模式开关（真正执行在发送时经 RPC `bash`，这是 pi 的 `!cmd` 语义，输出进会话）。 */
+    private suspend fun runBash(command: String, exclude: Boolean): ActionResult {
         val events = host.extras.bash(command, excludeFromContext = exclude).toList()
-        val out = StringBuilder()
-        var err: String? = null
-        for (ev in events) when (ev) {
-            is BashEvent.Output -> Unit
-            is BashEvent.Done -> out.append(ev.result.output)
-            is BashEvent.Failed -> err = ev.error.message
+        val err = events.filterIsInstance<BashEvent.Failed>().firstOrNull()?.error?.message
+        return err?.let { ActionResult.Toast("命令失败：$it") } ?: ActionResult.Done
+    }
+
+    /** 在运行环境里直接执行（不写会话文件），输出作为本地块。 */
+    private suspend fun guest(command: String, title: String, timeoutMs: Long = 120_000): ActionResult =
+        when (val r = ops.runGuest(command, timeoutMs)) {
+            is Outcome.Ok -> ActionResult.LocalBlock(if (r.value.exitCode == 0) title else "$title（退出码 ${r.value.exitCode}）", r.value.output)
+            is Outcome.Err -> ActionResult.Toast("$title 失败：${r.message}")
         }
-        return err?.let { ActionResult.Toast("$title 失败：$it") } ?: ActionResult.LocalBlock(title, out.toString())
+
+    /** 扩展命令（`/mcp`、`/llama` 等）：经 RPC prompt 发送，pi 立即执行，界面经扩展 UI 协议回来。 */
+    private suspend fun extCommand(name: String, args: String?): ActionResult {
+        val text = "/" + name + (args?.takeIf { it.isNotBlank() }?.let { " $it" } ?: "")
+        return host.engine.send(text, SendMode.STEER).toResult()
+    }
+
+    private suspend fun packages(args: String?, title: String): ActionResult {
+        val a = args?.trim().orEmpty()
+        return when {
+            a.isEmpty() -> guest("pi list", title)
+            // install <源> / remove <源> / update [源] / config：pi 的包管理 CLI；完成后重新加载资源。
+            a.split(' ').first() in PACKAGE_VERBS -> guest("pi $a", title, timeoutMs = 600_000).also { if (it is ActionResult.LocalBlock) runCatching { ops.reload() } }
+            else -> ActionResult.Toast("包管理只支持：${PACKAGE_VERBS.joinToString("、")}")
+        }
+    }
+
+    private suspend fun setDefaultModel(args: String?): ActionResult {
+        val c = host.chat.value
+        val (provider, model) = args?.takeIf { it.contains('/') }?.split('/', limit = 2)?.let { it[0] to it[1] }
+            ?: (c.model?.let { it.provider to it.id } ?: return ActionResult.Toast("当前没有模型可设为默认"))
+        val s = host.settings
+        val r1 = s.set("defaultProvider", JsonPrimitive(provider))
+        val r2 = s.set("defaultModel", JsonPrimitive(model))
+        val r3 = c.thinkingLevel?.takeIf { args == null }?.let { s.set("defaultThinkingLevel", JsonPrimitive(it)) } ?: Outcome.Ok(Unit)
+        val err = listOf(r1, r2, r3).filterIsInstance<Outcome.Err>().firstOrNull()
+        return err?.let { ActionResult.Toast("设为默认失败：${it.message}") } ?: ActionResult.Toast("已设为默认：$provider/$model")
+    }
+
+    /**
+     * `/share`（pi 1.5.0 `session-share.js`）：`sessionShareDestination` 为 auto / gist 时，导出 HTML 后用
+     * `gh gist create --public=false` 上传，链接按 pi 的查看器格式（`PI_SHARE_VIEWER_URL` 默认 https://pi.dev/session/#gistId）。
+     * Radius 上传需要 pi 交互模式里的 Radius 登录凭据，RPC 下拿不到：destination = radius 时明确提示，auto 时退到 gist。
+     */
+    private suspend fun share(): ActionResult {
+        val dest = (host.settings.values.value["sessionShareDestination"] as? JsonPrimitive)?.content ?: "auto"
+        if (dest == "radius") return ActionResult.Toast("分享到 Radius 需要 pi 交互模式的 Radius 登录，pi-go 暂不支持；可在 pi 设置 › 会话 把分享目标改成 gist 或 auto")
+        when (val auth = ops.runGuest("gh auth status")) {
+            is Outcome.Err -> return ActionResult.Toast("未安装 GitHub CLI（gh）：在终端形态运行 !apt install gh 后再试")
+            is Outcome.Ok -> if (auth.value.exitCode != 0) return ActionResult.Toast("GitHub CLI 未登录：在终端形态运行 !gh auth login 后再试")
+        }
+        val html = when (val r = host.extras.exportHtml(SHARE_TMP)) { is Outcome.Ok -> r.value; is Outcome.Err -> return ActionResult.Toast("导出会话失败：${r.message}") }
+        return when (val r = ops.runGuest("gh gist create --public=false ${shellQuote(html)}; rm -f ${shellQuote(html)}")) {
+            is Outcome.Err -> ActionResult.Toast("创建 gist 失败：${r.message}")
+            is Outcome.Ok -> {
+                val url = r.value.output.lineSequence().map { it.trim() }.lastOrNull { it.startsWith("https://gist.github.com/") }
+                if (r.value.exitCode != 0 || url == null) ActionResult.LocalBlock("分享失败", r.value.output)
+                else {
+                    val gistId = url.substringAfterLast('/')
+                    val viewer = "https://pi.dev/session/#$gistId"
+                    host.requestClipboard(viewer)
+                    ActionResult.LocalBlock("分享链接", "$viewer\n（gist：$url，链接已复制）")
+                }
+            }
+        }
+    }
+
+    /**
+     * `/bug`：pi 1.5.0 的报告上传走 Radius 网关（需交互模式登录），RPC 下不可用；按 pi「Export as Zip」的退路，
+     * 在本机生成报告（pi 版本、系统、模型、已加载扩展命令、settings.json、可选本会话 JSONL 路径），作为文件分享。
+     * args：问题描述；为空时先弹表单。
+     */
+    private suspend fun bugReport(args: String?): ActionResult {
+        if (args == null) return ActionResult.Overlay(OverlayModel.Form("overlay:bug", "报告问题",
+            listOf(FormField("hint", "出了什么问题？", io.github.zr987459.pigo.contract.settings.PiSettingType.Str,
+                "报告只在本机生成，不会自动上传；包含 pi 版本、模型与服务商（不含 Key）、扩展、设置和本会话文件路径")),
+            submitLabel = "生成报告"))
+        val c = host.chat.value
+        val version = (ops.runGuest("pi --version") as? Outcome.Ok)?.value?.output?.trim().orEmpty()
+        val exts = (host.extras.commands(refresh = false) as? Outcome.Ok)?.value?.filter { it.source == CommandSource.EXTENSION }?.joinToString(", ") { it.name }.orEmpty()
+        val text = buildString {
+            appendLine("# pi 问题报告（pi-go 本地生成）")
+            appendLine(); appendLine("描述：${args.ifBlank { "（未填写）" }}")
+            appendLine("pi：$version")
+            appendLine("系统：Android（pi-go）")
+            appendLine("模型：${c.model?.let { "${it.provider}/${it.id}" } ?: "—"}  思考：${c.thinkingLevel ?: "—"}")
+            appendLine("扩展命令：${exts.ifBlank { "—" }}")
+            appendLine("会话文件：${c.sessionFile ?: "—"}")
+            appendLine(); appendLine("## settings.json")
+            host.settings.values.value.forEach { (k, v) -> appendLine("$k = $v") }
+        }
+        return when (val r = ops.writeReport("pi-bug-${System.currentTimeMillis()}.md", text)) {
+            is Outcome.Ok -> ActionResult.LocalBlock("问题报告已生成", "已保存到 ${r.value}\npi 的上传通道需要 Radius 登录，pi-go 只生成本地报告；可在会话菜单 › 导出 里一起分享会话文件。")
+            is Outcome.Err -> ActionResult.Toast("生成报告失败：${r.message}")
+        }
     }
 
     private suspend fun commandsOverlay(id: String, title: String, source: CommandSource): ActionResult =
@@ -213,18 +364,57 @@ class PiActionsImpl(
             is Outcome.Err -> ActionResult.Toast(r.message)
         }
 
-    private suspend fun treeOverlay(id: String): ActionResult = when (val r = host.extras.tree()) {
+    /** 分支树当前的视图状态（筛选、折叠、显示时间）；`/tree` 重新打开时筛选回到 `treeFilterMode`。 */
+    private data class TreeView(val filter: TreeFilter? = null, val collapsed: Set<String> = emptySet(), val showTime: Boolean = false)
+
+    private var treeView = TreeView()
+
+    private fun nextFilter(f: TreeFilter?): TreeFilter = TreeFilter.entries[((f ?: TreeFilter.DEFAULT).ordinal + 1) % TreeFilter.entries.size]
+
+    private suspend fun treeOverlay(view: TreeView): ActionResult = when (val r = host.extras.tree()) {
         is Outcome.Ok -> {
-            val nodes = ArrayList<TreeNode>()
-            fun walk(n: io.github.zr987459.pigo.contract.TreeNode) {
-                nodes += TreeNode(n.entry.id, n.entry.parentId, n.entry.role ?: n.entry.type, n.entry.preview, n.label, isLeaf = n.entry.id == r.value.leafId)
-                n.children.forEach(::walk)
-            }
-            r.value.roots.forEach(::walk)
-            ActionResult.Overlay(OverlayModel.Tree("overlay:session.tree", "分支树", nodes, selectedId = r.value.leafId,
-                showTime = id == "tree.time"))
+            val filter = view.filter ?: settingFilter()
+            treeView = view.copy(filter = filter)
+            ActionResult.Overlay(TreeShape.overlay(r.value, filter, view.collapsed.let { if (TreeShape.ALL in it) TreeShape.allParents(r.value) else it }, view.showTime))
         }
         is Outcome.Err -> ActionResult.Toast("读取分支树失败：${r.message}")
+    }
+
+    private fun settingFilter(): TreeFilter {
+        val v = (host.settings.values.value["treeFilterMode"] as? JsonPrimitive)?.content
+        return TreeFilter.entries.firstOrNull { it.piName == v } ?: TreeFilter.DEFAULT
+    }
+
+    /**
+     * 选中树节点：args = "<entryId>"（按 `branchSummary.skipPrompt` 决定是否先问要不要摘要）或
+     * "<entryId> summarize" / "<entryId> nosummary"。原地切换经 [SessionOps.treeNavigate]；
+     * 选中用户消息时 pi 把原文放回编辑器 → 写进共享草稿（草稿非空时进「已撤回」芯片，不覆盖）。
+     */
+    private suspend fun treeNav(args: String): ActionResult {
+        val parts = args.trim().split(' ')
+        val entryId = parts[0]
+        val summarize = when (parts.getOrNull(1)) {
+            "summarize" -> true
+            "nosummary" -> false
+            else -> {
+                val skip = (host.settings.values.value["branchSummary.skipPrompt"] as? JsonPrimitive)?.content == "true"
+                if (skip) false else return ActionResult.Overlay(OverlayModel.Confirm("overlay:tree.summarize:$entryId", "摘要离开的分支？",
+                    "切换前可以让模型为离开的分支写一段摘要，放进新位置的上下文里。", confirmLabel = "摘要后切换"))
+            }
+        }
+        return when (val r = ops.treeNavigate(entryId, summarize)) {
+            is Outcome.Ok -> {
+                val nav = r.value
+                if (nav.cancelled) return ActionResult.Toast("已取消切换")
+                nav.editorText?.takeIf { it.isNotBlank() }?.let { t -> host.draft.value = QueueRecall.merge(host.draft.value, listOf(t)) }
+                ActionResult.Toast(when {
+                    nav.viaFork -> "桥接扩展不可用：已从该记录分叉出新会话（原会话不变）"
+                    nav.unconfirmed -> "切换未确认，已按引擎当前状态刷新"
+                    else -> "已切换到所选位置"
+                })
+            }
+            is Outcome.Err -> ActionResult.Toast("切换失败：${r.message}")
+        }
     }
 
     private fun sessionPicker(): OverlayModel.SelectList {
@@ -257,6 +447,17 @@ class PiActionsImpl(
         return host.settings.set(key, JsonPrimitive(!cur)).toResult()
     }
 
+    companion object {
+        const val CONFIRM_PREFIX = "confirm "
+        private const val SHARE_TMP = "/tmp/pigo-share.html"
+        private val PACKAGE_VERBS = setOf("install", "remove", "update", "list", "config")
+        private val THINKING_ADVANCED_KEYS = setOf("thinkingBudgets", "modelThinkingLevels")
+        /** 「全部折叠」的标记集合（打开时换成全部有子节点的记录）。 */
+        private val ALL_COLLAPSED: Set<String> = setOf(TreeShape.ALL)
+        /** pi 包内的 CHANGELOG.md（全局安装位置由 npm 决定）。 */
+        const val CHANGELOG_CMD = "cat \"$(npm root -g)/@earendil-works/pi-coding-agent/CHANGELOG.md\""
+    }
+
     private fun modelFallback(): ActionResult = ActionResult.Toast("模型面板尚未接入（设置 › 模型）")
 
     private fun helpText(): String = all.groupBy { it.group }.entries.joinToString("\n\n") { (g, specs) ->
@@ -268,6 +469,7 @@ class PiActionsImpl(
 
 /** 一次性提问的命令（`bash` + `excludeFromContext` 跑 `pi -p`，不进当前会话，DESIGN-r3 §2.1）。 */
 object OneShot {
+    const val JSON_PREFIX = "--json "
     fun command(prompt: String, json: Boolean): String {
         val q = "'" + prompt.replace("'", "'\\''") + "'"
         return if (json) "pi --mode json -p $q" else "pi -p $q"

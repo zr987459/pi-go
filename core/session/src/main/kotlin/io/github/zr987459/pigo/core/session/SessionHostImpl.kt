@@ -11,7 +11,6 @@ import io.github.zr987459.pigo.contract.Outcome
 import io.github.zr987459.pigo.contract.SendMode
 import io.github.zr987459.pigo.contract.actions.ActionResult
 import io.github.zr987459.pigo.contract.actions.PiActions
-import io.github.zr987459.pigo.contract.session.BashMode
 import io.github.zr987459.pigo.contract.session.DraftState
 import io.github.zr987459.pigo.contract.session.LocalBlock
 import io.github.zr987459.pigo.contract.session.OverlayModel
@@ -22,7 +21,10 @@ import io.github.zr987459.pigo.contract.session.SessionHost
 import io.github.zr987459.pigo.contract.session.UiForm
 import io.github.zr987459.pigo.contract.settings.PiSettings
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -32,9 +34,10 @@ import kotlinx.coroutines.launch
  * [SessionHost] 的实现（DESIGN-r3 §5.1，r3/session）。由 AppGraph 持有单例，与进程同寿。
  *
  * - 公开 API 没有任何形态参数；[form] 只是一个 StateFlow，改它**不发 RPC、不重启引擎**（§5.3）。
- * - 动作表在构造时由 [actionsFactory] 用本宿主创建（[PiActionsImpl] 需要读草稿、写本地块）。
- * - 扩展阻塞对话框（select / confirm / input / editor）收到后压进 [overlay]，切换形态不回 cancelled。
- * - 切换会话 / 引擎重启时，排队中的文字回到草稿（[QueueRecall]，§7.3 QueueBackToDraftTest）。
+ * - **聊天状态只有一份**（审查第 1 轮 I1）：草稿、发送、扩展对话框、`set_editor_text`、队列退回都经 [chatPort]
+ *   （真实实现包住 `ChatController`）；本类不订阅 `uiRequests`、不直接 `engine.send`。
+ * - 扩展阻塞对话框按端口的列表镜像进 [overlay]，切换形态不回 cancelled。
+ * - [clipboardRequests]：`/copy` 等要写剪贴板的文字，两种形态都收集并真正写入系统剪贴板（审查第 1 轮 I4）。
  */
 class SessionHostImpl(
     override val engine: EngineClient,
@@ -42,13 +45,14 @@ class SessionHostImpl(
     private val scope: CoroutineScope,
     override val settings: PiSettings,
     override val sessions: SessionCatalog,
+    val chatPort: SessionChatPort,
     initialForm: UiForm = UiForm.CALM,
     private val pid: () -> Int? = { null },
     actionsFactory: (SessionHostImpl) -> PiActions,
 ) : SessionHost {
 
     override val chat: StateFlow<ChatState> = engine.chat
-    override val draft: MutableStateFlow<DraftState> = MutableStateFlow(DraftState.EMPTY)
+    override val draft: MutableStateFlow<DraftState> = chatPort.draft
     override val overlay: OverlayStack = OverlayStack()
     override val form: MutableStateFlow<UiForm> = MutableStateFlow(initialForm)
     override val scrollAnchor: MutableStateFlow<ScrollAnchor?> = MutableStateFlow(null)
@@ -66,13 +70,17 @@ class SessionHostImpl(
     private val _toasts = MutableStateFlow<List<String>>(emptyList())
     val toasts: StateFlow<List<String>> = _toasts.asStateFlow()
 
+    private val _clipboard = MutableSharedFlow<String>(replay = 0, extraBufferCapacity = 8)
+    override val clipboardRequests: Flow<String> = _clipboard.asSharedFlow()
+
     override val actions: PiActions = actionsFactory(this)
 
     private var localSeq = 0
 
     init {
-        scope.launch { engine.uiRequests.collect { onUiRequest(it) } }
-        scope.launch { QueueRecall.watch(engine.chat, engine.status) { texts -> recallToDraft(texts) } }
+        scope.launch { chatPort.dialogs.collect { syncDialogs(it) } }
+        scope.launch { chatPort.editorTextOffer.collect { syncEditorOffer(it) } }
+        scope.launch { chatPort.notices.collect { toast(it) } }
     }
 
     override suspend fun runAction(id: String, args: String?): ActionResult {
@@ -89,27 +97,17 @@ class SessionHostImpl(
 
     // ---- 供动作表与形态使用（都没有形态参数）----
 
-    /**
-     * 发送当前草稿（发送键 / Enter / ⏎）。`!`、`!!` 模式走 bash（`excludeFromContext`），`@` 引用按 pi 交互模式
-     * 的写法拼进文字（[AtFileExpansion]），图片走 extras.send。成功后清空草稿但保留「已撤回」芯片。
-     */
+    /** 发送当前草稿（发送键 / Enter / ⏎）：经 [chatPort]（Outbox、`!` 路由、按会话草稿）。 */
     suspend fun sendDraft(mode: SendMode = SendMode.STEER): Outcome<Disposition> {
         val d = draft.value
         if (!d.hasSendableContent) return Outcome.Err(ErrCode.RPC_REJECTED, "草稿为空")
-        if (d.text.isNotBlank()) _history.update { (it - d.text) + d.text }
-        draft.value = DraftState(recalled = d.recalled)
-        if (d.bashMode != BashMode.NONE) {
-            scope.launch { extras.bash(d.text, excludeFromContext = d.bashMode == BashMode.EXCLUDE).collect { } }
-            return Outcome.Ok(Disposition.STARTED)
-        }
-        val message = AtFileExpansion.compose(d.text, d.fileRefs)
-        val r = if (d.images.isEmpty()) engine.send(message, mode) else extras.send(message, imageLoader(d), mode)
-        if (r is Outcome.Err) draft.value = d // 发送失败：草稿原样放回，不丢字
+        val r = chatPort.send(mode)
+        if (r is Outcome.Ok && d.text.isNotBlank()) _history.update { (it - d.text) + d.text }
         return r
     }
 
-    /** 由 AppGraph 注入：把草稿里的图片 URI 读成 base64（core/session 不碰 Android ContentResolver）。 */
-    var imageLoader: (DraftState) -> List<io.github.zr987459.pigo.contract.ImageInput> = { emptyList() }
+    /** 请求形态把 [text] 写进系统剪贴板。返回是否有形态在收集（没有就不要告诉用户「已复制」）。 */
+    fun requestClipboard(text: String): Boolean = _clipboard.subscriptionCount.value > 0 && _clipboard.tryEmit(text)
 
     fun addLocalBlock(id: String, title: String, text: String) {
         _localBlocks.update { it + LocalBlock(key = "local:$id:${localSeq++}", title = title, text = text) }
@@ -123,29 +121,35 @@ class SessionHostImpl(
 
     fun setEphemeral(value: Boolean) { _ephemeral.value = value }
 
-    /** 扩展对话框应答（两种形态共用）；应答后从栈里移除。 */
-    suspend fun answerExtDialog(overlayId: String, value: String? = null, confirmed: Boolean? = null, cancelled: Boolean = false) {
+    /** 扩展对话框应答（两种形态共用）：交给端口（唯一应答者），栈里的镜像随端口列表移除。 */
+    fun answerExtDialog(overlayId: String, value: String? = null, confirmed: Boolean? = null, cancelled: Boolean = false) {
         val d = overlay.items.value.firstOrNull { it.id == overlayId } as? OverlayModel.ExtDialog ?: return
         overlay.remove(overlayId)
-        engine.answerUi(d.request.id, value = value, confirmed = confirmed, cancelled = cancelled)
+        chatPort.answerDialog(d.request.id, value = value, confirmed = confirmed, cancelled = cancelled)
     }
 
-    private fun onUiRequest(r: ExtUiRequest) {
-        when (r.method) {
-            "select", "confirm", "input", "editor" -> {
-                val id = "ext:${r.id}"
-                if (overlay.items.value.none { it.id == id }) {
-                    overlay.push(OverlayModel.ExtDialog(id = id, title = r.title ?: r.method, request = r, shownAtMillis = System.currentTimeMillis()))
-                }
-            }
-            "set_editor_text" -> r.prefill?.let { draft.value = draft.value.withText(it) }
-            "notify" -> (r.message ?: r.title)?.let { toast(it) }
-            else -> Unit
+    /** 扩展 `set_editor_text` 要替换非空草稿时的确认框（[EDITOR_OFFER_ID]）：接受 = 替换，拒绝 = 保留草稿。 */
+    fun answerEditorTextOffer(accept: Boolean) {
+        overlay.remove(EDITOR_OFFER_ID)
+        chatPort.resolveEditorTextOffer(accept)
+    }
+
+    private fun syncDialogs(list: List<ExtUiRequest>) {
+        val wanted = list.associateBy { "ext:${it.id}" }
+        overlay.items.value.filterIsInstance<OverlayModel.ExtDialog>().filter { it.id !in wanted }.forEach { overlay.remove(it.id) }
+        for ((id, r) in wanted) if (overlay.items.value.none { it.id == id }) {
+            overlay.push(OverlayModel.ExtDialog(id = id, title = r.title ?: r.method, request = r, shownAtMillis = System.currentTimeMillis()))
         }
     }
 
-    private fun recallToDraft(texts: List<String>) {
-        if (texts.isEmpty()) return
-        draft.update { d -> QueueRecall.merge(d, texts) }
+    private fun syncEditorOffer(text: String?) {
+        if (text == null) { overlay.remove(EDITOR_OFFER_ID); return }
+        if (overlay.items.value.none { it.id == EDITOR_OFFER_ID }) {
+            overlay.push(OverlayModel.Confirm(EDITOR_OFFER_ID, "扩展要替换输入框", "输入框里已有内容。替换成扩展给的文字吗？\n\n$text", confirmLabel = "替换"))
+        }
+    }
+
+    companion object {
+        const val EDITOR_OFFER_ID = "overlay:editor-text-offer"
     }
 }

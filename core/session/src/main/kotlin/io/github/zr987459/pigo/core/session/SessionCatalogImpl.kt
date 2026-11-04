@@ -46,8 +46,11 @@ class SessionCatalogImpl(
 
     override suspend fun open(guestPath: String): Outcome<Unit> {
         val s = sessions.value.firstOrNull { it.guestPath == guestPath }
-        leaveEphemeral()
-        return engine.openSession(guestPath, s?.cwd ?: "")
+        // 先切换、切换成功后再把临时会话移进回收目录：pi 还开着旧文件时移走，它再写入会在原路径重建（审查 N3）。
+        val leaving = ephemeralFile
+        val r = engine.openSession(guestPath, s?.cwd ?: "")
+        if (r is Outcome.Ok) leaveEphemeral(leaving)
+        return r
     }
 
     override suspend fun rename(guestPath: String, name: String): Outcome<Unit> =
@@ -81,8 +84,9 @@ class SessionCatalogImpl(
     }
 
     override suspend fun newSession(ephemeral: Boolean): Outcome<Unit> {
-        leaveEphemeral()
+        val leaving = ephemeralFile
         val r = engine.newSession()
+        if (r is Outcome.Ok) leaveEphemeral(leaving)
         if (r is Outcome.Ok && ephemeral) {
             ephemeralFile = engine.chat.value.sessionFile
             onEphemeralChanged(true)
@@ -91,9 +95,9 @@ class SessionCatalogImpl(
     }
 
     /** App 退出时也调用。 */
-    suspend fun leaveEphemeral() {
-        val f = ephemeralFile ?: return
-        ephemeralFile = null
+    suspend fun leaveEphemeral(file: String? = ephemeralFile) {
+        val f = file ?: return
+        if (ephemeralFile == f) ephemeralFile = null
         onEphemeralChanged(false)
         repo.moveToTrash(f)
     }

@@ -6,7 +6,9 @@ import io.github.zr987459.pigo.contract.EngineExtras
 import io.github.zr987459.pigo.contract.actions.ActionResult
 import io.github.zr987459.pigo.contract.actions.PiActions
 import io.github.zr987459.pigo.contract.settings.PiSettings
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.StateFlow
 
 /**
@@ -64,6 +66,12 @@ interface SessionHost {
 
     /** 当前会话是否临时会话（`--no-session` 近似，§5.7）。 */
     val ephemeral: StateFlow<Boolean>
+
+    /**
+     * 要写进系统剪贴板的文字（`/copy`、长按复制）。两种形态都收集它并真正写剪贴板（审查第 1 轮 I4）。
+     * 默认空流：r3/session 加的最小契约改动，旧实现（含 FakeSessionHost）不用改。
+     */
+    val clipboardRequests: Flow<String> get() = emptyFlow()
 
     /** pi 进程 PID（经 ProcessTree 读取，仪器测试 B 档用）；引擎未运行时为 null。 */
     fun debugEnginePid(): Int?
