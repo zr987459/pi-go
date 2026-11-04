@@ -414,7 +414,14 @@ private fun TermScreen(
                                 "cwd" -> Modifier.clickable { TermInput.actionForFooter("cwd", catalog)?.let { run(it) } }.testTag("term:footer:cwd")
                                 "model" -> Modifier
                                     .clickable { run("model.select") }
-                                    .pointerInput(Unit) { detectHorizontalDragGestures { _, d -> if (kotlin.math.abs(d) > 30) run("model.cycle") } }
+                                    .pointerInput(Unit) {
+                                        // 左右滑循环模型（pi Ctrl+P / Shift+Ctrl+P）：按整次拖动的累计位移判断，避免分段位移都小于阈值。
+                                        var total = 0f
+                                        detectHorizontalDragGestures(
+                                            onDragStart = { total = 0f },
+                                            onDragEnd = { if (kotlin.math.abs(total) > 12.dp.toPx()) run("model.cycle") },
+                                        ) { change, d -> total += d; change.consume() }
+                                    }
                                     .testTag("term:footer:model")
                                 else -> Modifier
                             }
