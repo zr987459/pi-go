@@ -46,11 +46,12 @@ import io.github.zr987459.pigo.contract.InstallStep
 import io.github.zr987459.pigo.contract.Phase
 import io.github.zr987459.pigo.contract.RuntimeManager
 import io.github.zr987459.pigo.contract.RuntimeStatus
-import io.github.zr987459.pigo.core.ui.AppIcon
-import io.github.zr987459.pigo.core.ui.AppIcons
 import io.github.zr987459.pigo.core.ui.AppMotion
 import io.github.zr987459.pigo.core.ui.AppType
-import io.github.zr987459.pigo.core.ui.DshTheme
+import io.github.zr987459.pigo.core.ui.calm.Calm
+import io.github.zr987459.pigo.core.ui.calm.CalmIcons
+import androidx.compose.material3.Icon
+import androidx.compose.foundation.layout.size
 
 /**
  * 首启安装向导（§4.3、§5.1 F1–F6、§5.7 N4）。界面照 dsh-Go 的安装引导：
@@ -162,7 +163,7 @@ internal fun OnboardingContent(
                 LazyColumn(
                     Modifier
                         .fillMaxWidth()
-                        .background(DshTheme.colors.codeWell, MaterialTheme.shapes.medium)
+                        .background(Calm.colors.surface, MaterialTheme.shapes.medium)
                         .padding(12.dp)
                         .testTag("onboarding:log"),
                 ) {
@@ -184,36 +185,34 @@ private fun ColumnScope.ConfirmView(
     onStart: () -> Unit,
     onToggleLog: () -> Unit,
 ) {
-    val colors = DshTheme.colors
+    val colors = onboardingColors()
     val resume = ui.mode == OnboardingViewModel.Mode.ABORTED || status.phase == Phase.BROKEN
     Spacer(Modifier.weight(1f))
     OnboardingHeader(
-        icon = AppIcons.thisPhone,
         title = if (resume) "继续安装运行环境" else "准备运行环境",
         message = "pi-go 会在手机里安装一个 Ubuntu 小环境，再装上 Node.js 和 pi。全程使用国内镜像，下载的每个文件都会做 SHA256 校验。",
     )
     Spacer(Modifier.height(28.dp))
     when {
         ui.mode == OnboardingViewModel.Mode.ABORTED ->
-            OnboardingFact(AppIcons.paused, "安装已中止。已下载并校验过的文件会保留，继续安装时从中断的步骤接着做。", colors.warning)
+            OnboardingFact("安装已中止。已下载并校验过的文件会保留，继续安装时从中断的步骤接着做。", colors.warning)
         status.phase == Phase.BROKEN ->
-            OnboardingFact(AppIcons.attention, "安装尚未完成：${status.error ?: "可以继续安装"}", colors.warning)
+            OnboardingFact("安装尚未完成：${status.error ?: "可以继续安装"}", colors.warning)
     }
     Column(Modifier.testTag("onboarding:preflight")) {
         if (preflight == null) {
-            OnboardingFact(AppIcons.loading, "正在检查设备…")
+            OnboardingFact("正在检查设备…")
         } else {
             preflight.checks.forEach { c ->
                 OnboardingFact(
-                    if (c.ok) AppIcons.success else AppIcons.error,
                     "${c.label}：${c.detail}",
                     if (c.ok) null else MaterialTheme.colorScheme.error,
                 )
             }
         }
     }
-    OnboardingFact(AppIcons.artifacts, "需要至少 3 GB 可用空间")
-    OnboardingFact(AppIcons.localOnly, "运行环境只装在这台手机上")
+    OnboardingFact("需要至少 3 GB 可用空间")
+    OnboardingFact("运行环境只装在这台手机上")
     Spacer(Modifier.weight(2f))
     Spacer(Modifier.height(24.dp))
     val canStart = preflight?.canStart == true
@@ -258,7 +257,7 @@ private fun ColumnScope.ProgressView(
     onDone: () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
-    val colors = DshTheme.colors
+    val colors = onboardingColors()
     val p = ui.progress
     val fraction = when (view) {
         SetupView.DONE -> 1f
@@ -298,8 +297,8 @@ private fun ColumnScope.ProgressView(
                 label = "haloCenter",
             ) { v ->
                 when (v) {
-                    SetupView.DONE -> AppIcon(AppIcons.done, null, size = 48.dp, tint = scheme.primary)
-                    SetupView.FAILED -> AppIcon(AppIcons.attention, null, size = 44.dp, tint = colors.danger)
+                    SetupView.DONE -> Icon(CalmIcons.Check, null, Modifier.size(48.dp), tint = scheme.primary)
+                    SetupView.FAILED -> Icon(CalmIcons.Alert, null, Modifier.size(44.dp), tint = colors.danger)
                     else -> SetupPercent(fraction ?: 0f)
                 }
             }
@@ -326,7 +325,7 @@ private fun ColumnScope.ProgressView(
         SetupView.DONE -> OnboardingFilledButton("进入聊天", onDone, Modifier.fillMaxWidth().testTag("onboarding:enter"))
         else -> {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                AppIcon(AppIcons.notifications, null, size = 16.dp, tint = colors.textFaint)
+                Icon(CalmIcons.Bell, null, Modifier.size(16.dp), tint = colors.textFaint)
                 Spacer(Modifier.width(6.dp))
                 Text(
                     "可以切到后台或锁屏，安装会继续，通知栏会显示进度。",
