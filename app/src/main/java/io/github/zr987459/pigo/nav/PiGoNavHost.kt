@@ -1,6 +1,13 @@
 package io.github.zr987459.pigo.nav
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import io.github.zr987459.pigo.attach.ImageAttach
+import io.github.zr987459.pigo.settings.ModelsPageExtras
+import io.github.zr987459.pigo.settings.ProxyLogic
+import io.github.zr987459.pigo.contract.session.DraftImage
 import androidx.compose.runtime.key
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.foundation.layout.Row
@@ -54,6 +61,10 @@ import io.github.zr987459.pigo.di.BindingContext
 import io.github.zr987459.pigo.di.BindingMode
 import io.github.zr987459.pigo.di.EngineBindings
 import io.github.zr987459.pigo.di.StoreBindings
+import io.github.zr987459.pigo.form.FormHost
+import io.github.zr987459.pigo.feature.chat.ui.calm.CalmSurface
+import io.github.zr987459.pigo.form.TermPlaceholder
+import io.github.zr987459.pigo.form.toggleForm
 import io.github.zr987459.pigo.feature.chat.ui.ChatScreen
 import io.github.zr987459.pigo.feature.onboarding.OnboardingScreen
 import io.github.zr987459.pigo.feature.sessions.SessionsScreen
@@ -68,8 +79,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import io.github.zr987459.pigo.contract.ModelRef
 import io.github.zr987459.pigo.feature.chat.ui.MessageMenu
-import io.github.zr987459.pigo.feature.commands.ui.CommandPalette
-import io.github.zr987459.pigo.feature.commands.ui.PaletteGroup
 import io.github.zr987459.pigo.feature.models.ModelPicker
 
 /** 四个顶层目的地。MVP 期间 feature 只提供页面，导航只在 :app。 */
@@ -84,6 +93,13 @@ enum class Destination(val route: String, val label: String) {
     Skills(Routes.SKILLS, "技能与模板"),
     Usage(Routes.USAGE, "用量"),
 }
+
+/** 设置 › 模型（CalmSurface 的「设置」入口、会话列表底部的设置）。 */
+const val SETTINGS_FOCUS_MODELS = "models"
+
+/** 设置 › 模型 › 关于（DESIGN-r3 §8.5）。与 ⌘ › 帮助 › 关于（PiActions `about`）同一句话，再加版本与许可。 */
+internal fun aboutText(version: String?): String =
+    "pi-go ${version.orEmpty()}".trim() + "\npi 1.5.0（@earendil-works/pi-coding-agent）的安卓客户端，引擎：pi --mode rpc。\n第三方许可见 THIRD_PARTY_NOTICES.md。"
 
 /** 设置页带可选定位参数：`settings?focus=models`（见 [SettingsFocus]）。 */
 private const val SETTINGS_PATTERN = "settings?focus={focus}"
@@ -118,67 +134,14 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
         }
     }
 
-    val drawerState = rememberDrawerState(DrawerValue.Closed)
-    fun go(d: Destination) {
-        scope.launch { drawerState.close() }
-        navController.navigateTopLevel(d)
-    }
-    val newChat: () -> Unit = {
-        scope.launch {
-            drawerState.close()
-            when (val r = graph.engine.newSession()) {
-                is Outcome.Ok -> navController.navigateTopLevel(Destination.Chat)
-                is Outcome.Err -> toast(sessionErrorText("新建会话", r))
-            }
-            runCatching { graph.sessions.refresh() }
-        }
-    }
-
-    // 抽屉打开时按返回键先关抽屉（审查 R1）。每次打开都重新注册一次回调，
-    // 保证它排在聊天页 / 设置页等页面自己的返回回调之后（后注册者优先）。
-    val drawerOpen = drawerState.targetValue == DrawerValue.Open || drawerState.isOpen
-    key(drawerOpen) {
-        BackHandler(enabled = drawerOpen) { scope.launch { drawerState.close() } }
-    }
-
-    // 抽屉里的会话列表：抽屉打开、当前会话变化、运行环境就绪时都重新读取（抽屉内容关着时也组合，
-    // SessionsScreen 自己的首次 refresh 只在启动时跑一次）。
-    // 外壳只订阅当前会话文件（审查 Nit：不要整个 chat 流，流式输出时外壳不重组）。
+    // r3：会话列表、⌘ 命令中心都在 UI 形态（CalmSurface）里，外壳不再有旧抽屉（PiGoDrawer，PR 2 删除文件）。
     val currentSession by remember(graph) { graph.engine.chat.map { it.sessionFile }.distinctUntilChanged() }
         .collectAsState(initial = graph.engine.chat.value.sessionFile)
-    LaunchedEffect(drawerState) {
-        snapshotFlow { drawerState.targetValue }.collect { v ->
-            if (v == DrawerValue.Open) runCatching { graph.sessions.refresh() }
-        }
-    }
     LaunchedEffect(currentSession, runtimeStatus.phase) {
         if (runtimeStatus.phase == Phase.READY) runCatching { graph.sessions.refresh() }
     }
 
-    // dsh-Go 的外壳：没有底部导航栏，页面切换都在左侧抽屉里（手势从左边缘拉出，scrim 渐暗）。
-    ModalNavigationDrawer(
-        drawerState = drawerState,
-        scrimColor = DshTheme.colors.scrim,
-        drawerContent = {
-            // dsh-Go：抽屉本身就是会话面板（搜索、分组、新建、长按删除、身份栏里的设置）。
-            PiGoDrawer(
-                current = current,
-                onDestination = ::go,
-                // 会话树、技能与模板、用量依赖 W1 的 extras：切 REAL 前不显示（审查第 1 轮 Important 1）。
-                extrasReady = graph.extrasReady,
-                engineStatus = graph.engine.status.collectAsState().value,
-            ) { footer ->
-                SessionsPage(
-                    graph,
-                    onOpened = { go(Destination.Chat) },
-                    onError = ::toast,
-                    onOpenSettings = { scope.launch { drawerState.close() }; navController.navigate(Routes.SETTINGS_HUB) { launchSingleTop = true } },
-                    footer = footer,
-                )
-            }
-        },
-    ) {
-        Box(Modifier.fillMaxSize()) {
+    Box(Modifier.fillMaxSize()) {
             NavHost(navController, startDestination = start.route, modifier = Modifier.fillMaxSize()) {
                 composable(Destination.Onboarding.route) {
                     OnboardingScreen(
@@ -190,21 +153,39 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
                         } else {
                             null
                         },
-                        onOpenMenu = { scope.launch { drawerState.open() } },
+                        onOpenMenu = null,
                     )
                 }
                 composable(Destination.Chat.route) {
-                    ChatPage(
-                        graph,
-                        // 旧设置页入口换成 W2 的服务商页（审查 Nit ④）。
-                        onOpenModelSettings = { navController.navigate(Routes.PROVIDERS) { launchSingleTop = true } },
-                        onOpenDrawer = { scope.launch { drawerState.open() } },
-                        onNewChat = newChat,
-                        // 抽屉开着时聊天页的「返回 = 退到后台」让位给关抽屉（审查 Nit ①，旋转/切深色后也成立）。
-                        drawerOpen = drawerOpen,
-                        onConfigureProvider = { id -> navController.navigate(Routes.provider(id)) { launchSingleTop = true } },
-                        onOpenFile = { path -> navController.navigate(Routes.files(path)) },
-                        onToast = ::toast,
+                    // r3：会话页 = FormHost（DESIGN-r3 §5.2）。UI 形态 = CalmSurface（r3/calm），读写同一个 SessionHostImpl；
+                    // 终端形态在 r3/term 合入前是占位。切换只改 sessionHost.form，引擎与会话不受影响。
+                    // 「＋ › 图片」：系统照片选择器 → 草稿图片（两形态共用 host.draft），发送时 imageLoader 读成 base64（审查 Important 1）。
+                    val activity = LocalContext.current as? android.app.Activity
+                    val pickImages = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(ImageAttach.MAX_PICK)) { uris ->
+                        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+                        val cr = app.contentResolver
+                        val imgs = uris.map { u ->
+                            // 照片选择器的 URI 默认只在本进程存活期间可读；能持久化就持久化（发送前 App 被回收也不丢）。
+                            runCatching { cr.takePersistableUriPermission(u, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+                            DraftImage(uri = u.toString(), mimeType = runCatching { cr.getType(u) }.getOrNull())
+                        }
+                        graph.sessionHost.draft.value = ImageAttach.add(graph.sessionHost.draft.value, imgs)
+                    }
+                    FormHost(
+                        graph.sessionHost,
+                        calm = {
+                            CalmSurface(
+                                graph.sessionHost,
+                                onOpenSettings = { navController.openSettings(SETTINGS_FOCUS_MODELS) },
+                                panelEvents = graph.modelPanelEvents,
+                                fileSearch = graph.fileSearch?.asLambda,
+                                onAttachImage = { pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                                backHandler = { enabled, onBack -> BackHandler(enabled, onBack) },
+                            )
+                        },
+                        term = { TermPlaceholder(onBackToUi = { graph.sessionHost.toggleForm() }) },
+                        // 各层都关着时按返回：退到后台，不结束 Activity、不打断生成（N4；终端形态同理）。
+                        onBackground = { activity?.moveTaskToBack(true) },
                     )
                 }
                 composable(Routes.SETTINGS_HUB) {
@@ -230,7 +211,6 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
                     )
                 }
                 composable(Routes.CUSTOM_PROVIDER) { CustomProviderPage(graph, onBack = { navController.popBackStack() }) }
-                composable(Routes.NETWORK) { NetworkPage(graph, onBack = { navController.popBackStack() }) }
                 composable(Routes.SESSION_DEFAULTS) { SessionDefaultsPage(graph, onBack = { navController.popBackStack() }) }
                 composable(Routes.TREE) {
                     if (!graph.extrasReady) {
@@ -238,10 +218,6 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
                         return@composable
                     }
                     SessionTreePage(graph, onForked = { navController.navigateTopLevel(Destination.Chat) }, onError = ::toast, onBack = { navController.navigateTopLevel(Destination.Chat) })
-                }
-                composable(Routes.SKILLS) {
-                    if (graph.extrasReady) SkillsPage(graph, onBack = { navController.navigateTopLevel(Destination.Chat) })
-                    else NeedsNewEnginePage("技能与模板", "skills") { navController.navigateTopLevel(Destination.Chat) }
                 }
                 composable(Routes.USAGE) {
                     if (graph.extrasReady) UsagePage(graph, onBack = { navController.navigateTopLevel(Destination.Chat) })
@@ -288,147 +264,6 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
                 }
             }
             SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 96.dp))
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ChatPage(
-    graph: AppGraph,
-    onOpenModelSettings: () -> Unit,
-    onOpenDrawer: () -> Unit,
-    onNewChat: () -> Unit,
-    drawerOpen: Boolean,
-    onConfigureProvider: (String) -> Unit,
-    onOpenFile: (String) -> Unit,
-    onToast: (String) -> Unit,
-) {
-    val scope = rememberCoroutineScope()
-    // 只订阅用得到的字段（模型、思考强度、是否在生成）。
-    val model by remember(graph) { graph.engine.chat.map { it.model }.distinctUntilChanged() }.collectAsState(initial = graph.engine.chat.value.model)
-    val thinking by remember(graph) { graph.engine.chat.map { it.thinkingLevel }.distinctUntilChanged() }.collectAsState(initial = graph.engine.chat.value.thinkingLevel)
-    val running by remember(graph) { graph.engine.chat.map { it.running }.distinctUntilChanged() }.collectAsState(initial = false)
-    // 只有真实 extras（W1）才订阅附加项；Fake 的假数据不进时间线（审查第 1 轮 Important 1）。
-    val live = graph.liveExtras
-    val extras by (live?.timelineExtras ?: NO_EXTRAS).collectAsState()
-    var noModel by remember { mutableStateOf(false) }
-    var picker by remember { mutableStateOf(false) }
-    var usage by remember { mutableStateOf(false) }
-    var attach by remember { mutableStateOf(false) }
-    var levels by remember { mutableStateOf<List<String>>(emptyList()) }
-    // 从设置层取「是否配置过模型」；模型变化（保存设置后引擎重启）时重新读取。
-    LaunchedEffect(model) {
-        noModel = model == null && runCatching { graph.providerConfig.configured() }.getOrDefault(emptyList()).isEmpty()
-    }
-    // 从「去配置」回来：服务商已配好就自动选中它的模型（验收①）。
-    LaunchedEffect(Unit) { applyPendingModel(graph)?.let(onToast) }
-    LaunchedEffect(picker, model) {
-        if (picker) levels = (graph.engine.thinkingLevels() as? Outcome.Ok)?.value.orEmpty()
-    }
-
-    ChatScreen(
-        graph.chatDeps.controller,
-        Modifier.fillMaxSize(),
-        onOpenModelSettings = onOpenModelSettings,
-        backToBackground = !drawerOpen,
-        onOpenDrawer = onOpenDrawer,
-        onNewChat = onNewChat,
-        // 顶栏「模型▾」→ W2 的模型选择弹层（思考强度在同一弹层里）。
-        onModelClick = { picker = true },
-        // 「+」→ W3 的附件弹层（拍照、相册、文件）。
-        onAttachClick = { attach = true },
-        topBanner = if (noModel) {
-            { NoModelBanner(onOpenModelSettings) }
-        } else {
-            null
-        },
-        timelineExtras = extras,
-        extraContent = { e, m -> TimelineExtraView(e, onOpenFile, m) },
-        slashPalette = { cand, pick ->
-            CommandPalette(
-                groups = cand.groups.map { PaletteGroup(it.title, it.commands) },
-                loading = cand.loading,
-                onPick = pick,
-                modifier = Modifier.padding(bottom = 8.dp),
-            )
-        },
-        messageMenu = remember(graph) {
-            MessageMenu(
-                // 没有真实 extras 时拿不到 entryId，「从这里分叉」自动禁用，复制 / 复制 Markdown 照常可用。
-                entryIdOf = { key -> graph.liveExtras?.messageMeta?.value?.get(key)?.entryId },
-                onFork = { entryId ->
-                    scope.launch {
-                        when (val r = graph.chatDeps.controller.forkFrom(entryId)) {
-                            is Outcome.Ok -> runCatching { graph.sessions.refresh() }
-                            is Outcome.Err -> Unit // 控制器已提示
-                        }
-                    }
-                },
-                onCopied = onToast,
-            )
-        },
-        // 用量弹层依赖 W1 的 usage/compact：W1 合入、切 REAL 前不响应点击。
-        onContextClick = if (graph.extrasReady) ({ usage = true }) else null,
-    )
-
-    if (picker) {
-        ModalBottomSheet(onDismissRequest = { picker = false }, modifier = Modifier.testTag("sheet:modelPicker")) {
-            ModelPicker(
-                catalog = graph.models.catalog,
-                settings = graph.models.settings,
-                current = model?.let { ModelRef(it.provider, it.id) },
-                thinking = thinking,
-                thinkingLevels = levels,
-                generating = running,
-                // 会话内切模型 / 思考强度走引擎的 setModel / setThinking（审查 Nit ⑤）。
-                onSelect = { ref ->
-                    picker = false
-                    scope.launch {
-                        when (val r = graph.engine.setModel(ref.provider, ref.id)) {
-                            is Outcome.Ok -> Unit
-                            is Outcome.Err -> onToast("切换模型失败：" + r.message)
-                        }
-                    }
-                },
-                onThinking = { lv ->
-                    scope.launch {
-                        when (val r = graph.engine.setThinking(lv)) {
-                            is Outcome.Ok -> Unit
-                            is Outcome.Err -> onToast("设置思考强度失败：" + r.message)
-                        }
-                    }
-                },
-                // 点某个未配置的模型：记下这个模型（不是服务商第一个），配好回来就选它（审查第 1 轮 Important 3）。
-                onConfigureModel = { ref -> PendingModel.target.value = PendingModel.Target(ref.provider, ref) },
-                onConfigure = { provider ->
-                    picker = false
-                    // 服务商标题上的「去配置」没有具体模型；点模型行时 onConfigureModel 已先记下模型，这里不覆盖。
-                    if (PendingModel.target.value?.provider != provider) PendingModel.target.value = PendingModel.Target(provider, null)
-                    onConfigureProvider(provider)
-                },
-                modifier = Modifier.fillMaxHeight(0.85f),
-            )
-        }
-    }
-    if (attach) AttachSheetBridge(graph) { attach = false }
-    if (usage && graph.extrasReady) {
-        ModalBottomSheet(onDismissRequest = { usage = false }, modifier = Modifier.testTag("sheet:usage")) {
-            UsageContent(graph)
-        }
-    }
-}
-
-/** 没配模型：输入条上方的 Chrome 胶囊横幅（dsh-Go 的横幅都是胶囊）。 */
-@Composable
-private fun NoModelBanner(onOpenModelSettings: () -> Unit) {
-    GlassSurface(Modifier.fillMaxWidth().padding(bottom = 8.dp).testTag("chat:noModel"), GlassTier.Chrome, AppShape.Lg) {
-        Row(Modifier.padding(start = 16.dp, end = 6.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            StatusDot(StatusTone.Warn)
-            Spacer(Modifier.width(10.dp))
-            Text("还没有配置模型，pi 暂时无法回答。", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-            TextButton(onClick = onOpenModelSettings, modifier = Modifier.testTag("chat:goSettings")) { Text("去设置模型") }
-        }
     }
 }
 
@@ -502,6 +337,29 @@ private fun SettingsPage(graph: AppGraph, focus: String?, onBack: () -> Unit) {
         discoverModels = StoreBindings.discoverModels(BindingMode.store, graph.secrets),
         testConnection = StoreBindings.testConnection(BindingMode.store, ctx, graph.secrets, graph.runtime),
         onBack = onBack,
+        // r3：设置只留模型配置（DESIGN-r3 §6.1）：按 ModelPanels 逐行渲染，与 /model、/login 同一份实现。
+        panels = graph.modelPanels,
+        piSettings = graph.piSettings,
+        // 设置只留模型配置；网络代理、运行环境修复、关于作为本页末尾的行（PR #21 审查第 1 轮 Important 2、Nit 3）。
+        extraContent = {
+            ModelsPageExtras(
+                settings = graph.models.settings,
+                onRepairRuntime = {
+                    when (val r = graph.runtime.repair()) {
+                        is Outcome.Ok -> "运行环境已修复"
+                        is Outcome.Err -> "修复失败：${r.message}"
+                    }
+                },
+                aboutText = aboutText(remember(app) { runCatching { app.packageManager.getPackageInfo(app.packageName, 0).versionName }.getOrNull() }),
+                // 复用已有的重启引擎动作（与凭据变化后 onCredentialsChanged 相同的 engine.restart），PR #21 审查第 2 轮 Nit 4。
+                onRestartEngine = {
+                    when (val r = graph.engine.restart("网络代理已更新")) {
+                        is Outcome.Ok -> ProxyLogic.restartMessage(true)
+                        is Outcome.Err -> ProxyLogic.restartMessage(false, r.message)
+                    }
+                },
+            )
+        },
     )
 }
 

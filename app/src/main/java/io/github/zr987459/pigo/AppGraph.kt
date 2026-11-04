@@ -19,6 +19,19 @@ import io.github.zr987459.pigo.di.ExtrasBindings
 import io.github.zr987459.pigo.di.ModelsBindings
 import io.github.zr987459.pigo.di.StoreBindings
 import io.github.zr987459.pigo.di.WorkspaceBindings
+import io.github.zr987459.pigo.di.SessionBindings
+import io.github.zr987459.pigo.contract.session.SessionHost
+import io.github.zr987459.pigo.contract.models.ModelPanels
+import io.github.zr987459.pigo.contract.settings.PiSettings
+import io.github.zr987459.pigo.core.session.SessionOps
+import io.github.zr987459.pigo.di.AppSessionOps
+import io.github.zr987459.pigo.di.AppFileSearch
+import io.github.zr987459.pigo.di.ModelPanelEvents
+import io.github.zr987459.pigo.feature.chat.ui.calm.PanelEventSink
+import io.github.zr987459.pigo.feature.models.RealModelPanels
+import io.github.zr987459.pigo.form.FormPersistence
+import io.github.zr987459.pigo.form.FormPrefStore
+import io.github.zr987459.pigo.form.SharedPrefsFormStore
 import io.github.zr987459.pigo.contract.EngineExtras
 import io.github.zr987459.pigo.feature.commands.CommandsGraph
 import kotlinx.coroutines.CoroutineScope
@@ -70,4 +83,39 @@ class AppGraph(context: Context) {
 
     // 聊天界面：界面侧的可替换依赖（控制器带上 W1 extras 与 W4 草稿）
     val chatDeps: ChatBindings.ChatDeps by lazy { ChatBindings.deps(BindingMode.chat, ctx, engine, liveExtras, commands.drafts) }
+
+    // r3：两种形态共用的会话宿主（DESIGN-r3 §5.1）。形态偏好存 App 设置，启动时读回、变化时写回。
+    val formPrefs: FormPrefStore by lazy { SharedPrefsFormStore(ctx.appContext) }
+
+    // r3：pi 的 settings.json（设置 › 模型 的默认模型 / 常用模型 / 思考档，与 /settings 共用）。
+    val piSettings: PiSettings by lazy { SessionBindings.piSettings(runtime) }
+
+    // r3：模型配置面板（r3/models）。/model、/login、设置 › 模型 共用同一个实例。
+    val modelPanels: ModelPanels by lazy {
+        RealModelPanels(models.catalog, models.auth, models.custom, engine, appScope, piSettings)
+    }
+
+    /** UI 形态里模型面板的点击、键帽、表单、确认框 → [ModelPanels.onPanelEvent]。 */
+    val modelPanelEvents: PanelEventSink by lazy { ModelPanelEvents(modelPanels) }
+
+    /** SessionOps 全部走真实引擎：PiBridge（pigo-bridge）与 PiEngine 就是 [engine] 里那一个对象，不另起引擎。 */
+    val sessionOps: SessionOps by lazy { AppSessionOps.forEngine(engine, runtime, ctx.appContext.cacheDir) }
+
+    /** `@文件` 候选（core/workspace FileSearch，根 = 当前会话 cwd）；Fake 工作区时为 null。 */
+    val fileSearch: AppFileSearch? by lazy { workspace.search?.let { AppFileSearch(it, AppFileSearch.cwdOf(engine)) } }
+
+    val sessionHost: SessionHost by lazy {
+        SessionBindings.host(BindingMode.session, ctx, FormPersistence.initial(formPrefs)) {
+            SessionBindings.Deps(
+                engine = engine,
+                extras = extras,
+                controller = chatDeps.controller,
+                settings = piSettings,
+                repo = sessions,
+                panels = modelPanels,
+                ops = sessionOps,
+                imageLoader = SessionBindings.imageLoader(ctx.appContext),
+            )
+        }.also { FormPersistence.bind(it.form, formPrefs, appScope) }
+    }
 }

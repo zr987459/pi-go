@@ -1,5 +1,6 @@
 package io.github.zr987459.pigo.feature.chat.ui.calm
 
+import io.github.zr987459.pigo.contract.workspace.FileMatch
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -69,9 +70,20 @@ fun CalmSurface(
     modifier: Modifier = Modifier,
     onOpenSettings: () -> Unit = {},
     dark: Boolean? = null,
+    /** 模型配置面板的事件接收方（装配层注入 RealModelPanels；为 null 时面板内点击照旧走 runAction）。 */
+    panelEvents: PanelEventSink? = null,
+    /** `@文件` 模糊搜索（装配层注入 core/workspace FileSearch，根 = 会话 cwd）；为 null 时只能手动输入路径引用。 */
+    fileSearch: (suspend (String) -> List<FileMatch>)? = null,
+    /** 「＋ › 图片」：装配层打开系统图片选择器，选中的图片写进 `host.draft.images`（两形态共用，PR #21 审查 Important 1）。 */
+    onAttachImage: (() -> Unit)? = null,
+    /**
+     * 返回键注册（装配层传 `{ enabled, onBack -> BackHandler(enabled, onBack) }`；本模块不依赖 activity-compose）。
+     * 有可关的层（[CalmBack]）时启用；都关着时不拦截，交给外层（FormHost 退到后台）。
+     */
+    backHandler: (@Composable (enabled: Boolean, onBack: () -> Unit) -> Unit)? = null,
 ) {
-    if (dark == null) CalmTheme { CalmSurfaceBody(host, modifier, onOpenSettings) }
-    else CalmTheme(dark = dark) { CalmSurfaceBody(host, modifier, onOpenSettings) }
+    if (dark == null) CalmTheme { CalmSurfaceBody(host, modifier, onOpenSettings, panelEvents, fileSearch, onAttachImage, backHandler) }
+    else CalmTheme(dark = dark) { CalmSurfaceBody(host, modifier, onOpenSettings, panelEvents, fileSearch, onAttachImage, backHandler) }
 }
 
 /** 视图状态：只影响本形态怎么画，不是业务状态。 */
@@ -88,15 +100,26 @@ internal class CalmViewState {
 }
 
 @Composable
-private fun CalmSurfaceBody(host: SessionHost, modifier: Modifier, onOpenSettings: () -> Unit) {
+private fun CalmSurfaceBody(
+    host: SessionHost,
+    modifier: Modifier,
+    onOpenSettings: () -> Unit,
+    panelEvents: PanelEventSink? = null,
+    fileSearch: (suspend (String) -> List<FileMatch>)? = null,
+    onAttachImage: (() -> Unit)? = null,
+    backHandler: (@Composable (enabled: Boolean, onBack: () -> Unit) -> Unit)? = null,
+) {
     val c = Calm.colors
     val scope = rememberCoroutineScope()
     val view = remember { CalmViewState() }
+    val sendGate = remember { PanelSendGate() }
     val chat by host.chat.collectAsState()
     val overlays by host.overlay.items.collectAsState()
     val engineStatus by host.engine.status.collectAsState()
     val ephemeral by host.ephemeral.collectAsState()
     val clipboard = LocalClipboardManager.current
+    // `/copy`、分享链接等：共享层经 SessionHost.clipboardRequests 请求写剪贴板，本形态真正写入。
+    LaunchedEffect(host) { host.clipboardRequests.collect { t -> clipboard.setText(AnnotatedString(t)) } }
 
     val run: (String, String?) -> Unit = { id, args ->
         scope.launch {
@@ -112,10 +135,7 @@ private fun CalmSurfaceBody(host: SessionHost, modifier: Modifier, onOpenSetting
                     view.historyCursor = k; host.draft.value = host.draft.value.withText(t)
                 }
                 "transcript.jump" -> view.jumpTick++
-                "copy.last" -> chat.items.lastOrNull { it is ChatItem.Assistant }?.let { a ->
-                    val text = (a as ChatItem.Assistant).blocks.filterIsInstance<ContentBlock.Text>().joinToString("\n") { it.text }
-                    if (text.isNotEmpty()) clipboard.setText(AnnotatedString(text))
-                }
+                "attach.image" -> if (onAttachImage != null) onAttachImage() else view.toast = "图片附件未接线"
             }
         }
     }
@@ -157,13 +177,7 @@ private fun CalmSurfaceBody(host: SessionHost, modifier: Modifier, onOpenSetting
                 onAction = run,
                 modifier = Modifier.weight(1f),
             )
-            CalmComposer(host = host, chat = chat, view = view, onAction = run)
-        }
-
-        // 面板（overlay 栈顶，两种形态共用同一模型，§5.4）
-        val top = overlays.lastOrNull()
-        if (top != null) {
-            CalmSheet(host = host, model = top, onAction = run, onDismiss = { host.overlay.pop() })
+            CalmComposer(host = host, chat = chat, view = view, onAction = run, fileSearch = fileSearch)
         }
 
         // ☰ 会话列表
@@ -186,6 +200,44 @@ private fun CalmSurfaceBody(host: SessionHost, modifier: Modifier, onOpenSetting
             )
         }
 
+        if (view.editorExpanded) {
+            ExpandedEditor(host = host, onClose = { view.editorExpanded = false })
+        }
+
+        // 面板（overlay 栈顶，两种形态共用同一模型，§5.4）。画在会话列表、展开编辑器之上（第 2 轮 Nit 2）：
+        // 从会话列表或编辑器里弹出的面板 / 扩展对话框必须在用户眼前；返回键顺序（CalmBack）与这个画法一致。
+        val top = overlays.lastOrNull()
+        fun dismissTop(t: io.github.zr987459.pigo.contract.session.OverlayModel) {
+            val sink = panelEvents?.takeIf { it.owns(t.id) }
+            if (sink != null) CalmPanelLogic.dismissEvent(t)?.let { k -> scope.launch { sink.onEvent(t.id, k, null) } }
+            host.overlay.remove(t.id)
+        }
+        // 返回键（PR #21 审查第 1 轮 Important 3、第 2 轮 Nit 2）：按画面层级自上而下——面板 → 展开编辑器 → 会话列表 → 搜索；都关着不拦截。
+        val backStep = CalmBack.step(view.editorExpanded, top, view.drawerOpen, view.searchOpen)
+        backHandler?.invoke(backStep != CalmBack.Step.NONE) {
+            when (CalmBack.step(view.editorExpanded, host.overlay.top, view.drawerOpen, view.searchOpen)) {
+                CalmBack.Step.EDITOR -> view.editorExpanded = false
+                CalmBack.Step.OVERLAY -> host.overlay.top?.let { dismissTop(it) }
+                CalmBack.Step.DRAWER -> view.drawerOpen = false
+                CalmBack.Step.SEARCH -> { view.searchOpen = false; view.searchQuery = "" }
+                CalmBack.Step.NONE -> Unit
+            }
+        }
+        if (top != null) {
+            val sink = panelEvents?.takeIf { it.owns(top.id) }
+            val panel: ((String, String?) -> Unit)? = sink?.let { s ->
+                { key, value ->
+                    scope.launch {
+                        CalmPanelLogic.dispatch(host.overlay, sendGate, s, top.id, key, value)?.let { view.toast = it }
+                    }
+                }
+            }
+            CalmSheet(
+                host = host, model = top, onAction = run, panel = panel,
+                onDismiss = { dismissTop(top) },
+            )
+        }
+
         view.toast?.let { t ->
             Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 120.dp)) {
                 Text(
@@ -195,9 +247,6 @@ private fun CalmSurfaceBody(host: SessionHost, modifier: Modifier, onOpenSetting
                     modifier = Modifier.background(c.text.copy(alpha = 0.88f), RoundedCornerShape(12.dp)).padding(horizontal = 16.dp, vertical = 10.dp).testTag("calm:toast"),
                 )
             }
-        }
-        if (view.editorExpanded) {
-            ExpandedEditor(host = host, onClose = { view.editorExpanded = false })
         }
     }
 }

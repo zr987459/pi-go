@@ -36,6 +36,7 @@ enum class GitBadge(val label: String) { MODIFIED("改"), ADDED("增"), DELETED(
  * 文件页的逻辑（与界面分开，便于单测）。所有调用在 [scope] 上异步执行；[WorkspaceFs] 负责切到 IO 线程。
  * @param highlight 本轮被 pi 改动的文件（W5 从轮末汇总传入），列表里高亮
  */
+@Deprecated("r3: r3/app 删除（DESIGN-r3 X4），新代码不得引用")
 class FilesController(
     private val fs: WorkspaceFs,
     private val scope: CoroutineScope,
@@ -168,6 +169,7 @@ class FilesController(
 }
 
 /** 契约的 [GitStatus] 不带仓库根：从 cwd 往上找 `.git`（目录或 worktree 的文件），适配层（§3.3）。 */
+@Deprecated("r3: r3/app 删除（DESIGN-r3 X4/X5），新代码不得引用")
 object GitRoots {
     suspend fun find(fs: WorkspaceFs, cwd: String): String? {
         var p = cwd.trimEnd('/').ifEmpty { "/" }

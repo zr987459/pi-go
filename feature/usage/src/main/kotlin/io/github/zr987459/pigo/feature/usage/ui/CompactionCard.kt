@@ -21,6 +21,7 @@ import io.github.zr987459.pigo.feature.usage.logic.UsageFormat
 
 /** 时间线里的压缩卡（U3、U4）：「已压缩：150k → 32k」，点开看摘要与读过、改过的文件。 */
 @Composable
+@Deprecated("r3: r3/app 删除（DESIGN-r3 X11），新代码不得引用")
 fun CompactionCard(item: TimelineExtra.Compaction, modifier: Modifier = Modifier) {
     var open by rememberSaveable(item.key) { mutableStateOf(false) }
     val parsed = item.summary?.let(CompactionSummary::parse)

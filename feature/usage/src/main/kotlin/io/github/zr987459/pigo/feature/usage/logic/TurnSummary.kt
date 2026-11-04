@@ -23,6 +23,7 @@ data class TurnSummaryView(
     val isEmpty: Boolean get() = writtenFiles.isEmpty() && durationText == null && rateText == null
 }
 
+@Deprecated("r3: r3/app 删除（DESIGN-r3 X3），新代码不得引用")
 object TurnSummary {
     private val WRITE_TOOLS = setOf("write", "edit")
 
@@ -85,6 +86,7 @@ object TurnSummary {
 }
 
 /** `edit` 工具卡的 diff 数据（C11）。 */
+@Deprecated("r3: r3/app 删除（DESIGN-r3 X3），新代码不得引用")
 object EditToolDiff {
     /** 不是 edit 工具，或参数和结果都给不出 diff 时返回 null。 */
     fun of(tool: ChatItem.Tool): List<DiffLine>? {

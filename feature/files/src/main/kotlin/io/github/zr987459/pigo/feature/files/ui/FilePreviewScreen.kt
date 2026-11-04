@@ -71,6 +71,7 @@ import kotlinx.coroutines.withContext
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+@Deprecated("r3: r3/app 删除（DESIGN-r3 X4），新代码不得引用")
 fun FilePreviewScreen(
     fs: WorkspaceFs,
     path: String,

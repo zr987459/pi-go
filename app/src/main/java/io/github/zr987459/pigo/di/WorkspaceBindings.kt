@@ -6,6 +6,7 @@ import io.github.zr987459.pigo.contract.EngineExtras
 import io.github.zr987459.pigo.contract.RuntimeManager
 import io.github.zr987459.pigo.contract.SessionExporter
 import io.github.zr987459.pigo.contract.WorkspaceFs
+import io.github.zr987459.pigo.contract.workspace.WorkspaceSearch
 import io.github.zr987459.pigo.contract.fake.FakeAttachmentProcessor
 import io.github.zr987459.pigo.contract.fake.FakeEngineExtras
 import io.github.zr987459.pigo.contract.fake.FakeSessionExporter
@@ -21,8 +22,14 @@ import io.github.zr987459.pigo.feature.files.FilesRuntime
  * extras 是 Fake（引擎为 FAKE 的本地调试）时不传，统一走 `pi --export`。
  */
 object WorkspaceBindings {
-    class Workspace(val fs: WorkspaceFs, val attachments: AttachmentProcessor, val exporter: SessionExporter) {
-        /** feature/files 的依赖；同时登记给系统分享入口（FilesRuntime）。 */
+    class Workspace(
+        val fs: WorkspaceFs,
+        val attachments: AttachmentProcessor,
+        val exporter: SessionExporter,
+        /** r3：`@文件` 模糊搜索（core/workspace FileSearch）；Fake 模式没有。 */
+        val search: WorkspaceSearch? = null,
+    ) {
+        /** feature/files 的依赖；同时登记到 FilesRuntime（不经导航的入口用）。 */
         val deps: FilesDeps by lazy { FilesDeps(fs, attachments, exporter).also { FilesRuntime.install(it) } }
     }
 
@@ -44,6 +51,6 @@ object WorkspaceBindings {
             exportHtml = if (extras is FakeEngineExtras) null else { out -> extras.exportHtml(out) },
             currentSessionPath = { engine.chat.value.sessionFile },
         )
-        return Workspace(svc.fs, svc.attachments, svc.exporter)
+        return Workspace(svc.fs, svc.attachments, svc.exporter, svc.search)
     }
 }

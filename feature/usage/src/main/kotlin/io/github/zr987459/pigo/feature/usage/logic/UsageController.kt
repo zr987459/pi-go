@@ -41,6 +41,7 @@ data class UsageUiState(
  * 用量弹层的状态持有者：读 `get_session_stats`、执行手动压缩。
  * 每轮结束后引擎会刷新 [EngineExtras.usageState]，这里跟着更新；打开弹层时再主动 [refresh] 一次。
  */
+@Deprecated("r3: r3/app 删除（DESIGN-r3 X3），新代码不得引用")
 class UsageController(
     private val extras: EngineExtras,
     private val scope: CoroutineScope,
@@ -149,6 +150,7 @@ data class TreeUiState(
  * 会话树页：`get_tree` 渲染缩进树；「从这里分叉」交给 [fork]（W5 接到 ChatController.forkFrom，
  * 它负责把返回的原文写回新会话的输入框）。「复制会话」走 `clone`。
  */
+@Deprecated("r3: r3/app 删除（DESIGN-r3 X11），新代码不得引用")
 class SessionTreeController(
     private val extras: EngineExtras,
     private val scope: CoroutineScope,

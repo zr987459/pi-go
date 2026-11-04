@@ -37,6 +37,7 @@ import io.github.zr987459.pigo.feature.usage.logic.UsageUiState
  * 无状态：数据来自 [UsageUiState]，操作回调给 UsageController。
  */
 @Composable
+@Deprecated("r3: r3/app 删除（DESIGN-r3 X3），新代码不得引用")
 fun UsageSheetContent(
     state: UsageUiState,
     onCompact: (String?) -> Unit,
@@ -92,6 +93,7 @@ fun UsageSheetContent(
 }
 
 @Composable
+@Deprecated("r3: r3/app 删除（DESIGN-r3 X3），新代码不得引用")
 fun ContextBarView(bar: ContextBar, modifier: Modifier = Modifier) {
     Column(modifier.fillMaxWidth().testTag("context-bar")) {
         when (bar) {

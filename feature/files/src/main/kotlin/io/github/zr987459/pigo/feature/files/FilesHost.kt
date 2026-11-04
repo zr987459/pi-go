@@ -14,6 +14,7 @@ import io.github.zr987459.pigo.feature.files.ui.FilesBrowserScreen
 import io.github.zr987459.pigo.feature.files.ui.GitStatusScreen
 
 /** 文件页内部的页面栈（不占用 App 导航，W5 只需挂一个「文件」路由）。 */
+@Deprecated("r3: r3/app 删除（DESIGN-r3 X4），新代码不得引用")
 sealed interface FilesPage {
     data object Browser : FilesPage
     data class Preview(val path: String) : FilesPage
@@ -31,6 +32,7 @@ sealed interface FilesPage {
  * @param onMention 把文件以 `@路径` 引用到输入框
  */
 @Composable
+@Deprecated("r3: r3/app 删除（DESIGN-r3 X4），新代码不得引用")
 fun FilesHost(
     deps: FilesDeps,
     sessionCwd: String?,

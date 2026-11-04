@@ -985,20 +985,9 @@ class PiEngine(
         val c = conn
         if (c == null || !c.ready) return Outcome.Ok(QueueSnapshot.EMPTY)
         // 1) 先清队列：abort 不清队列，不先清的话排队消息会在中止后继续发出。
-        val q = c.channel.request(RpcCommand.ClearQueue(ids.next()), config.defaultTimeoutMs)
-        val withdrawn = if (q is Outcome.Ok) Responses.queue(q.value.data) else QueueSnapshot.EMPTY
+        val q = withdrawQueue(c)
+        val withdrawn = if (q is Outcome.Ok) q.value else QueueSnapshot.EMPTY
         if (q is Outcome.Err) log.w(TAG, "clear_queue 失败：${q.message}")
-        // 撤回的文本不会再发出：去掉对应的「已排队」气泡，文本交给界面放回输入框或做成「已撤回」芯片。
-        if (!withdrawn.isEmpty) {
-            val texts = (withdrawn.steering + withdrawn.followUp).toMutableList()
-            mutate { st ->
-                var s = st
-                st.items.filterIsInstance<ChatItem.User>().filter { it.delivery == Delivery.QUEUED }.forEach { u ->
-                    if (texts.remove(u.text)) s = reducer.removeItem(s, u.key)
-                }
-                s.copy(queue = QueueSnapshot.EMPTY)
-            }
-        }
         if (!liveRunning) return Outcome.Ok(withdrawn)
         // 2) 再中止；abort 等会话空闲后才响应。
         mutate { it.copy(statusLine = STOPPING) }
@@ -1011,6 +1000,51 @@ class PiEngine(
                 if (r is Outcome.Err) return r
             } else if (a.code != ErrCode.ENGINE_EXIT) {
                 log.w(TAG, "abort 失败：${a.message}")
+            }
+        }
+        return Outcome.Ok(withdrawn)
+    }
+
+    /**
+     * r3/app：只取回排队消息（pi 交互模式 Alt+↑「把排队消息放回编辑器」；RPC `clear_queue`），**不中止**当前一轮。
+     * 引擎没在运行时返回空快照，不为此启动引擎。
+     */
+    suspend fun clearQueue(): Outcome<QueueSnapshot> {
+        val c = conn
+        if (c == null || !c.ready) return Outcome.Ok(QueueSnapshot.EMPTY)
+        return withdrawQueue(c)
+    }
+
+    /**
+     * r3/app：`/quit` 的手机语义（SessionOps.stopEngine）：结束 pi 进程（不触发崩溃恢复），本实例仍可用；
+     * 下次发送 / 打开会话时按需以 `--session <当前文件>` 启动并重建时间线，上下文不丢。调用方先 [stop] 掉当前一轮。
+     */
+    suspend fun stopProcess(): Outcome<Unit> {
+        if (closed) return Outcome.Ok(Unit)
+        recoveryJob?.cancel()
+        lifecycle.withLock { conn?.let { stopConn(it, config.stopGraceMs) } }
+        setForeground(false)
+        guard.releaseNow()
+        _status.value = EngineStatus.Stopped
+        return Outcome.Ok(Unit)
+    }
+
+    /** 当前会话的工作目录（pi 进程 cwd；`@文件` 搜索根）。 */
+    val cwd: String get() = currentCwd
+
+    /** `clear_queue`，并去掉对应的「已排队」气泡（撤回的文本由界面放回输入框或做成「已撤回」芯片）。 */
+    private suspend fun withdrawQueue(c: Conn): Outcome<QueueSnapshot> {
+        val q = c.channel.request(RpcCommand.ClearQueue(ids.next()), config.defaultTimeoutMs)
+        if (q is Outcome.Err) return q
+        val withdrawn = Responses.queue((q as Outcome.Ok).value.data)
+        if (!withdrawn.isEmpty) {
+            val texts = (withdrawn.steering + withdrawn.followUp).toMutableList()
+            mutate { st ->
+                var s = st
+                st.items.filterIsInstance<ChatItem.User>().filter { it.delivery == Delivery.QUEUED }.forEach { u ->
+                    if (texts.remove(u.text)) s = reducer.removeItem(s, u.key)
+                }
+                s.copy(queue = QueueSnapshot.EMPTY)
             }
         }
         return Outcome.Ok(withdrawn)
