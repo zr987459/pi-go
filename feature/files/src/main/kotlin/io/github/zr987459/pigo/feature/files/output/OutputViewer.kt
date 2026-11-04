@@ -2,7 +2,6 @@ package io.github.zr987459.pigo.feature.files.output
 
 import io.github.zr987459.pigo.core.session.text.Ansi
 import io.github.zr987459.pigo.core.session.text.OutputSearch
-import io.github.zr987459.pigo.feature.files.ui.BackHandler
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row

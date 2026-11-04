@@ -154,6 +154,11 @@ data class TermEnv(
      * 是则选中 / 提交 / 确认走面板事件。注入后 [onPanelEvent] 可省略（缺省用它的 `onPanelEvent`）。
      */
     val panelSource: PanelSourceTracker? = null,
+    /**
+     * 「＋ 附件 › 图片」（`attach.image`，外接键盘粘贴图片键同）：装配层打开系统照片选择器，选中的图片写进共享草稿
+     * （与 UI 形态同一个入口，r3/app PR 2 最小改动）。null = 照旧交给动作表。
+     */
+    val onAttachImage: (() -> Unit)? = null,
 )
 
 private val SPINNER = listOf("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
@@ -211,6 +216,7 @@ private fun TermScreen(
     LaunchedEffect(Unit) { (host.extras.commands() as? Outcome.Ok)?.let { commands = it.value } }
 
     fun run(id: String, args: String? = null): kotlinx.coroutines.Job = scope.launch {
+        if (id == "attach.image") env.onAttachImage?.let { it(); return@launch }
         when (val r = host.runAction(id, args)) {
             is io.github.zr987459.pigo.contract.actions.ActionResult.Toast -> toast = r.text
             else -> Unit

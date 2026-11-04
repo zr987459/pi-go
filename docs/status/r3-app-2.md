@@ -10,3 +10,6 @@
 
 ## 进度
 - 14:07 建分支、推本文件。下一步：拉源码、读 DESIGN-r3 ⑥段与 app/**。
+- 14:42 WIP 推送（未本地编译）：①终端接线（TERM_WIRED=true；FormHost term = TermSurface，共用 graph.sessionHost；TermEnv: fileSearch、panelSource=PanelSourceTracker 包住交给 PiActionsImpl 的 RealModelPanels、onPanelEvent、onAttachImage → 系统照片选择器；返回键 TermBack 先关面板，扩展对话框不拦截）；②PickClose：/model 选中并切换成功后关闭选择面板（两形态共用，经 ModelPanelEvents.after）；③设置›模型「立即重启 pi」改为比较 effectiveProxy（引擎 Starting 时记下）vs 已保存（ProxyLogic.showRestart + 单测/仪器测试）；④删 WiredPages、PiGoDrawer、SettingsHub/Providers/Tree/Usage/Files/Sessions 旧路由、PendingModel、AppSmokeTest/WiringSmokeTest（测的是已删导航）；⑤feature/usage 只剩空 build.gradle.kts（settings include 归 r3/core）；⑥feature/files 删 FilesHost、browser/、export/、ui/（Back.kt 移到 output/）。
+- 范围外最小改动：feature/term TermSurface.kt 加 TermEnv.onAttachImage（attach.image 交装配层）；app/build.gradle.kts 加 :feature:term、去 :feature:usage。
+- 下一步：清理 feature/files 测试（FilesLogicTest 去浏览器/Git 部分，删 FilesControllerOrderTest、FilesDeviceTest 中浏览器用例）；FormHost 删 TermPlaceholder 并改 AppCoverageTest/FormHostTest 用 TermSurface；本地 assembleDebug testDebugUnitTest；然后 FormSwitchStreamingTest、AppCoverageTest 终端入口、模拟器名单、NOTICE 合并、真机清单。

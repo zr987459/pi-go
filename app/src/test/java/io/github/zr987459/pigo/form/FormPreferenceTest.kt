@@ -30,12 +30,13 @@ class FormPreferenceTest {
         assertEquals(UiForm.CALM, FormPersistence.initial(MemStore(UiForm.CALM), termWired = true))
     }
 
-    /** PR #21 审查第 1 轮 Nit 4：终端形态接线前，上次停在终端也从 UI 形态启动（不停在占位页），且不改写偏好。 */
+    /** PR 2：终端形态已接线，上次停在终端就从终端启动；回落逻辑仍可用（termWired = false）。 */
     @Test
-    fun termFallsBackToCalmUntilWired() {
+    fun termRestoredOnceWired() {
         val store = MemStore(UiForm.TERM)
-        assertEquals(false, FormPersistence.TERM_WIRED)
-        assertEquals(UiForm.CALM, FormPersistence.initial(store))
+        assertEquals(true, FormPersistence.TERM_WIRED)
+        assertEquals(UiForm.TERM, FormPersistence.initial(store))
+        assertEquals(UiForm.CALM, FormPersistence.initial(store, termWired = false))
         assertEquals(emptyList<UiForm>(), store.saves)
     }
 

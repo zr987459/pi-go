@@ -1,5 +1,7 @@
 package io.github.zr987459.pigo
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.compose.ui.test.assertIsDisplayed
@@ -207,7 +209,13 @@ class AppCoverageTest {
     fun proxySaveOffersRestartPi() {
         val settings = FakeAppSettingsStore()
         var restarts = 0
-        rule.setContent { ModelsPageExtras(settings, onRepairRuntime = null, aboutText = "pi-go", onRestartEngine = { restarts++; "pi 已重启，代理设置已生效" }) }
+        // 当前生效的代理 = 引擎启动时注入的（装配层在每次启动时记下）；重启后变成已保存的。
+        val applied = kotlinx.coroutines.flow.MutableStateFlow<io.github.zr987459.pigo.contract.NetworkSettings?>(settings.network.value)
+        var shown by androidx.compose.runtime.mutableStateOf(true)
+        rule.setContent {
+            if (shown) ModelsPageExtras(settings, onRepairRuntime = null, aboutText = "pi-go", effective = applied,
+                onRestartEngine = { restarts++; applied.value = settings.network.value; "pi 已重启，代理设置已生效" })
+        }
         rule.onNodeWithTag("settings:restartPi").assertDoesNotExist()
         rule.onNodeWithTag("settings:proxy").performClick()
         rule.waitForIdle()
@@ -215,6 +223,12 @@ class AppCoverageTest {
         rule.onNodeWithTag("proxy:save").performClick()
         rule.waitForIdle()
         assertEquals("http://127.0.0.1:7890", settings.network.value.proxyUrl)
+        // 第 3 轮 Nit：离开设置页再回来（remember 状态丢失），生效值仍与已保存不一致 → 入口仍在
+        shown = false
+        rule.waitForIdle()
+        shown = true
+        rule.waitForIdle()
+        rule.onNodeWithTag("settings:restartPi").assertExists()
         rule.onNodeWithTag("settings:restartPi").performClick()
         rule.waitForIdle()
         rule.waitUntil(3_000) { restarts == 1 }

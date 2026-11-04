@@ -1,4 +1,4 @@
-package io.github.zr987459.pigo.feature.files.ui
+package io.github.zr987459.pigo.feature.files.output
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.staticCompositionLocalOf
