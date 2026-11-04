@@ -21,4 +21,6 @@
 - `NoRemovedFeaturesTest`（@Ignore）、`ChatControllerNoFormParamTest`、`docs/notices/r3-session.md`。core/session、feature/commands、feature/chat 单测绿。
 - 下一步：等 PR #15 合入 main → merge main → 开 PR；期间跑 assembleDebug / 全量 testDebugUnitTest。
 - 08:08 已 merge main（PR #15 合入后，merge 提交 082b585，未 rebase）。全量 `assembleDebug testDebugUnitTest assembleDebugAndroidTest`：只有 `:core:contract` 的 `PiActionCatalogTest` 因新增 4 个动作失败 → 已更新其期望 id 集合，并把 `ext.commands` 终端入口改为键条 `/`（斜杠名为空）。重跑通过。
-- 08:12 已开 PR #20。等 CI。
+- 08:12 已开 PR #20。
+
+**完成，PR #20**（最终 SHA 见 PR；CI：push 41744489087、pull_request 41744496626 均 success，模拟器 job 因无仪器测试类按设计跳过）。
