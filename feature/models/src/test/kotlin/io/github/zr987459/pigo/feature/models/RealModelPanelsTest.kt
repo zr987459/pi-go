@@ -148,6 +148,8 @@ class RealModelPanelsTest {
     }
 
     @Test fun scopedAndDefaultWriteSettingsJson() = runBlocking {
+        panels.modelPicker(io.github.zr987459.pigo.contract.models.ModelPickerTab.SCOPED)
+        // 切换常用后保持当前页签（审查第 2 轮：设置页从「全部」里加常用时不跳页签）
         val r = panels.onPanelEvent(RealModelPanels.ID_MODEL, "star:deepseek/deepseek-chat").overlay() as OverlayModel.SelectList
         assertEquals("常用", r.tab)
         assertEquals(listOf("model:deepseek/deepseek-chat"), r.groups.single().items.map { it.key })

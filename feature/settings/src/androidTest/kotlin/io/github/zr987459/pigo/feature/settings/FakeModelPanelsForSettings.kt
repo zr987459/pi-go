@@ -40,14 +40,35 @@ class FakeModelPanelsForSettings(
         )
     }
 
-    override suspend fun providerForm(providerId: String): OverlayModel = OverlayModel.Form("provider.form:$providerId", providerId)
+    val values = mutableListOf<String?>()
+    var oauthPolls = 0
+
+    override suspend fun providerForm(providerId: String): OverlayModel = OverlayModel.Form(
+        "provider.form:$providerId", providerId,
+        fields = listOf(io.github.zr987459.pigo.contract.session.FormField("apiKey", "API Key", io.github.zr987459.pigo.contract.settings.PiSettingType.Str, secret = true)),
+        actions = listOfNotNull(
+            io.github.zr987459.pigo.contract.session.KeyCap("", "测试", "test"),
+            if (providerId == "anthropic") io.github.zr987459.pigo.contract.session.KeyCap("", "账号登录", "oauth") else null,
+            if (providerId in connected) io.github.zr987459.pigo.contract.session.KeyCap("", "清除", "clear") else null,
+        ),
+    )
     override suspend fun customProviderForm(providerId: String?): OverlayModel = OverlayModel.Form("provider.custom" + (providerId?.let { ":$it" } ?: ""), "自定义")
-    override suspend fun oauthFlow(providerId: String): OverlayModel = OverlayModel.Text("oauth:$providerId", providerId, "登录")
+    override suspend fun oauthFlow(providerId: String): OverlayModel = OverlayModel.Text("oauth:$providerId", providerId, "正在开始登录…")
     override suspend fun logoutPicker(): OverlayModel = OverlayModel.SelectList("auth.logout", "退出登录")
 
     override suspend fun onPanelEvent(overlayId: String, key: String, value: String?): ActionResult {
         events += "$overlayId/$key"
+        values += value
         return when {
+            overlayId.startsWith("oauth:") && key == "refresh" -> {
+                oauthPolls++
+                ActionResult.Overlay(
+                    if (oauthPolls < 2) OverlayModel.Text(overlayId, "登录", "正在开始登录…")
+                    else OverlayModel.Text(overlayId, "登录", "在浏览器中打开：\nhttps://example.com/oauth/authorize\n在浏览器里完成授权"),
+                )
+            }
+            key == "oauth" -> ActionResult.Overlay(oauthFlow(overlayId.removePrefix("provider.form:")))
+            key == "test" -> ActionResult.Toast("✓ 连接成功")
             key.startsWith("provider:") -> ActionResult.Overlay(providerForm(key.removePrefix("provider:")))
             key == "custom" -> ActionResult.Overlay(customProviderForm(null))
             key.startsWith("custom:") -> ActionResult.Overlay(customProviderForm(key.removePrefix("custom:")))

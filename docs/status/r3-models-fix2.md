@@ -16,6 +16,7 @@
 
 ## 进度
 - 09:03 已 merge main → e8f7f66（普通 merge，无冲突）。
+- 09:44 本地 JUnit：RealModelPanelsFix2Test 8、Fix1、RealModelPanelsTest（同步「常用保持页签」）、ModelPanelsRenderFixtureTest、SettingsPanelLogicTest 13、CapabilityTriStateTest 3 全过（43/43）。androidTest：SettingsScreenUiTest 修滚动 + 新增 5 条交互测试；android.yml 模拟器名单加 SettingsScreenUiTest（.github 改动）。已推送，等 CI。下一步：看 CI（push/PR/模拟器 job），红了修；更新 PR 描述；写完成。
 - 09:38 本地 kotlinc 编译通过（JVM 部分）；新增单测 RealModelPanelsFix2Test、SettingsPanelLogicTest、CapabilityTriStateTest，正在跑。下一步：跑测试 → androidTest 补交互测试并修 SettingsScreenUiTest 滚动 → 模拟器名单（.github）→ CI → PR 描述。
 - 09:24 代码进行中：契约 KeyCap 注释 + Form.actions + CustomModel 显式能力；RealCustomProviderStore 三态；RealModelPanels 表单按钮/新建清草稿/Key 绑定名称地址/OAuth submit；设置页 SettingsPanelLogic（选取模式、高亮、Toast 不关、OAuth 轮询、高级表单）。下一步：本地编译 JVM 部分、补单测、androidTest、CI。
 - 09:10 读完审查与代码，方案：设置页面板加「选取模式」（默认/常用）与高亮项，键帽回传高亮项；Toast 不关面板（面板内显示消息）；OAuth 面板 1 秒轮询 refresh、OpenUrl 自动打开链接；Form 加 actions（契约最小改动）补「账号登录」「清除」；高级两项在设置页内表单直接写 pi settings；SettingsScreenUiTest 先滚到分区再取行，加进模拟器名单（.github 改动）；CustomModel 加显式能力三态（契约最小改动）。
