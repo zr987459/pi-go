@@ -197,3 +197,39 @@ internal fun apiLabel(a: ProviderApi) = when (a) {
     ProviderApi.ANTHROPIC_MESSAGES -> "Anthropic Messages"
     ProviderApi.GOOGLE_GENERATIVE_AI -> "Google Gemini"
 }
+
+/**
+ * 代理（M9）。费用显示（汇率）已按 DESIGN-r3 X2 删除，这里只剩代理。
+ *
+ * 交接给 r3/app：本页目前仍是**唯一**的代理入口。等 `PiSettings` 的 `httpProxy` 在 ⌘ › pi 设置有入口、
+ * r3/app 去掉 `WiredPages` 的 network 路由后，由 r3/app 删除本函数（DESIGN-r3 §8.2 第 2、4 条）。
+ */
+@Deprecated("r3: 代理迁到 PiSettings.httpProxy、r3/app 断开 network 路由后，由 r3/app 删除")
+@Composable
+fun NetworkAndCostScreen(settings: AppSettingsStore, modifier: Modifier = Modifier) {
+    val scope = rememberCoroutineScope()
+    val net by settings.network.collectAsState()
+    var proxy by remember(net) { mutableStateOf(net.proxyUrl.orEmpty()) }
+    var noProxy by remember(net) { mutableStateOf(net.noProxy) }
+    var message by remember { mutableStateOf<String?>(null) }
+
+    Column(modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
+        Text("网络代理", style = MaterialTheme.typography.titleLarge)
+        Text("国外服务商在国内通常需要代理。填本机或局域网代理地址（只支持 http/https），pi 和登录都会走它。",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+        OutlinedTextField(proxy, { proxy = it }, label = { Text("代理地址") }, placeholder = { Text("http://127.0.0.1:7890") },
+            singleLine = true, modifier = Modifier.fillMaxWidth().testTag("settings.proxy"))
+        OutlinedTextField(noProxy, { noProxy = it }, label = { Text("不走代理的地址") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        Button(onClick = {
+            scope.launch {
+                message = try {
+                    settings.setNetwork(NetworkSettings(proxy.trim().ifEmpty { null }, noProxy.trim().ifEmpty { "localhost,127.0.0.1" }))
+                    if (proxy.isBlank()) "已关闭代理，重启 pi 后生效" else "已保存，重启 pi 后生效"
+                } catch (e: IllegalArgumentException) {
+                    e.message
+                }
+            }
+        }, modifier = Modifier.padding(top = 8.dp)) { Text("保存代理") }
+        message?.let { Text(it, modifier = Modifier.padding(top = 8.dp)) }
+    }
+}

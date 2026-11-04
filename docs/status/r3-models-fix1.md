@@ -12,3 +12,8 @@
 
 ## 进度
 - [ ] 读审查、DESIGN-r3 §6/§8、前任 status
+- [x] 读审查、DESIGN-r3 §6/§8、前任 status（08:35）
+- [x] Important 1：WiredPages.kt 恢复为 main 原样（撤回越界）；NetworkAndCostScreen 恢复（只留代理，删汇率部分），标 @Deprecated，交接 r3/app 删除（08:40）
+- [ ] Important 3/4 + Nit 1–3（RealModelPanels、RealCustomProviderStore）
+- [ ] Important 2（设置页按 §6.1 重做 + 界面测试）
+- [ ] Nit 4 残留文案、PR 描述

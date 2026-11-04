@@ -62,6 +62,7 @@ import io.github.zr987459.pigo.feature.commands.ui.SkillsContent
 import io.github.zr987459.pigo.feature.models.CustomProviderScreen
 import io.github.zr987459.pigo.feature.settings.session.SessionDefaultsController
 import io.github.zr987459.pigo.feature.settings.session.SessionDefaultsScreen
+import io.github.zr987459.pigo.feature.models.NetworkAndCostScreen
 import io.github.zr987459.pigo.feature.models.ProviderConfigScreen
 import io.github.zr987459.pigo.feature.models.ProviderListScreen
 import io.github.zr987459.pigo.feature.usage.logic.SessionTreeController
@@ -225,8 +226,7 @@ internal fun CustomProviderPage(graph: AppGraph, onBack: () -> Unit) {
 
 @Composable
 internal fun NetworkPage(graph: AppGraph, onBack: () -> Unit) {
-    // r3/models：NetworkAndCostScreen 已删（DESIGN-r3 X2/X14）；本路由由 r3/app 删除。
-    SubPage("代理与费用显示", "network", onBack) { Text("此设置已移除：费用照 pi 显示美元。", Modifier.padding(16.dp)) }
+    SubPage("代理与费用显示", "network", onBack) { NetworkAndCostScreen(graph.models.settings) }
 }
 
 /** M8 会话默认（只在真实 extras 时有入口）。 */
