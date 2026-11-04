@@ -11,6 +11,8 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.printToString
 import java.util.concurrent.atomic.AtomicInteger
+import android.view.WindowManager
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -249,12 +251,20 @@ class FormSwitchStreamingTest {
      * CI 模拟器本身就是 320×640dp（avd 默认 skin 320x640、160dpi）。360dp 比屏幕宽，旧写法 `requiredWidth(360.dp)`
      * 会把内容居中、左右各裁掉 20dp，测的不是「360dp 宽的屏幕」。这里按需缩小密度（同 `DeviceConfigurationOverride.ForcedSize`
      * 的做法），让内容按 [w] 宽排版并整体落在窗口内；窄于窗口时靠左排版。
+     *
+     * 窗口配置与 MainActivity 一致（edge-to-edge + adjustResize，键盘由 imePadding 让位）。测试默认的 ComponentActivity
+     * 是 adjustPan：终端编辑器拿到焦点、软键盘弹出后整个窗口上推（CI 9e592d4 实测 root 顶边 -128px），UI 形态顶栏的 ⇄
+     * 被推出屏幕——这是测试宿主与 App 窗口配置不同造成的，App 里不会发生。
      */
     @Test
     fun narrowScreensKeepToggleVisibleAndClickable() {
         val ctx = BindingContext(InstrumentationRegistry.getInstrumentation().targetContext.applicationContext, scope)
         val host = SessionBindings.host(Mode.FAKE, ctx, UiForm.TERM) { error("A 档只用 FAKE") } as FakeSessionHost
         currentForm = { host.form.value }
+        rule.runOnUiThread {
+            rule.activity.enableEdgeToEdge()
+            rule.activity.window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        }
         var screenW by mutableStateOf(320.dp)
         rule.setContent {
             BoxWithConstraints {
