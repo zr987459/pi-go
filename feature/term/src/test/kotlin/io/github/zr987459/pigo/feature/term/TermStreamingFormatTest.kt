@@ -59,4 +59,15 @@ class TermStreamingFormatTest {
         for (i in 0 until r1.size - 1) assertSame("行 $i", r1[i], r2[i])
         assertTrue(r1.last() != r2.last())
     }
+
+    /** PR #18 审查第 3 轮 Nit 3：列表是否相邻按解析时的行号判断，同样的文字前面出现过也不影响结果。 */
+    @Test
+    fun adjacentListsUseLinePositionsNotTextSearch() {
+        val dup = Markdown.render("- x\n\n- x", 40).size
+        val distinct = Markdown.render("- x\n\n- y", 40).size
+        assertEquals("同一文字重复出现时，空行分隔的两个列表与文字不同时排版一致", distinct, dup)
+        val dup2 = Markdown.render("前言 - a\n\n- a\n- b", 40).size
+        val distinct2 = Markdown.render("前言 - c\n\n- a\n- b", 40).size
+        assertEquals(distinct2, dup2)
+    }
 }
