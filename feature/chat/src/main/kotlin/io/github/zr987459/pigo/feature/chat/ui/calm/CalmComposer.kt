@@ -1,5 +1,7 @@
 package io.github.zr987459.pigo.feature.chat.ui.calm
 
+import io.github.zr987459.pigo.contract.workspace.FileMatch
+import kotlinx.coroutines.delay
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -79,7 +81,13 @@ internal fun DraftState.applyField(v: TextFieldValue): DraftState {
  * ＋ 附件 / 引用文件 / 运行命令、思考胶囊、模型胶囊（左右滑循环）、上下文环、发送键三态。
  */
 @Composable
-internal fun CalmComposer(host: SessionHost, chat: ChatState, view: CalmViewState, onAction: (String, String?) -> Unit) {
+internal fun CalmComposer(
+    host: SessionHost,
+    chat: ChatState,
+    view: CalmViewState,
+    onAction: (String, String?) -> Unit,
+    fileSearch: (suspend (String) -> List<FileMatch>)? = null,
+) {
     val c = Calm.colors
     val draft by host.draft.collectAsState()
     val history by host.promptHistory.collectAsState()
@@ -98,7 +106,7 @@ internal fun CalmComposer(host: SessionHost, chat: ChatState, view: CalmViewStat
             }
         }
         SlashPanel(host, draft, onAction)
-        AtPanel(host, draft)
+        AtPanel(host, draft, fileSearch)
         if (draft.recalled.isNotEmpty()) {
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 draft.recalled.forEachIndexed { i, t ->
@@ -234,22 +242,47 @@ private fun SlashPanel(host: SessionHost, draft: DraftState, onAction: (String, 
     }
 }
 
-/** `@` 文件引用面板：确认后成为 fileRefs 引用（发送时按 pi 的 `@路径` 展开，由共享层负责）。 */
+/**
+ * `@` 文件引用面板：候选来自 [fileSearch]（core/workspace FileSearch，pi-tui 的打分与排序，最多 20 条），
+ * 点候选成为 fileRefs 引用（目录带结尾 `/`）；没有候选时仍可按输入的路径引用。发送时按 pi 的 `@路径` 展开，由共享层负责。
+ */
 @Composable
-private fun AtPanel(host: SessionHost, draft: DraftState) {
+private fun AtPanel(host: SessionHost, draft: DraftState, fileSearch: (suspend (String) -> List<FileMatch>)?) {
     val q = atQuery(draft) ?: return
     val c = Calm.colors
-    Row(
-        Modifier.fillMaxWidth().background(c.surface, RoundedCornerShape(12.dp)).border(1.dp, c.stroke, RoundedCornerShape(12.dp))
-            .padding(horizontal = 12.dp, vertical = 10.dp).testTag("calm:atPanel"),
-        verticalAlignment = Alignment.CenterVertically,
+    var hits by remember { mutableStateOf<List<FileMatch>>(emptyList()) }
+    LaunchedEffect(q, fileSearch) {
+        hits = emptyList()
+        if (fileSearch != null) {
+            delay(AT_SEARCH_DEBOUNCE_MS)
+            hits = runCatching { fileSearch(q) }.getOrDefault(emptyList())
+        }
+    }
+    Column(
+        Modifier.fillMaxWidth().background(c.surface, RoundedCornerShape(12.dp)).border(1.dp, c.stroke, RoundedCornerShape(12.dp)).testTag("calm:atPanel"),
     ) {
-        Text(if (q.isEmpty()) "输入文件名或路径" else "引用 @$q", style = Calm.type.label, color = if (q.isEmpty()) c.secondary else c.text, modifier = Modifier.weight(1f))
-        if (q.isNotEmpty()) {
-            Text("引用", style = Calm.type.label, color = c.accent, modifier = Modifier.clickable { host.draft.value = acceptAtRef(host.draft.value, q) }.padding(4.dp).testTag("calm:atAccept"))
+        if (hits.isNotEmpty()) {
+            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 240.dp)) {
+                items(hits, key = { it.path + if (it.isDir) "/" else "" }) { m ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable { host.draft.value = acceptAtRef(host.draft.value, atRefPath(m)) }
+                            .padding(horizontal = 12.dp, vertical = 10.dp).testTag("at:${atRefPath(m)}"),
+                    ) {
+                        Text(atRefPath(m), style = Calm.type.code, color = c.text, maxLines = 1)
+                    }
+                }
+            }
+        }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(if (q.isEmpty()) "输入文件名或路径" else "引用 @$q", style = Calm.type.label, color = if (q.isEmpty()) c.secondary else c.text, modifier = Modifier.weight(1f))
+            if (q.isNotEmpty()) {
+                Text("引用", style = Calm.type.label, color = c.accent, modifier = Modifier.clickable { host.draft.value = acceptAtRef(host.draft.value, q) }.padding(4.dp).testTag("calm:atAccept"))
+            }
         }
     }
 }
+
+private const val AT_SEARCH_DEBOUNCE_MS = 120L
 
 @Composable
 private fun PlusMenu(host: SessionHost, onAction: (String, String?) -> Unit) {

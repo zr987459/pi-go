@@ -25,6 +25,7 @@ import io.github.zr987459.pigo.contract.models.ModelPanels
 import io.github.zr987459.pigo.contract.settings.PiSettings
 import io.github.zr987459.pigo.core.session.SessionOps
 import io.github.zr987459.pigo.di.AppSessionOps
+import io.github.zr987459.pigo.di.AppFileSearch
 import io.github.zr987459.pigo.di.ModelPanelEvents
 import io.github.zr987459.pigo.feature.chat.ui.calm.PanelEventSink
 import io.github.zr987459.pigo.feature.models.RealModelPanels
@@ -97,7 +98,11 @@ class AppGraph(context: Context) {
     /** UI 形态里模型面板的点击、键帽、表单、确认框 → [ModelPanels.onPanelEvent]。 */
     val modelPanelEvents: PanelEventSink by lazy { ModelPanelEvents(modelPanels) }
 
-    val sessionOps: SessionOps by lazy { AppSessionOps(engine, runtime, ctx.appContext.cacheDir) }
+    /** SessionOps 全部走真实引擎：PiBridge（pigo-bridge）与 PiEngine 就是 [engine] 里那一个对象，不另起引擎。 */
+    val sessionOps: SessionOps by lazy { AppSessionOps.forEngine(engine, runtime, ctx.appContext.cacheDir) }
+
+    /** `@文件` 候选（core/workspace FileSearch，根 = 当前会话 cwd）；Fake 工作区时为 null。 */
+    val fileSearch: AppFileSearch? by lazy { workspace.search?.let { AppFileSearch(it, AppFileSearch.cwdOf(engine)) } }
 
     val sessionHost: SessionHost by lazy {
         SessionBindings.host(BindingMode.session, ctx, FormPersistence.initial(formPrefs)) {

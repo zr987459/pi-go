@@ -60,7 +60,7 @@ class RealHostFormSwitchTest {
                 settings = settings,
                 repo = FakeSessionRepository(),
                 panels = panels,
-                ops = AppSessionOps(engine, FakeRuntimeManager(stepDelayMs = 0), File(System.getProperty("java.io.tmpdir"), "pigo-test-cache")),
+                ops = AppSessionOps.forEngine(engine, FakeRuntimeManager(stepDelayMs = 0), File(System.getProperty("java.io.tmpdir"), "pigo-test-cache")),
             ),
         )
         runCurrent()

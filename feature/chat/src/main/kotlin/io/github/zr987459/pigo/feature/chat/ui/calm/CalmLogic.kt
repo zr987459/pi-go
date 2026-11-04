@@ -1,5 +1,6 @@
 package io.github.zr987459.pigo.feature.chat.ui.calm
 
+import io.github.zr987459.pigo.contract.workspace.FileMatch
 import io.github.zr987459.pigo.contract.ChatItem
 import io.github.zr987459.pigo.contract.ChatState
 import io.github.zr987459.pigo.contract.ToolStatus
@@ -96,6 +97,9 @@ fun atQuery(draft: DraftState): String? {
 }
 
 /** 把 `@词` 换成 fileRefs 里的一条引用（去掉正文里的 `@词`）。 */
+/** 一条 `@` 候选写进 fileRefs 的路径：相对会话 cwd，目录带结尾 `/`（与 pi 补全、AtFileExpansion 的约定一致）。 */
+fun atRefPath(m: FileMatch): String = if (m.isDir) m.path.trimEnd('/') + "/" else m.path
+
 fun acceptAtRef(draft: DraftState, path: String): DraftState {
     val start = draft.safeSelectionStart
     val before = draft.text.substring(0, start)

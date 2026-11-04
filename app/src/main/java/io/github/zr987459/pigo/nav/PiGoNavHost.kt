@@ -155,6 +155,7 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
                                 graph.sessionHost,
                                 onOpenSettings = { navController.openSettings(SETTINGS_FOCUS_MODELS) },
                                 panelEvents = graph.modelPanelEvents,
+                                fileSearch = graph.fileSearch?.asLambda,
                             )
                         },
                         term = { TermPlaceholder(onBackToUi = { graph.sessionHost.toggleForm() }) },

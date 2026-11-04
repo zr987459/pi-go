@@ -16,6 +16,7 @@ import io.github.zr987459.pigo.contract.session.UiForm
 import io.github.zr987459.pigo.contract.settings.PiSettings
 import io.github.zr987459.pigo.core.session.PiActionsImpl
 import io.github.zr987459.pigo.core.session.PiSettingsImpl
+import io.github.zr987459.pigo.core.session.QueueRecall
 import io.github.zr987459.pigo.core.session.SessionCatalogImpl
 import io.github.zr987459.pigo.core.session.SessionHostImpl
 import io.github.zr987459.pigo.core.session.SessionOps
@@ -76,10 +77,14 @@ object SessionBindings {
             initialForm = initialForm,
             pid = d.pid,
             actionsFactory = { h -> PiActionsImpl(h, d.ops, d.panels) },
-        ).also { hostRef = it }
+        ).also { h ->
+            hostRef = h
+            // `/quit` 撤回的排队文本并进共享草稿（两种形态同一份），不丢。
+            (d.ops as? AppSessionOps)?.onWithdrawn = { texts -> h.draft.value = QueueRecall.merge(h.draft.value, texts) }
+        }
     }
 
-    /** pi 的 settings.json（容器内 `~/.pi/agent/settings.json`）。写完下次启动 pi 生效（`/pigo:reload` 要等 pigo-bridge 进 main）。 */
+    /** pi 的 settings.json（容器内 `~/.pi/agent/settings.json`）。写完后经 `/reload`（pigo-bridge `/pigo:reload`）生效。 */
     fun piSettings(runtime: RuntimeManager): PiSettingsImpl =
         PiSettingsImpl(file = runtime.hostFile("/root/.pi/agent/settings.json"))
 

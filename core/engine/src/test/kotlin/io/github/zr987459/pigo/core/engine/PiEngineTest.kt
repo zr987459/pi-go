@@ -10,6 +10,7 @@ import io.github.zr987459.pigo.contract.ExtUiRequest
 import io.github.zr987459.pigo.contract.GuestSpec
 import io.github.zr987459.pigo.contract.NoticeKind
 import io.github.zr987459.pigo.contract.Outcome
+import io.github.zr987459.pigo.contract.QueueSnapshot
 import io.github.zr987459.pigo.contract.SendMode
 import io.github.zr987459.pigo.core.protocol.str
 import kotlinx.coroutines.CoroutineScope
@@ -252,6 +253,63 @@ class PiEngineTest {
         assertTrue(e.chat.value.items.any { it is ChatItem.Notice && it.kind == NoticeKind.STOPPED })
         assertFalse(e.wakeLockHeld)
         assertEquals(1, rt.processes.size)
+        e.close()
+    }
+
+    @Test
+    fun clearQueueWithdrawsQueuedTextWithoutAborting() = runBlocking {
+        // r3/app：Alt+↑ / 队列条「取回」只发 clear_queue，当前一轮继续。
+        val rt = ScriptedRuntime {
+            { cmd ->
+                when (cmd.str("type")) {
+                    "prompt" -> if (cmd.str("streamingBehavior") == null) {
+                        ok(cmd, """{"disposition":"started"}""")
+                        emit("""{"type":"agent_start"}""")
+                    } else {
+                        ok(cmd, """{"disposition":"queued"}""")
+                    }
+                    "clear_queue" -> {
+                        emit("""{"type":"queue_update","steering":[],"followUp":[]}""")
+                        ok(cmd, """{"steering":[],"followUp":["排队"]}""")
+                    }
+                    else -> basics(cmd)
+                }
+            }
+        }
+        val e = engine(rt)
+        assertEquals(QueueSnapshot.EMPTY, (e.clearQueue() as Outcome.Ok).value) // 没启动：不为此启动引擎
+        assertEquals(0, rt.processes.size)
+        e.send("开始")
+        waitFor { e.chat.value.running }
+        e.send("排队", SendMode.FOLLOW_UP)
+        val r = e.clearQueue() as Outcome.Ok
+        assertEquals(listOf("排队"), r.value.followUp)
+        val types = rt.last.received.map { it.str("type") }
+        assertTrue("clear_queue" in types)
+        assertFalse("abort" in types)
+        assertTrue(e.chat.value.running) // 当前一轮没被中止
+        assertEquals(listOf("开始"), e.chat.value.items.filterIsInstance<ChatItem.User>().map { it.text })
+        e.close()
+    }
+
+    @Test
+    fun stopProcessEndsPiWithoutRecoveryAndNextSendRestartsWithSameSession() = runBlocking {
+        // r3/app：/quit = 结束 pi 进程（不触发崩溃恢复）；下次发送以 --session 当前文件按需启动，上下文不丢。
+        val rt = ScriptedRuntime { { cmd -> basics(cmd) } }
+        val e = engine(rt)
+        assertTrue(e.start() is Outcome.Ok)
+        waitFor { e.currentSessionFile != null }
+        val file = e.currentSessionFile
+        assertTrue(e.stopProcess() is Outcome.Ok)
+        assertEquals(EngineStatus.Stopped, e.status.value)
+        waitFor { rt.processes.single().exited || rt.processes.single().stdinClosed }
+        delay(300)
+        assertEquals(1, rt.processes.size) // 没有自动恢复
+        assertFalse(e.wakeLockHeld)
+        e.send("再来")
+        waitFor { rt.processes.size == 2 }
+        val args = rt.processes[1].spec.toString()
+        assertTrue("新进程带 --session 当前文件：$args", file != null && args.contains(file))
         e.close()
     }
 

@@ -1,5 +1,6 @@
 package io.github.zr987459.pigo.feature.chat.ui.calm
 
+import io.github.zr987459.pigo.contract.workspace.FileMatch
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -71,9 +72,11 @@ fun CalmSurface(
     dark: Boolean? = null,
     /** 模型配置面板的事件接收方（装配层注入 RealModelPanels；为 null 时面板内点击照旧走 runAction）。 */
     panelEvents: PanelEventSink? = null,
+    /** `@文件` 模糊搜索（装配层注入 core/workspace FileSearch，根 = 会话 cwd）；为 null 时只能手动输入路径引用。 */
+    fileSearch: (suspend (String) -> List<FileMatch>)? = null,
 ) {
-    if (dark == null) CalmTheme { CalmSurfaceBody(host, modifier, onOpenSettings, panelEvents) }
-    else CalmTheme(dark = dark) { CalmSurfaceBody(host, modifier, onOpenSettings, panelEvents) }
+    if (dark == null) CalmTheme { CalmSurfaceBody(host, modifier, onOpenSettings, panelEvents, fileSearch) }
+    else CalmTheme(dark = dark) { CalmSurfaceBody(host, modifier, onOpenSettings, panelEvents, fileSearch) }
 }
 
 /** 视图状态：只影响本形态怎么画，不是业务状态。 */
@@ -90,7 +93,13 @@ internal class CalmViewState {
 }
 
 @Composable
-private fun CalmSurfaceBody(host: SessionHost, modifier: Modifier, onOpenSettings: () -> Unit, panelEvents: PanelEventSink? = null) {
+private fun CalmSurfaceBody(
+    host: SessionHost,
+    modifier: Modifier,
+    onOpenSettings: () -> Unit,
+    panelEvents: PanelEventSink? = null,
+    fileSearch: (suspend (String) -> List<FileMatch>)? = null,
+) {
     val c = Calm.colors
     val scope = rememberCoroutineScope()
     val view = remember { CalmViewState() }
@@ -157,7 +166,7 @@ private fun CalmSurfaceBody(host: SessionHost, modifier: Modifier, onOpenSetting
                 onAction = run,
                 modifier = Modifier.weight(1f),
             )
-            CalmComposer(host = host, chat = chat, view = view, onAction = run)
+            CalmComposer(host = host, chat = chat, view = view, onAction = run, fileSearch = fileSearch)
         }
 
         // 面板（overlay 栈顶，两种形态共用同一模型，§5.4）

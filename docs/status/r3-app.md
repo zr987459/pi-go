@@ -12,6 +12,8 @@
 >   PiEngine 新增 clearQueue()（只 clear_queue 不 abort）、stopProcess()（/quit：结束进程、可按需再起）、cwd；
 >   AppFileSearch（core/workspace FileSearch，根 = 会话 cwd）→ CalmSurface 新参数 fileSearch → @ 面板候选；
 >   测试 AppSessionOpsTest、RealHostSessionOpsTest、AppFileSearchTest、PiEngineTest 两例。
+> - 11:27 本地 kotlinc：PiEngineTest 46/46（含新增 clearQueueWithdrawsQueuedTextWithoutAborting、stopProcessEndsPiWithoutRecoveryAndNextSendRestartsWithSameSession）、PiEngineBridgeTest 18/18、AppSessionOpsTest 10/10、AppFileSearchTest 3/3。推送代码，等 CI。
+>   RealHostSessionOpsTest（依赖 Android 的 SessionBindings）只能靠 CI。
 
 > **2026-11-04 10:56 CST 第 3 步完成，PR #21**（「r3/app：接线 UI 形态」）。b36b24e 的 CI 全绿：push 41762225237、PR 41763038142，都含模拟器 job。下一步是 PR 2（等 r3/term 合入），交接见 PR #21 描述「未完成 / 交接」和下文。
 >
