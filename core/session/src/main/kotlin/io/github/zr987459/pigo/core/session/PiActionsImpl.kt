@@ -139,7 +139,7 @@ class PiActionsImpl(
                         listOf(SelectGroup(null, r.value.map { SelectItem(it.entryId, it.text.lineSequence().firstOrNull().orEmpty()) }))))
                     is Outcome.Err -> ActionResult.Toast("分叉失败：${r.message}")
                 }
-            } else x.fork(args).toResult()
+            } else forkAt(args.trim()).result
             "session.clone" -> x.clone().toResult()
             "session.tree" -> if (args.isNullOrBlank()) treeOverlay(TreeView()) else treeNav(args)
             "tree.filter" -> treeOverlay(treeView.copy(filter = TreeFilter.entries.firstOrNull { it.piName == args?.trim() } ?: nextFilter(treeView.filter)))
@@ -149,9 +149,15 @@ class PiActionsImpl(
                 else -> treeView.collapsed + args.trim()
             }))
             "tree.time" -> treeOverlay(treeView.copy(showTime = !treeView.showTime))
-            "tree.label" -> if (args == null) ActionResult.Toast("在分支树里长按一条记录设置标签") else {
-                val (entry, label) = args.split(' ', limit = 2).let { it[0] to it.getOrNull(1) }
-                ops.setLabel(entry, label).toResult()
+            // args = "<entryId>"（长按树节点）→ 先弹标签表单（预填现有标签），不直接清掉标签；
+            // "<entryId> <标签>" → 直接设置。
+            "tree.label" -> when {
+                args.isNullOrBlank() -> ActionResult.Toast("在分支树里长按一条记录设置标签")
+                ' ' !in args.trim() -> labelForm(args.trim())
+                else -> {
+                    val (entry, label) = args.trim().split(' ', limit = 2).let { it[0] to it.getOrNull(1) }
+                    ops.setLabel(entry, label?.trim()?.takeIf { it.isNotEmpty() }).toResult()
+                }
             }
             "session.compact" -> x.compact(args?.takeIf { it.isNotBlank() }).toResult()
             "session.export" -> x.exportHtml(args?.takeIf { it.isNotBlank() }).let { r ->
@@ -407,8 +413,12 @@ class PiActionsImpl(
             "nosummary" -> false
             else -> {
                 val skip = (host.settings.values.value["branchSummary.skipPrompt"] as? JsonPrimitive)?.content == "true"
-                if (skip) false else return ActionResult.Overlay(OverlayModel.Confirm("overlay:tree.summarize:$entryId", "摘要离开的分支？",
-                    "切换前可以让模型为离开的分支写一段摘要，放进新位置的上下文里。", confirmLabel = "摘要后切换"))
+                // pi 的三选一（摘要 / 不摘要 / 取消）：两个选项 + 关闭面板 = 取消。
+                if (skip) false else return ActionResult.Overlay(OverlayModel.SelectList(OverlayPanels.SUMMARIZE + entryId, "摘要离开的分支？",
+                    listOf(SelectGroup("切换前可以让模型为离开的分支写一段摘要，放进新位置的上下文里。", listOf(
+                        SelectItem(OverlayPanels.SUMMARIZE_YES, "摘要后切换"),
+                        SelectItem(OverlayPanels.SUMMARIZE_NO, "直接切换（不摘要）"),
+                    )))))
             }
         }
         return when (val r = ops.treeNavigate(entryId, summarize)) {
@@ -425,6 +435,150 @@ class PiActionsImpl(
             is Outcome.Err -> ActionResult.Toast("切换失败：${r.message}")
         }
     }
+
+    // ================================================================ overlay:* 面板的选择 / 提交（OverlayPanels）
+
+    /**
+     * SessionHost 自己产出的 `overlay:*` 面板被选中 / 提交 / 确认（两种形态共用，见 [OverlayPanels]）。
+     * 每个面板的行为与 docs/pi-features.md 对应功能一致；不认识的面板返回提示，不再是「未知动作」。
+     */
+    suspend fun onPanel(panelId: String, value: String?, panel: OverlayModel?): OverlayPanels.Result {
+        val v = value?.trim().orEmpty()
+        val P = OverlayPanels
+        return when {
+            // /tree：选中节点 = 原地切换（必要时先问是否摘要）
+            panelId == P.TREE -> if (v.isEmpty()) keep("先选中一条记录") else treeNav(v).let { r ->
+                when {
+                    r is ActionResult.Overlay -> OverlayPanels.Result(r)
+                    isFailure(r) -> OverlayPanels.Result(r)
+                    else -> OverlayPanels.Result(r, listOf(P.TREE))
+                }
+            }
+            panelId.startsWith(P.SUMMARIZE) -> {
+                val entry = panelId.removePrefix(P.SUMMARIZE)
+                val summarize = when (v) { P.SUMMARIZE_YES, "confirm" -> true; P.SUMMARIZE_NO -> false; else -> return keep("请选择是否摘要") }
+                val r = treeNav("$entry ${if (summarize) P.SUMMARIZE_YES else P.SUMMARIZE_NO}")
+                if (isFailure(r)) OverlayPanels.Result(r, listOf(panelId)) else OverlayPanels.Result(r, listOf(panelId, P.TREE))
+            }
+            panelId.startsWith(P.LABEL) -> {
+                val entry = panelId.removePrefix(P.LABEL)
+                val label = OverlayPanels.parseForm(value, listOf("label"))["label"]?.trim()?.takeIf { it.isNotEmpty() }
+                closeOnOk(ops.setLabel(entry, label), panelId, if (label == null) "已清除标签" else "已设置标签：$label")
+                    .let { r -> if (r.close.isNotEmpty()) refreshTreeAfter(r) else r }
+            }
+            // /resume：切到所选会话（switch_session，不重启引擎）
+            panelId == P.RESUME -> if (v.isEmpty()) keep("先选中一个会话") else closeOnOk(host.sessions.open(v), panelId, "已切换会话")
+            // /fork：从所选用户消息分叉，原文放回编辑器
+            panelId == P.FORK -> if (v.isEmpty()) keep("先选中一条消息") else forkAt(v).let { OverlayPanels.Result(it.result, if (it.ok) listOf(panelId) else emptyList()) }
+            panelId == P.THINKING -> if (v.isEmpty()) keep("先选中一个档位") else closeOnOk(host.engine.setThinking(v), panelId, "思考强度：$v")
+            // 搜索结果：跳到那条（阅读位置）
+            panelId == P.SEARCH -> if (v.isEmpty()) keep("先选中一条结果") else run("transcript.jump", v).let { r ->
+                OverlayPanels.Result(r, if (isFailure(r)) emptyList() else listOf(panelId))
+            }
+            // 历史提示：把所选提示放回共享草稿
+            panelId == P.HISTORY -> {
+                val hist = host.promptHistory.value.asReversed()
+                val text = v.removePrefix("h").toIntOrNull()?.let { hist.getOrNull(it) } ?: hist.firstOrNull { it == v }
+                    ?: return keep("这条历史已不存在")
+                host.draft.value = host.draft.value.withText(text)
+                OverlayPanels.Result(ActionResult.Done, listOf(panelId))
+            }
+            // 技能 / 模板 / 扩展命令：把 `/名 ` 放进草稿（与 pi 的补全一致：参数由用户接着输入）
+            panelId in P.COMMAND_LISTS -> if (v.isEmpty()) keep("先选中一项") else {
+                val name = v.removePrefix("/")
+                val rest = host.draft.value.text.let { t -> if (t.startsWith("/")) t.substringAfter(' ', "") else t }
+                host.draft.value = host.draft.value.withText("/$name " + rest.trimStart())
+                OverlayPanels.Result(ActionResult.Done, listOf(panelId))
+            }
+            // /settings：分组列表 → 分组表单；表单提交 = 逐键写 settings.json
+            panelId == P.SETTINGS -> if (!v.startsWith("group:")) keep("先选中一个分组")
+                else OverlayPanels.Result(ActionResult.Overlay(PiSettingsForms.group(host.settings, v.removePrefix("group:"))))
+            panelId.startsWith(P.SETTINGS_GROUP) || panelId in P.SETTINGS_FORMS -> saveSettings(panelId, value, panel)
+            panelId == P.NAME -> {
+                val name = OverlayPanels.parseForm(value, listOf("name"))["name"]?.trim() ?: v
+                if (name.isEmpty()) keep("会话名不能为空") else closeOnOk(host.engine.rename(name), panelId, "已重命名：$name")
+            }
+            panelId == P.CWD -> {
+                val dir = OverlayPanels.parseForm(value, listOf("dir"))["dir"]?.trim() ?: v
+                if (dir.isEmpty()) keep("请填写工作目录") else OverlayPanels.Result(run("session.cwd", dir), listOf(panelId))
+            }
+            panelId.startsWith(P.CWD_CONFIRM) -> if (v != "confirm") OverlayPanels.Result(ActionResult.Done, listOf(panelId))
+                else closeOnOk(ops.newSessionInDir(panelId.removePrefix(P.CWD_CONFIRM)), panelId, "已在新目录新建会话")
+            panelId == P.ONESHOT -> {
+                val f = OverlayPanels.parseForm(value, listOf("prompt", "json"))
+                val prompt = f["prompt"]?.trim().orEmpty()
+                if (prompt.isEmpty()) keep("请填写问题")
+                else run("oneshot", (if (f["json"]?.trim() == "true") OneShot.JSON_PREFIX else "") + prompt).let { r ->
+                    OverlayPanels.Result(r, if (isFailure(r)) emptyList() else listOf(panelId))
+                }
+            }
+            panelId == P.BUG -> {
+                val hint = OverlayPanels.parseForm(value, listOf("hint"))["hint"] ?: v
+                bugReport(hint).let { r -> OverlayPanels.Result(r, if (isFailure(r)) emptyList() else listOf(panelId)) }
+            }
+            panelId == SessionHostImpl.EDITOR_OFFER_ID -> {
+                host.answerEditorTextOffer(v == "confirm")
+                OverlayPanels.Result(ActionResult.Done, listOf(panelId))
+            }
+            else -> keep("这个面板没有可执行的操作：$panelId")
+        }
+    }
+
+    /** ModelPanels 产出的面板的事件（/model、/login、/logout、自定义服务商）；没有接入时返回 null。 */
+    suspend fun onModelPanel(overlayId: String, key: String, value: String?): ActionResult? = modelPanels?.onPanelEvent(overlayId, key, value)
+
+    private suspend fun saveSettings(panelId: String, value: String?, panel: OverlayModel?): OverlayPanels.Result {
+        val keys = OverlayPanels.fieldKeys(panel).ifEmpty { host.settings.schema.specs.map { it.key } }
+        val form = OverlayPanels.parseForm(value, keys)
+        if (form.isEmpty()) return keep("没有可保存的内容")
+        val shown = (panel as? OverlayModel.Form)?.values
+        val errors = mutableListOf<String>()
+        for ((k, text) in form) {
+            if (shown != null && shown[k] == text) continue // 没改的键不写（只改用户真正改过的）
+            val r = host.settings.set(k, JsonPrimitive(text))
+            if (r is Outcome.Err) errors += r.message
+        }
+        return if (errors.isEmpty()) OverlayPanels.Result(ActionResult.Toast("已保存"), listOf(panelId))
+            else keep("保存失败：" + errors.joinToString("；"))
+    }
+
+    private fun labelForm(entryId: String): ActionResult {
+        val current = (host.overlay.items.value.firstOrNull { it.id == OverlayPanels.TREE } as? OverlayModel.Tree)
+            ?.nodes?.firstOrNull { it.id == entryId }?.label.orEmpty()
+        return ActionResult.Overlay(OverlayModel.Form(OverlayPanels.LABEL + entryId, "设置标签",
+            listOf(FormField("label", "标签（留空 = 清除）", io.github.zr987459.pigo.contract.settings.PiSettingType.Str)),
+            values = mapOf("label" to current), submitLabel = "保存"))
+    }
+
+    /** 标签改完后刷新仍打开的分支树（标签显示在节点上）：结果里带上新树，由宿主就地替换。 */
+    private suspend fun refreshTreeAfter(r: OverlayPanels.Result): OverlayPanels.Result {
+        if (host.overlay.items.value.none { it.id == OverlayPanels.TREE }) return r
+        val tree = treeOverlay(treeView) as? ActionResult.Overlay ?: return r
+        return r.copy(replace = tree.model)
+    }
+
+    private data class Fork(val result: ActionResult, val ok: Boolean)
+
+    /** 从某条用户消息分叉：pi 返回原文 → 放进共享草稿（非空时进「已撤回」芯片，不覆盖）。 */
+    private suspend fun forkAt(entryId: String): Fork = when (val r = host.extras.fork(entryId)) {
+        is Outcome.Ok -> when {
+            r.value.cancelled -> Fork(ActionResult.Toast("已取消分叉"), false)
+            else -> {
+                r.value.text?.takeIf { it.isNotBlank() }?.let { t -> host.draft.value = QueueRecall.merge(host.draft.value, listOf(t)) }
+                Fork(ActionResult.Toast("已分叉出新会话"), true)
+            }
+        }
+        is Outcome.Err -> Fork(ActionResult.Toast("分叉失败：${r.message}"), false)
+    }
+
+    private fun keep(msg: String) = OverlayPanels.Result(ActionResult.Toast(msg))
+
+    private fun closeOnOk(r: Outcome<*>, panelId: String, okText: String) = when (r) {
+        is Outcome.Ok -> OverlayPanels.Result(ActionResult.Toast(okText), listOf(panelId))
+        is Outcome.Err -> OverlayPanels.Result(ActionResult.Toast(r.message))
+    }
+
+    private fun isFailure(r: ActionResult) = r is ActionResult.Toast && (r.text.contains("失败") || r.text.startsWith("已取消") || r.text.startsWith("这条消息已不在"))
 
     private fun sessionPicker(): OverlayModel.SelectList {
         val list = host.sessions.sessions.value

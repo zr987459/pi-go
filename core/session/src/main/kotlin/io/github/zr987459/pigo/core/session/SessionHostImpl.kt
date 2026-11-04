@@ -93,13 +93,110 @@ class SessionHostImpl(
     }
 
     override suspend fun runAction(id: String, args: String?): ActionResult {
+        val impl = actions as? PiActionsImpl
+        // 1) SessionHost 自己的面板（overlay:*）：选中 / 提交 / 确认 → 真实行为（PR #18 审查附注，不再「未知动作」）。
+        if (impl != null && id.startsWith(OverlayPanels.PREFIX)) return panelEvent(impl, id, args)
+        // CalmSheet 点树节点发 runAction("session.tree", 节点 id)：与终端形态的 overlay:session.tree 同一路径（成功后关树）。
+        if (impl != null && id == "session.tree" && !args.isNullOrBlank()) return panelEvent(impl, OverlayPanels.TREE, args)
+        // 2) ModelPanels 产出的面板（/model、/login、/logout、自定义服务商…）：选中项、表单提交、键帽 → onPanelEvent。
+        if (impl != null) modelPanelRoute(id, args)?.let { (overlayId, key, value) ->
+            impl.onModelPanel(overlayId, key, value)?.let { return landModelPanel(overlayId, it) }
+        }
         val r = actions.run(id, args)
         when (r) {
-            is ActionResult.Overlay -> overlay.push(r.model)
+            is ActionResult.Overlay -> {
+                if (id in MODEL_PANEL_ACTIONS) modelPanelIds += r.model.id
+                show(r.model)
+            }
             is ActionResult.LocalBlock -> addLocalBlock(id, r.title, r.text)
             else -> Unit
         }
         return r
+    }
+
+    /** ModelPanels 产出过的面板 id（按来源路由，不按 id 是否在动作表里：`model.select` 既是动作 id 也是面板 id）。 */
+    private val modelPanelIds = mutableSetOf<String>()
+
+    /** 最近一次见到的 ModelPanels 面板（终端形态提交表单前会先弹栈，这时按它的字段解析 `k=v`）。 */
+    private val lastModelPanel = mutableMapOf<String, OverlayModel>()
+
+    private val catalogIds: Set<String> by lazy { actions.all.map { it.id }.toSet() }
+
+    /**
+     * 判断一次 runAction 是不是 ModelPanels 面板的事件，是则返回 (面板 id, 事件 key, value)：
+     * - id 是栈顶的 ModelPanels 面板且带值：列表项（`star:<key>` = 常用键帽作用于该项）、表单提交（`submit` + 表单值 JSON）、确认；
+     * - id 是刚弹栈的 ModelPanels 表单、值是该表单的 `k=v`：提交；
+     * - id 不在动作表里、栈顶是 ModelPanels 面板：面板自带键帽（value = 传入值，否则高亮项 / 表单值 JSON）。
+     */
+    private fun modelPanelRoute(id: String, args: String?): Triple<String, String, String?>? {
+        val top = overlay.top
+        if (top != null && top.id == id && id in modelPanelIds && args != null) return when (top) {
+            is OverlayModel.Form -> Triple(id, "submit", OverlayPanels.formJson(OverlayPanels.parseForm(args, OverlayPanels.fieldKeys(top)).ifEmpty { top.values }))
+            is OverlayModel.Confirm -> Triple(id, if (args == "confirm") "confirm" else "cancel", null)
+            else -> if (args.startsWith("star:")) Triple(id, "star", args.removePrefix("star:")) else Triple(id, args, null)
+        }
+        if (id in modelPanelIds && args != null && overlay.items.value.none { it.id == id }) {
+            val form = lastModelPanel[id] as? OverlayModel.Form
+            val parsed = form?.let { OverlayPanels.parseForm(args, OverlayPanels.fieldKeys(it)) }
+            if (form != null && !parsed.isNullOrEmpty()) return Triple(id, "submit", OverlayPanels.formJson(parsed))
+        }
+        if (top != null && top.id in modelPanelIds && id !in catalogIds && !id.startsWith(OverlayPanels.PREFIX)) {
+            val value = args ?: when (top) {
+                is OverlayModel.SelectList -> top.selectedKey
+                is OverlayModel.Form -> OverlayPanels.formJson(top.values)
+                else -> null
+            }
+            return Triple(top.id, id, value)
+        }
+        return null
+    }
+
+    private fun landModelPanel(sourceId: String, r: ActionResult): ActionResult {
+        when (r) {
+            is ActionResult.Overlay -> { modelPanelIds += r.model.id; show(r.model) }
+            ActionResult.Done -> overlay.remove(sourceId)
+            is ActionResult.LocalBlock -> addLocalBlock(sourceId, r.title, r.text)
+            is ActionResult.Toast -> Unit // 提示不关面板：失败时已填的值不丢
+        }
+        return r
+    }
+
+    private suspend fun panelEvent(impl: PiActionsImpl, panelId: String, args: String?): ActionResult {
+        val panel = overlay.items.value.lastOrNull { it.id == panelId }
+        val res = impl.onPanel(panelId, args, panel)
+        res.close.forEach { overlay.remove(it) }
+        res.replace?.let { m -> if (overlay.items.value.any { it.id == m.id }) replaceById(m) }
+        when (val r = res.result) {
+            is ActionResult.Overlay -> show(r.model)
+            is ActionResult.LocalBlock -> addLocalBlock(panelId, r.title, r.text)
+            else -> Unit
+        }
+        return res.result
+    }
+
+    /**
+     * 压一个面板：同 id 已在栈顶 → 替换（树的筛选 / 折叠 / 时间不再一层层叠）；在栈里更深处 → 回到它并替换；否则压栈。
+     */
+    private fun show(m: OverlayModel) {
+        when {
+            overlay.top?.id == m.id -> overlay.replaceTop(m)
+            overlay.items.value.any { it.id == m.id } -> {
+                while (overlay.top != null && overlay.top?.id != m.id) overlay.pop()
+                overlay.replaceTop(m)
+            }
+            else -> overlay.push(m)
+        }
+        if (m.id in modelPanelIds) lastModelPanel[m.id] = m
+    }
+
+    private fun replaceById(m: OverlayModel) {
+        val items = overlay.items.value
+        val i = items.indexOfFirst { it.id == m.id }
+        if (i < 0) return
+        val tail = items.drop(i + 1)
+        repeat(items.size - i) { overlay.pop() }
+        overlay.push(m)
+        tail.forEach { overlay.push(it) }
     }
 
     override fun debugEnginePid(): Int? = if (engine.status.value is EngineStatus.Stopped) null else pid()
@@ -160,5 +257,7 @@ class SessionHostImpl(
 
     companion object {
         const val EDITOR_OFFER_ID = "overlay:editor-text-offer"
+        /** 结果面板来自 ModelPanels 的动作。 */
+        val MODEL_PANEL_ACTIONS = setOf("model.select", "model.scoped", "auth.login", "auth.logout", "provider.custom")
     }
 }

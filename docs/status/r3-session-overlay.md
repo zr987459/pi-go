@@ -1,6 +1,6 @@
 # r3/session-overlay 状态
 
-- 状态：**已开始**（2026-11-04 11:08 CST），基于 main@a83ff37
+- 状态：**进行中**（2026-11-04 11:20 CST），已普通合并 main@d15a637（合并提交 32b834c）
 - 任务：修复 SessionHost 产出的 overlay:* 面板（/tree、/resume、会话列表等）选中某项后返回「未知动作」的问题（PR #18 审查附注）
 
 ## 计划
@@ -11,4 +11,9 @@
 5. 开 PR 到 main，CI 全绿
 
 ## 进度 / 下一步
-- 下一步：定位面板
+- 已完成：
+  - 新增 `core/session/OverlayPanels.kt`，统一 overlay:* 面板的回传约定，表单兼容 JSON 与 `k=v` 两种格式
+  - 新增 `PiActionsImpl.onPanel`，逐个面板实现真实行为
+  - `SessionHostImpl.runAction` 路由：overlay:* 面板 → onPanel；ModelPanels 面板 → onPanelEvent；同 id 面板改为替换，不再层层叠加
+- 进行中：编译、单测、扩展覆盖测试（OverlayPanelsTest）、calm 最小修复（FormView 显示 Form.actions）
+- 下一步：本地跑 :core:session 单测，开 PR
