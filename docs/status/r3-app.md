@@ -140,3 +140,10 @@
 ### 13:33 CST 进度（第 2 轮修复）
 - 8c62e6f：build、realpi 全绿；两个模拟器 job（push 41777878889 / PR 41777884050）只有新加的 `AppCoverageTest.panelAboveExpandedEditorIsOnTopAndClosesFirst` 失败——原因是测试夹具：FakePiActions 对 `editor.expand` 也压一个占位面板（真实 PiActionsImpl 返回 Done），返回关掉的是测试面板、栈里还剩占位面板。产品代码无问题；其余 5 个 AppCoverageTest、feature/chat 5 个、feature/term 16 个全过。
 - 修复：测试在展开编辑器后先清掉占位面板。下一步：推送，盯模拟器 job。
+
+### 13:48 CST — 完成，PR #21（审查第 2 轮修复）
+- 代码提交：8c62e6f（全部 5 项修复与测试）、477b60d（仪器测试夹具修正）。没有 rebase / force；main 仍是 584a056，未 merge。
+- CI @477b60d 全绿：Android debug build push 41779709231 / PR 41779715217（build + 模拟器：feature/chat 5、feature/term 16、app AppCoverageTest 6、feature/settings 9，失败 0）；真 pi 桥接 push 41779709230 / PR 41779715168 ✅。无重跑。
+- 测试：CalmAppFix2Test（7 个）；CalmPkceLoginTest.callbackCompletionSwitchesFormToLoggedIn、staleOauthUrlIsClearedOnCancelAndRetry；ProxyLogicTest.savedMessagePointsToUsableRestartEntry；AppCoverageTest.panelAboveExpandedEditorIsOnTopAndClosesFirst、confirmDoubleTapSendsOnce、proxySaveOffersRestartPi。
+- PR #21 描述已追加「审查第 2 轮修复」。未改 .github。
+- 留给 PR 2：终端接线、删旧模块；相机 / 剪贴板图片 / 非图片文件附件。
