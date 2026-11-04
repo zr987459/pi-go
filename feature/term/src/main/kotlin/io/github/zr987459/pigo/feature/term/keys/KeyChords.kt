@@ -8,6 +8,7 @@ import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.nativeKeyCode
 import androidx.compose.ui.input.key.type
 
 /** 外接键盘事件 → pi 键名写法的组合键（`ctrl+shift+p`、`alt+enter`、`escape`）。只处理按下事件。 */
@@ -20,12 +21,13 @@ object KeyChords {
 
     fun keyName(key: Key): String? {
         NAMED[key]?.let { return it }
-        val code = key.keyCode
-        // A–Z：Key.A..Key.Z 的 keyCode 连续
-        val a = Key.A.keyCode
-        if (code in a..(a + 25)) return ('a' + (code - a).toInt()).toString()
-        val zero = Key.Zero.keyCode
-        if (code in zero..(zero + 9)) return ('0' + (code - zero).toInt()).toString()
+        // 用 Android 原生键码比较：Compose 的 Key.keyCode 是原生键码左移 32 位，`a..a+25` 的区间只覆盖 A 一个键，
+        // 导致 Ctrl+L 等字母组合键全部认不出（PR #18 审查第 1 轮，模拟器 externalKeyboardMatchesPi）。
+        val code = key.nativeKeyCode
+        val a = Key.A.nativeKeyCode
+        if (code in a..(a + 25)) return ('a' + (code - a)).toString()
+        val zero = Key.Zero.nativeKeyCode
+        if (code in zero..(zero + 9)) return ('0' + (code - zero)).toString()
         return when (key) {
             Key.LeftBracket -> "["; Key.RightBracket -> "]"; Key.Minus -> "-"; Key.Equals -> "="; Key.Slash -> "/"
             Key.Comma -> ","; Key.Period -> "."; Key.Semicolon -> ";"; Key.Backslash -> "\\"; Key.Grave -> "`"; Key.Apostrophe -> "'"

@@ -38,3 +38,9 @@
   - slowFrames 测试按调度者裁定加同模拟器基线（纯 Text 列表，同样 1000 delta）：<5% 直接过，否则 ≤ 基线 + 5pp 且 ≤ 25%；日志打印两者。
   - 新 JVM 测试 TermRowCacheTest；readingPositionSurvivesSwitch 改为按行查 term:item:<key>。
 - 下一步：看 CI（build + 模拟器），绿了补 PR #18 描述。
+
+## 09:50 CST（上一节标的“09:46”实为 09:30）
+- 7fb0ab9：run 41754527644，build 绿；模拟器上 slowFramesUnder5PercentWith1000Deltas **通过**。剩 2 个失败：
+  - readingPositionSurvivesSwitch：偏移 46 → 52（空行与文字行高度不同，按行号 × 行高还原有误差）→ 每行固定为行高。
+  - externalKeyboardMatchesPi：Ctrl+L 无反应。根因是 KeyChords.keyName 用 Compose `Key.keyCode`（原生键码左移 32 位）做 A–Z 区间，结果只认得 A，**所有 Ctrl+字母组合键都失效**（真机同样）→ 改用 nativeKeyCode，新增 JVM 测试 KeyChordsTest。
+- 下一步：等这次 CI；绿了补 PR #18 描述。

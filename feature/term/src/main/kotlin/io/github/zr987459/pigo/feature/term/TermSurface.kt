@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -377,6 +378,8 @@ private fun TermScreen(
             val opts = FormatOptions(width = cols, hideThinking = hideThinking, toolsExpanded = toolsExpanded, expandedKeys = expandedKeys, cwd = cwd, home = home, expandKey = expandKey)
             // 按行拆分（审查第 1 轮慢帧修复）：只重排变化的消息，LazyColumn 只组合可见行。
             val rows = remember(items, opts) { rowCache.rows(items, opts) }
+            // 每行固定同一高度（= 行高）：空行与中英混排的行高度一致，锚点「行号 × 行高 + 行内偏移」才能精确还原（§5.3）。
+            val rowHeight = with(density) { (fontSp * 1.35f).sp.toDp() }
             val localRows = remember(localBlocks, cols) {
                 localBlocks.flatMap { b ->
                     (listOf(TermLine(emptyList())) + TermFormatter.wrapSpans(listOf(Span("[${b.title}] ", "customMessageLabel", bold = true), Span(b.text, "customMessageText")), cols - 2)
@@ -461,10 +464,10 @@ private fun TermScreen(
                             else -> Modifier
                         }
                         // 思考块开关行已有自己的 testTag（键帽），其余行带所属消息的 tag。
-                        TermLineText(l, fontSp.sp, tokens, if (l.action == "thinking.toggle") m else m.testTag("term:item:${r.itemKey}"))
+                        TermLineText(l, fontSp.sp, tokens, (if (l.action == "thinking.toggle") m else m.testTag("term:item:${r.itemKey}")).height(rowHeight))
                     }
                     items(localRows, key = { it.key }) { r ->
-                        TermLineText(r.line, fontSp.sp, tokens, Modifier.testTag("term:${r.itemKey}"))
+                        TermLineText(r.line, fontSp.sp, tokens, Modifier.testTag("term:${r.itemKey}").height(rowHeight))
                     }
                 }
             }
