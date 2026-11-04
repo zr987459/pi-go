@@ -20,7 +20,6 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.io.PipedInputStream
 import java.io.PipedOutputStream
-import java.util.Collections
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.LinkedBlockingQueue
@@ -54,7 +53,7 @@ class ScriptedPi(
 
     /** 收到的全部命令（按到达顺序）。 */
     val received = CopyOnWriteArrayList<JsonObject>()
-    val stopCalls: MutableList<Long> = Collections.synchronizedList(mutableListOf())
+    val stopCalls: MutableList<Long> = CopyOnWriteArrayList()
     @Volatile var stdinClosed = false
 
     override val stdin: OutputStream = object : OutputStream() {
@@ -202,7 +201,11 @@ class StaticEnv(private val env: Map<String, String> = mapOf("DEEPSEEK_API_KEY" 
 }
 
 class ListLog : AppLog {
-    val lines: MutableList<LogLine> = Collections.synchronizedList(mutableListOf())
+    /**
+     * 引擎的读线程、退出监视等会在测试断言时继续写日志（如 close() 之后）。用 CopyOnWriteArrayList，
+     * 测试里直接 `lines.any { … }` / `none { … }` 遍历也拿到一致快照；synchronizedList 的迭代器不加锁，会偶发 CME。
+     */
+    val lines: MutableList<LogLine> = CopyOnWriteArrayList()
     override fun i(tag: String, msg: String) {
         lines += LogLine(0, LogLevel.INFO, tag, msg)
     }
@@ -211,5 +214,5 @@ class ListLog : AppLog {
         lines += LogLine(0, LogLevel.WARN, tag, msg + (t?.let { " $it" } ?: ""))
     }
 
-    override fun tail(n: Int): List<LogLine> = synchronized(lines) { lines.takeLast(n) }
+    override fun tail(n: Int): List<LogLine> = lines.toList().takeLast(n)
 }
