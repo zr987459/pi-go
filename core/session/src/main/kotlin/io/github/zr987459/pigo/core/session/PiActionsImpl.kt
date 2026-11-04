@@ -531,13 +531,19 @@ class PiActionsImpl(
         val keys = OverlayPanels.fieldKeys(panel).ifEmpty { host.settings.schema.specs.map { it.key } }
         val form = OverlayPanels.parseForm(value, keys)
         if (form.isEmpty()) return keep("没有可保存的内容")
-        val shown = (panel as? OverlayModel.Form)?.values
+        // 先按 schema 编码（表单文字 → pi 要的类型；未改的默认值 = 不写；非法值整体拒绝），全部合法才写。
+        // CalmSheet 边输入边替换栈里的表单值，所以不能拿面板上的值判断「没改」，以编码结果为准。
         val errors = mutableListOf<String>()
+        val writes = mutableListOf<Pair<String, kotlinx.serialization.json.JsonElement?>>()
         for ((k, text) in form) {
-            if (shown != null && shown[k] == text) continue // 没改的键不写（只改用户真正改过的）
-            val r = host.settings.set(k, JsonPrimitive(text))
-            if (r is Outcome.Err) errors += r.message
+            val spec = host.settings.schema.specs.firstOrNull { it.key == k } ?: continue
+            when (val enc = PiSettingsCodec.encode(spec, JsonPrimitive(text), host.settings.values.value[k])) {
+                is PiSettingsCodec.Encoded.Invalid -> errors += "${spec.label}：${enc.reason}"
+                PiSettingsCodec.Encoded.NoChange -> Unit
+                is PiSettingsCodec.Encoded.Value -> if (enc.value != host.settings.values.value[k]) writes += k to enc.value
+            }
         }
+        if (errors.isEmpty()) for ((k, v) in writes) (host.settings.set(k, v) as? Outcome.Err)?.let { errors += it.message }
         return if (errors.isEmpty()) OverlayPanels.Result(ActionResult.Toast("已保存"), listOf(panelId))
             else keep("保存失败：" + errors.joinToString("；"))
     }

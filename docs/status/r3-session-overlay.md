@@ -15,5 +15,5 @@
   - 新增 `core/session/OverlayPanels.kt`，统一 overlay:* 面板的回传约定，表单兼容 JSON 与 `k=v` 两种格式
   - 新增 `PiActionsImpl.onPanel`，逐个面板实现真实行为
   - `SessionHostImpl.runAction` 路由：overlay:* 面板 → onPanel；ModelPanels 面板 → onPanelEvent；同 id 面板改为替换，不再层层叠加
-- 进行中：编译、单测、扩展覆盖测试（OverlayPanelsTest）、calm 最小修复（FormView 显示 Form.actions）
-- 下一步：本地跑 :core:session 单测，开 PR
+- 本地：`:core:session:testDebugUnitTest` 全部通过（含新增 OverlayPanelsTest 20 例）；`:feature:chat`、`:feature:term` 编译通过
+- 下一步：开 PR，等 CI（含模拟器）
