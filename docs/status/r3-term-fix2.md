@@ -19,4 +19,9 @@
 - [x] 10:25 androidTest 新增 5 个：historyNeverOverwritesEditedDraft、formActionsConfirmAndOAuthRetryEmitPanelEvents、panelKeyCapWithCatalogIdStillEmitsPanelEvent、treeAndFullOutputHandleExternalEnter、atEnterDuringDebounceUsesCurrentQuery。
 - [x] 10:35 CI @1dddfd8：push run 41760116933 全绿（build 加模拟器 16 个用例，含 slowFrames）。PR run 41760122889 的模拟器红：everyActionHasATermEntry 报 `ext.commands: 没有收到动作`。原因是 PR run 测的是「合入 main 后」，而 main 已合入 r3/session PR#20，新增动作 ext.commands，终端入口为键条「/」。
 - [x] 10:40 再 merge main（aa8cb68，含 r3/session）。「/」键在草稿为空时打开 ext.commands 面板，草稿非空时插入「/」。面板路由收窄为只路由 ModelPanels 产出的面板（`overlay:*`、`explain:*` 是 SessionHost 的面板，照旧 runAction，与 CalmSheet 一致），单测已补。
-- [ ] 下一步：看 CI；模拟器连续绿 2 次（re-run）；更新 PR 描述（含「交接 r3/app」一节：bashRunning）
+- [x] 10:58 **完成，PR #18**。代码提交 933bc78 的两个 run 全绿，模拟器 job 连续 2 次绿：
+  - push https://github.com/zr987459/pi-go/actions/runs/41761882183
+  - pull_request https://github.com/zr987459/pi-go/actions/runs/41761887631
+  - 在这之前，1dddfd8 的 push run 41760116933 也是全绿（模拟器 16 个用例，含 slowFrames）。
+- PR #18 描述已补「审查第 2 轮修复」一节（逐条处理、测试名、交接 r3/app）。
+- 未完成：fullscreenCopyOnSelect、Mermaid 字符画暂缓（调度者已同意）；真机慢帧 <5% 在真机清单里；Esc 停 `!` 需要 r3/app 注入 bashRunning。
