@@ -69,7 +69,11 @@ class TermPanelRouter(
 
     /** 面板事件的出口：显式注入的 [TermEnv.onPanelEvent] 优先，否则用 [TermEnv.panelSource]。 */
     private val dispatcher: (suspend (String, String, String?) -> ActionResult)?
-        get() = env.onPanelEvent ?: env.panelSource?.let { src -> { id: String, k: String, v: String? -> src.onPanelEvent(id, k, v) } }
+        get() {
+            env.onPanelEvent?.let { return it }
+            val src = env.panelSource ?: return null
+            return src::onPanelEvent
+        }
 
     fun toPanel(model: OverlayModel): Boolean {
         if (dispatcher == null) return false
