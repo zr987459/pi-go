@@ -4,6 +4,7 @@ import io.github.zr987459.pigo.feature.term.text.CellWidth
 import java.util.Locale
 
 /** 一段带 pi 主题 token 的文字；[segment] 非空表示可点（页脚段 id，见 PiActionCatalog 的 `TermEntry.Footer`）。 */
+@androidx.compose.runtime.Immutable
 data class Span(val text: String, val token: String? = null, val bold: Boolean = false, val italic: Boolean = false, val segment: String? = null)
 
 typealias Line = List<Span>

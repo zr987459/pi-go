@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -44,8 +45,10 @@ fun spansToAnnotated(spans: List<Span>, tokens: PiTokens): AnnotatedString = bui
 @Composable
 fun TermLineText(line: TermLine, size: TextUnit, tokens: PiTokens, modifier: Modifier = Modifier) {
     val bg = line.bg?.let { tokens.bgOf(it) }
+    // 行内容不变就不重建 AnnotatedString（流式时只有末尾几行在变）。
+    val text = remember(line, tokens) { spansToAnnotated(line.spans, tokens) }
     Text(
-        text = spansToAnnotated(line.spans, tokens),
+        text = text,
         style = monoStyle(size, tokens),
         softWrap = false,
         maxLines = 1,

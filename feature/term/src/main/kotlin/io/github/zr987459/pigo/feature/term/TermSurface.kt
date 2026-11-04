@@ -31,6 +31,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -67,6 +68,8 @@ import io.github.zr987459.pigo.feature.term.format.FooterInput
 import io.github.zr987459.pigo.feature.term.format.FormatOptions
 import io.github.zr987459.pigo.feature.term.format.Span
 import io.github.zr987459.pigo.feature.term.format.TermFormatter
+import io.github.zr987459.pigo.feature.term.format.TermRow
+import io.github.zr987459.pigo.feature.term.format.TermRowCache
 import io.github.zr987459.pigo.feature.term.format.TermLine
 import io.github.zr987459.pigo.feature.term.keys.KeyBindings
 import io.github.zr987459.pigo.feature.term.keys.KeyChords
@@ -320,41 +323,21 @@ private fun TermScreen(
         }
     }
 
-    // ---- 阅读位置：进入时恢复，用户滚动时写回 host.scrollAnchor（§5.3） ----
-    // followBottom 只由用户手势改写（手势结束时是否在底部）；程序触发的滚动（贴底跟随、恢复）不改它（审查第 1 轮 Important 3）。
+    // ---- 阅读位置（§5.3）与贴底跟随：在下面的 BoxWithConstraints 里（要用按行拆分后的 rows） ----
     val items = chat.items
     val listState = rememberLazyListState()
     val headerCount = 1
     var follow by remember { mutableStateOf(host.scrollAnchor.value?.followBottom ?: true) }
-    suspend fun scrollToBottom() {
-        val last = (items.size + localBlocks.size + headerCount).coerceAtLeast(1) - 1
-        // 偏移给极大值：LazyList 会夹到最大可滚动位置，长回复也停在末尾，而不是停在这条回复的开头。
-        listState.scrollToItem(last, Int.MAX_VALUE)
-    }
-    LaunchedEffect(Unit) {
-        val anchor = host.scrollAnchor.value
-        val idx = anchor?.let { a -> items.indexOfFirst { it.key == a.itemKey } }?.takeIf { it >= 0 }
-        if (anchor == null || anchor.followBottom || idx == null) scrollToBottom()
-        else listState.scrollToItem(idx + headerCount, anchor.offsetPx)
-    }
-    LaunchedEffect(listState) {
-        // 只看「滚动结束」这一跳（drop 掉初始值），程序触发的 scrollToItem 不经过 isScrollInProgress
-        snapshotFlow { listState.isScrollInProgress }.drop(1).collect { scrolling ->
-            if (!scrolling) follow = !listState.canScrollForward
-        }
-    }
-    LaunchedEffect(listState) {
-        snapshotFlow { Triple(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, follow) }.collect { (i, off, f) ->
-            val key = host.chat.value.items.getOrNull(i - headerCount)?.key ?: host.chat.value.items.firstOrNull()?.key ?: return@collect
-            host.scrollAnchor.value = ScrollAnchor(key, if (i < headerCount) 0 else off, followBottom = f)
-        }
-    }
-    // 贴底跟随：新内容（含同一条回复变长）到来且原来贴底时滚到底。
-    LaunchedEffect(items.size, items.lastOrNull(), localBlocks.size) {
-        if (follow && !listState.isScrollInProgress) scrollToBottom()
-    }
+    val rowCache = remember { TermRowCache() }
 
     val focus = remember { FocusRequester() }
+    // 面板关闭（栈由非空变空）后焦点回到编辑器：面板可能拿走过焦点，否则外接键盘的下一个快捷键（例如 Ctrl+L）无处投递
+    // （PR #18 审查第 1 轮，模拟器 externalKeyboardMatchesPi）。只在「关闭」这一跳请求，初次进入不抢焦点、不弹输入法。
+    var overlayWasOpen by remember { mutableStateOf(false) }
+    LaunchedEffect(overlays.isEmpty()) {
+        if (overlays.isEmpty() && overlayWasOpen) runCatching { focus.requestFocus() }
+        overlayWasOpen = overlays.isNotEmpty()
+    }
 
     Column(
         modifier
@@ -392,6 +375,56 @@ private fun TermScreen(
             val charW = remember(fontSp, tokens) { measurer.measure("M", style).size.width.coerceAtLeast(1) }
             val cols = with(density) { (maxWidth.toPx() / charW).toInt() }.coerceAtLeast(20)
             val opts = FormatOptions(width = cols, hideThinking = hideThinking, toolsExpanded = toolsExpanded, expandedKeys = expandedKeys, cwd = cwd, home = home, expandKey = expandKey)
+            // 按行拆分（审查第 1 轮慢帧修复）：只重排变化的消息，LazyColumn 只组合可见行。
+            val rows = remember(items, opts) { rowCache.rows(items, opts) }
+            val localRows = remember(localBlocks, cols) {
+                localBlocks.flatMap { b ->
+                    (listOf(TermLine(emptyList())) + TermFormatter.wrapSpans(listOf(Span("[${b.title}] ", "customMessageLabel", bold = true), Span(b.text, "customMessageText")), cols - 2)
+                        .map { TermLine(listOf(Span(" ")) + it, "customMessageBg") }).mapIndexed { i, l -> TermRow("local:${b.key}#$i", "local:${b.key}", i, l, null) }
+                }
+            }
+            val rowsNow by rememberUpdatedState(rows)
+
+            // 阅读位置：进入时恢复，用户滚动时写回 host.scrollAnchor（§5.3）。锚点仍是「消息 key + 消息内像素偏移」，与 calm 形态通用：
+            // 行号 → 消息 key；消息内偏移 = 本消息在首个可见行之前的行数 × 行高 + 首个可见行内偏移。
+            // followBottom 只由用户手势改写（手势结束时是否在底部）；程序触发的滚动不改它（审查第 1 轮 Important 3）。
+            suspend fun scrollToBottom() {
+                val last = (rowsNow.size + localRows.size + headerCount).coerceAtLeast(1) - 1
+                // 偏移给极大值：LazyList 会夹到最大可滚动位置，停在末尾。
+                listState.scrollToItem(last, Int.MAX_VALUE)
+            }
+            LaunchedEffect(Unit) {
+                val anchor = host.scrollAnchor.value
+                val idx = anchor?.let { a -> rows.indexOfFirst { it.itemKey == a.itemKey } }?.takeIf { it >= 0 }
+                // 偏移可以超过首行高度：LazyList 会顺延到本消息后面的行。
+                if (anchor == null || anchor.followBottom || idx == null) scrollToBottom()
+                else listState.scrollToItem(idx + headerCount, anchor.offsetPx)
+            }
+            LaunchedEffect(listState) {
+                snapshotFlow { listState.isScrollInProgress }.drop(1).collect { scrolling ->
+                    if (!scrolling) follow = !listState.canScrollForward
+                }
+            }
+            LaunchedEffect(listState) {
+                snapshotFlow { Triple(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, follow) }.collect { (i, off, f) ->
+                    val rs = rowsNow
+                    val row = rs.getOrNull(i - headerCount)
+                    // 页眉 → 第一条消息、偏移 0（与原逻辑相同）；本地块（不在会话里）→ 最后一条消息。
+                    val key = (if (i < headerCount) host.chat.value.items.firstOrNull()?.key else row?.itemKey ?: host.chat.value.items.lastOrNull()?.key)
+                        ?: return@collect
+                    val rowH = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == i }?.size ?: 0
+                    val offPx = when {
+                        i < headerCount -> 0
+                        row == null -> off
+                        else -> row.lineIndex * rowH + off
+                    }
+                    host.scrollAnchor.value = ScrollAnchor(key, offPx, followBottom = f)
+                }
+            }
+            // 贴底跟随：新行（含同一条回复变长）到来且原来贴底时滚到底。
+            LaunchedEffect(rows.size, rows.lastOrNull(), localRows.size) {
+                if (follow && !listState.isScrollInProgress) scrollToBottom()
+            }
 
             SelectionContainer {
                 LazyColumn(
@@ -417,28 +450,21 @@ private fun TermScreen(
                     item(key = "term:header") {
                         Header(piVersion, cols, fontSp, tokens, bindings, TermInput.startupResources(env.contextFiles, commands, enabledModels, home), quiet = settings["quietStartup"] == "true") { run("about") }
                     }
-                    items(items, key = { it.key }) { item ->
-                        val lines = remember(item, opts) { TermFormatter.format(item, opts) }
-                        Column(Modifier.testTag("term:item:${item.key}")) {
-                            for (l in lines) {
-                                val m = when {
-                                    l.action == "thinking.toggle" -> Modifier.clickable { run("thinking.toggle") }.testTag("term:keycap:message:思考块")
-                                    l.action?.startsWith("tool:") == true -> Modifier.clickable {
-                                        val k = (item as? ChatItem.Tool)?.key ?: return@clickable
-                                        expandedKeys = if (k in expandedKeys) expandedKeys - k else expandedKeys + k
-                                    }
-                                    else -> Modifier
-                                }
-                                TermLineText(l, fontSp.sp, tokens, m)
+                    items(rows, key = { it.key }) { r ->
+                        val l = r.line
+                        val m = when {
+                            l.action == "thinking.toggle" -> Modifier.clickable { run("thinking.toggle") }.testTag("term:keycap:message:思考块")
+                            l.action?.startsWith("tool:") == true && r.toolKey != null -> Modifier.clickable {
+                                val k = r.toolKey
+                                expandedKeys = if (k in expandedKeys) expandedKeys - k else expandedKeys + k
                             }
+                            else -> Modifier
                         }
+                        // 思考块开关行已有自己的 testTag（键帽），其余行带所属消息的 tag。
+                        TermLineText(l, fontSp.sp, tokens, if (l.action == "thinking.toggle") m else m.testTag("term:item:${r.itemKey}"))
                     }
-                    items(localBlocks, key = { it.key }) { b ->
-                        val lines = remember(b, cols) {
-                            listOf(TermLine(emptyList())) + TermFormatter.wrapSpans(listOf(Span("[${b.title}] ", "customMessageLabel", bold = true), Span(b.text, "customMessageText")), cols - 2)
-                                .map { TermLine(listOf(Span(" ")) + it, "customMessageBg") }
-                        }
-                        Column(Modifier.testTag("term:local:${b.key}")) { lines.forEach { TermLineText(it, fontSp.sp, tokens) } }
+                    items(localRows, key = { it.key }) { r ->
+                        TermLineText(r.line, fontSp.sp, tokens, Modifier.testTag("term:${r.itemKey}"))
                     }
                 }
             }

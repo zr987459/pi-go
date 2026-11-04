@@ -29,3 +29,12 @@
 
 ## 接手（第 3 位修复工作者）09:26 CST
 - 已开始。计划：①确认 externalKeyboardMatchesPi 的重新聚焦修复；②终端流式渲染降重组（只重组最后一条、文本增量追加、避免整列表重算与每 delta 重新测量），再测 slowFramesUnder5PercentWith1000Deltas；仍因软件渲染超标则按调度者裁定加同模拟器基线；③CI 全绿后补 PR #18 描述。
+
+## 09:46 CST
+- 推送“慢帧优化 + 焦点修复”：
+  - 终端时间线按行拆成 LazyColumn 条目（TermRow / TermRowCache）：只重排变化的消息，不变的行复用同一对象（TermLine、Span、TermRow 标 @Immutable，Compose 以相等跳过）；TermLineText 记住 AnnotatedString；屏幕外的行不组合；贴底只看行数和末行。
+  - 阅读位置锚点仍是“消息 key + 消息内像素偏移”（行号 × 行高 + 行内偏移），与 calm 通用。
+  - 面板栈由非空变空时，编辑器重新请求焦点（externalKeyboardMatchesPi 的根因：面板拿走焦点）。
+  - slowFrames 测试按调度者裁定加同模拟器基线（纯 Text 列表，同样 1000 delta）：<5% 直接过，否则 ≤ 基线 + 5pp 且 ≤ 25%；日志打印两者。
+  - 新 JVM 测试 TermRowCacheTest；readingPositionSurvivesSwitch 改为按行查 term:item:<key>。
+- 下一步：看 CI（build + 模拟器），绿了补 PR #18 描述。

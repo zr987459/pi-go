@@ -5,12 +5,15 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -300,7 +303,10 @@ class TermCoverageTest {
         assertEquals("首个可见块不变", before.itemKey, after?.itemKey)
         assertEquals("偏移不变", before.offsetPx, after?.offsetPx)
         assertFalse(after!!.followBottom)
-        rule.onNodeWithTag("term:item:${before.itemKey}", useUnmergedTree = true).assertIsDisplayed()
+        // 终端形态按行拆成条目（慢帧修复），一条消息的每行都带 term:item:<key>：至少有一行可见。
+        val nodes = rule.onAllNodesWithTag("term:item:${before.itemKey}", useUnmergedTree = true)
+        val n = nodes.fetchSemanticsNodes().size
+        assertTrue("首个可见块仍在屏幕上", (0 until n).any { runCatching { nodes[it].assertIsDisplayed() }.isSuccess })
     }
 
     /** 审查第 1 轮 Important 3：长回复流式时贴底跟随（停在末尾而不是这条回复的开头），切换形态后仍贴底。 */
@@ -376,12 +382,46 @@ class TermCoverageTest {
         rule.onNodeWithTag("term:toast", useUnmergedTree = true).assertIsDisplayed()
     }
 
-    /** §8.5 / §7.3：1000 条流式 delta 下慢帧 < 5%（帧间隔超过 2 个刷新周期计为慢帧，与 JankStats 的默认判定相同）。 */
+    /**
+     * §8.5 / §7.3：1000 条流式 delta 下慢帧 < 5%（帧间隔超过 2 个刷新周期计为慢帧，与 JankStats 的默认判定相同）。
+     *
+     * 调度者裁定（PR #18 审查第 1 轮）：CI 的模拟器是软件渲染（swiftshader），同样 1000 条 delta 下连纯 Text 列表也会大量掉帧。
+     * 因此同一测试、同一模拟器上先跑一个**基线**（同样 1000 条 delta，用最朴素的 LazyColumn + Text 显示同一份聊天状态），
+     * 再跑终端形态：慢帧率 < 5% 直接通过；否则必须 ≤ 基线 + 5 个百分点，并且 ≤ 25%。真机 < 5% 列入真机验收清单（PR 描述）。
+     */
     @Test
     fun slowFramesUnder5PercentWith1000Deltas() {
-        val host = newFake()
-        rule.setContent { Surface(host) }
+        val baseHost = newFake()
+        val termHost = newFake()
+        var mode by androidx.compose.runtime.mutableStateOf(0)
+        rule.setContent {
+            when (mode) {
+                0 -> BaselineList(baseHost)
+                else -> Surface(termHost)
+            }
+        }
         rule.waitForIdle()
+        val chunks = (0 until 1000).map { i -> if (i % 40 == 0) "\n\n## 第 ${i / 40} 节\n\n- 列表项 $i " else "字$i " }
+
+        val baseline = measureSlowFrames(baseHost, chunks)
+        rule.runOnUiThread { mode = 1 }
+        rule.waitForIdle()
+        val term = measureSlowFrames(termHost, chunks)
+
+        val msg = "终端慢帧 ${pct(term)}（${term.first}/${term.second}），同模拟器基线 ${pct(baseline)}（${baseline.first}/${baseline.second}）"
+        android.util.Log.i("TermCoverageTest", msg)
+        println(msg)
+        val t = ratio(term)
+        val b = ratio(baseline)
+        assertTrue("没有采集到帧", term.second > 0 && baseline.second > 0)
+        assertTrue("$msg：超过 5% 且超过基线 + 5 个百分点或 25%", t < 0.05 || (t <= b + 0.05 && t <= 0.25))
+    }
+
+    private fun ratio(r: Pair<Int, Int>) = if (r.second == 0) 0.0 else r.first.toDouble() / r.second
+    private fun pct(r: Pair<Int, Int>) = "%.2f%%".format(ratio(r) * 100)
+
+    /** 跑一次 1000 条 delta 的流，返回（慢帧数，总帧数）。 */
+    private fun measureSlowFrames(host: FakeSessionHost, chunks: List<String>): Pair<Int, Int> {
         val frames = AtomicInteger()
         val slow = AtomicInteger()
         val last = AtomicLong(0)
@@ -398,15 +438,32 @@ class TermCoverageTest {
                 if (tracking.get()) Choreographer.getInstance().postFrameCallback(this)
             }
         }
-        val chunks = (0 until 1000).map { i -> if (i % 40 == 0) "\n\n## 第 ${i / 40} 节\n\n- 列表项 $i " else "字$i " }
         rule.runOnUiThread { Choreographer.getInstance().postFrameCallback(cb) }
         val stream = host.startStream(StreamScript(chunks, intervalMs = 8), userText = "写长一点")
         rule.waitUntil(120_000) { !stream.isActive }
         rule.waitForIdle()
         tracking.set(false)
-        val total = frames.get()
-        val ratio = if (total == 0) 0.0 else slow.get().toDouble() / total
-        assertTrue("没有采集到帧", total > 0)
-        assertTrue("慢帧比例 ${"%.2f".format(ratio * 100)}%（$slow/$total）超过 5%", ratio < 0.05)
+        return slow.get() to frames.get()
+    }
+
+    /** 基线：最朴素的显示方式（每条消息一个 Text，贴底），只用来度量本模拟器的渲染能力。 */
+    @Composable
+    private fun BaselineList(host: SessionHost) {
+        val chat by host.chat.collectAsState()
+        val state = androidx.compose.foundation.lazy.rememberLazyListState()
+        androidx.compose.runtime.LaunchedEffect(chat.items.size, chat.items.lastOrNull()) {
+            if (chat.items.isNotEmpty()) state.scrollToItem(chat.items.size - 1, Int.MAX_VALUE)
+        }
+        androidx.compose.foundation.lazy.LazyColumn(state = state, modifier = androidx.compose.ui.Modifier.fillMaxSize()) {
+            items(chat.items.size, key = { chat.items[it].key }) { i ->
+                val item = chat.items[i]
+                val text = when (item) {
+                    is ChatItem.User -> item.text
+                    is ChatItem.Assistant -> item.blocks.filterIsInstance<ContentBlock.Text>().joinToString("") { b -> b.text }
+                    else -> ""
+                }
+                Text(text, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+            }
+        }
     }
 }

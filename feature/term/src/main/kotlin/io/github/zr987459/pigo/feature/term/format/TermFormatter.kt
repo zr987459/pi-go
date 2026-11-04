@@ -16,6 +16,7 @@ import kotlinx.serialization.json.jsonPrimitive
  * 一行终端输出：若干带 token 的片段 + 整行底色 token（用户消息 `userMessageBg`、工具块 `toolPendingBg/SuccessBg/ErrorBg` 等）。
  * [action] 非空表示点这一行执行的动作（工具块 → 展开 / 收起、思考块 → 显示 / 隐藏）。
  */
+@androidx.compose.runtime.Immutable
 data class TermLine(val spans: List<Span>, val bg: String? = null, val action: String? = null) {
     val text: String get() = spans.joinToString("") { it.text }
 }
