@@ -156,7 +156,8 @@ class AppCoverageTest {
         rule.onNodeWithTag("calm:expand").performClick()
         rule.waitForIdle()
         rule.onNodeWithTag("calm:expandedEditor").assertIsDisplayed()
-        rule.runOnUiThread { host.overlay.push(OverlayModel.Text("help.hotkeys", "快捷键", "Esc 中止")) }
+        // FakePiActions 对 editor.expand 也压一个占位面板（真实 PiActionsImpl 返回 Done）：先清掉，只留测试自己的面板。
+        rule.runOnUiThread { host.overlay.clear(); host.overlay.push(OverlayModel.Text("help.hotkeys", "快捷键", "Esc 中止")) }
         rule.waitForIdle()
         pressBack()
         assertTrue("返回先关面板", host.overlay.items.value.isEmpty())
@@ -166,7 +167,8 @@ class AppCoverageTest {
         // 面板确实画在编辑器之上：点它的关闭键能关掉（被编辑器盖住时点不到）
         rule.onNodeWithTag("calm:expand").performClick()
         rule.waitForIdle()
-        rule.runOnUiThread { host.overlay.push(OverlayModel.Text("help.hotkeys", "快捷键", "Esc 中止")) }
+        // FakePiActions 对 editor.expand 也压一个占位面板（真实 PiActionsImpl 返回 Done）：先清掉，只留测试自己的面板。
+        rule.runOnUiThread { host.overlay.clear(); host.overlay.push(OverlayModel.Text("help.hotkeys", "快捷键", "Esc 中止")) }
         rule.waitForIdle()
         rule.onNodeWithTag("overlay:close").performClick()
         rule.waitForIdle()

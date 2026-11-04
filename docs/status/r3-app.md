@@ -131,3 +131,12 @@
 ### 13:45 CST 进度（第 2 轮修复）
 - 本地（aarch64 沙箱，aapt2 经 qemu-x86_64-static 运行）：:feature:chat、:feature:models、:app testDebugUnitTest 全绿；:app:compileDebugAndroidTestKotlin 通过。
 - 推送代码提交；下一步：盯 CI（build、realpi、两个模拟器 job），然后更新 PR #21 描述。
+
+### 13:23 CST 进度（第 2 轮修复）
+- 更正：上面「13:10」「13:30」「13:45」三节标题是估算的，实际约为 13:00、13:08、13:13 CST。
+- 已推送代码 8c62e6f。CI：realpi push 41777878881 / PR 41777884029 ✅；Android debug build 的 build job push 41777878889 / PR 41777884050 ✅；两个模拟器 job 运行中。
+- 下一步：模拟器 job 全绿后更新 PR #21 描述（草稿在工作区 pr21_r2.md），状态追加「完成，PR #21」。（注意：本状态提交会触发新一轮 CI，所以等模拟器结束后再推。）
+
+### 13:33 CST 进度（第 2 轮修复）
+- 8c62e6f：build、realpi 全绿；两个模拟器 job（push 41777878889 / PR 41777884050）只有新加的 `AppCoverageTest.panelAboveExpandedEditorIsOnTopAndClosesFirst` 失败——原因是测试夹具：FakePiActions 对 `editor.expand` 也压一个占位面板（真实 PiActionsImpl 返回 Done），返回关掉的是测试面板、栈里还剩占位面板。产品代码无问题；其余 5 个 AppCoverageTest、feature/chat 5 个、feature/term 16 个全过。
+- 修复：测试在展开编辑器后先清掉占位面板。下一步：推送，盯模拟器 job。
