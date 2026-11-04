@@ -23,6 +23,8 @@
   - main 上**没有 PiBridge**（在 r3/core-base），`SessionOps` 由 app 实现：abortRetry=PiEngine.abortRetry；runGuest=runtime.exec(bash -lc)；writeReport=cacheDir；newSessionInDir=engine.newSession(dir)；dequeueAll/stopEngine 用 engine.stop；setLabel/reload/treeNavigate 暂返回「需要 pigo-bridge（r3/core-base 未合入 main）」→ 交接。
   - **面板事件路由缺口**：calm 把面板内点击当 `runAction(面板id, key)`，而 ModelPanels 面板 id 与动作 id 重名（model.select / auth.login / auth.logout / provider.custom），会被 PiActionsImpl 当成「再开一次面板」。修法：calm 新增 `PanelEventSink`（owns(id) + onEvent），CalmSurface 可选参数；app 用 RealModelPanels 实现；Form.actions 按钮、表单提交（JSON）、确认框、OAuth 失败「重试」、OAuth 进度轮询、关闭时 cancel、secret 字段遮挡且不写进 values。
   - 10:50 本地已写（未推，正在编译）：feature/chat/ui/calm/CalmPanels.kt（PanelEventSink + CalmPanelLogic）、CalmSheet/CalmSurface 改动；app/di/AppSessionOps.kt、ModelPanelEvents.kt、SessionBindings.real(Deps)、AppGraph(piSettings/modelPanels/modelPanelEvents/sessionOps/sessionHost)、BindingMode.session=REAL、app/build.gradle.kts 加 :core:session、PiGoNavHost 去旧抽屉与 ChatPage。本地副本 /workspace/work/pigo/r3a/wk（换人后此目录不可见，以分支为准）。
+  - 推送 e032b12：上述代码全部提交（本地 :feature:chat/:app compileDebugKotlin 通过）。正在本地跑 CalmPanelLogicTest、RealHostFormSwitchTest、FormToggleNoRpcTest，然后看 CI。
+  - **下一步**：CI 绿 → 开 PR 1「r3/app：接线 UI 形态」，PR 描述写验收证据与越界改动（ui/calm 4 个文件、app/build.gradle.kts）。
   - 导航：Chat 路由 = FormHost(calm=CalmSurface)，去掉旧 ModalNavigationDrawer/PiGoDrawer/ChatPage（含 CommandPalette、SkillsScreen 引用）；设置路由 = SettingsScreen(panels, piSettings)。
 
 ## 计划
