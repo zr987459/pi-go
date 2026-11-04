@@ -78,7 +78,11 @@ object CalmPanelLogic {
 
     /** OAuth 面板是否到了终点（成功 / 失败）。 */
     fun isOAuthFinal(model: OverlayModel): Boolean =
-        model is OverlayModel.Text && (model.text.startsWith("已登录") || model.text.startsWith("登录失败"))
+        model is OverlayModel.Text && (
+            model.flow == io.github.zr987459.pigo.contract.session.FlowState.DONE ||
+                model.flow == io.github.zr987459.pigo.contract.session.FlowState.FAILED ||
+                model.text.startsWith("已登录") || model.text.startsWith("登录失败")
+            )
 
     /**
      * 没到终点的 OAuth **文字**面板每秒发一次 `refresh` 拉取进度（与设置页 `SettingsPanelLogic.needsOAuthPolling` 一致）。

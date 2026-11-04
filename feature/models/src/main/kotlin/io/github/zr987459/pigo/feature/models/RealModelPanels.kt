@@ -20,6 +20,7 @@ import io.github.zr987459.pigo.contract.models.ModelPanels
 import io.github.zr987459.pigo.contract.models.ModelPickerTab
 import io.github.zr987459.pigo.contract.session.FormField
 import io.github.zr987459.pigo.contract.session.KeyCap
+import io.github.zr987459.pigo.contract.session.FlowState
 import io.github.zr987459.pigo.contract.session.OverlayModel
 import io.github.zr987459.pigo.contract.session.SelectGroup
 import io.github.zr987459.pigo.contract.session.SelectItem
@@ -236,22 +237,22 @@ class RealModelPanels(
         val title = "登录 $providerId"
         val submittedAt = oauthSubmitted[providerId]
         if (submittedAt != null) {
-            if (clock() - submittedAt < OAUTH_VERIFY_TIMEOUT_MS) return OverlayModel.Text(id, title, OAUTH_VERIFYING)
+            if (clock() - submittedAt < OAUTH_VERIFY_TIMEOUT_MS) return OverlayModel.Text(id, title, OAUTH_VERIFYING, flow = FlowState.RUNNING)
             oauthSubmitted.remove(providerId) // 登录会话一直没有回应：回到当前步骤，允许再提交
         }
         return when (val s = _oauth.value[providerId] ?: OAuthStep.Starting) {
-            OAuthStep.Starting -> OverlayModel.Text(id, title, "正在开始登录…")
-            is OAuthStep.OpenUrl -> OverlayModel.Text(id, title, listOfNotNull("在浏览器中打开：", s.url, s.instructions).joinToString("\n"))
-            is OAuthStep.DeviceCode -> OverlayModel.Text(id, title, "打开 ${s.verificationUri}\n输入代码：${s.userCode}")
+            OAuthStep.Starting -> OverlayModel.Text(id, title, "正在开始登录…", flow = FlowState.RUNNING)
+            is OAuthStep.OpenUrl -> OverlayModel.Text(id, title, listOfNotNull("在浏览器中打开：", s.url, s.instructions).joinToString("\n"), flow = FlowState.RUNNING)
+            is OAuthStep.DeviceCode -> OverlayModel.Text(id, title, "打开 ${s.verificationUri}\n输入代码：${s.userCode}", flow = FlowState.RUNNING)
             is OAuthStep.NeedCode -> OverlayModel.Form(
                 id, title,
                 listOf(FormField("code", s.prompt, PiSettingType.Str, help = oauthUrls[providerId]?.let { "授权链接：$it" })),
                 submitLabel = "提交",
             )
             is OAuthStep.Select -> OverlayModel.SelectList(id, s.prompt, listOf(SelectGroup(null, s.options.map { SelectItem("select:$it", it) })))
-            is OAuthStep.Progress -> OverlayModel.Text(id, title, s.message)
-            is OAuthStep.Done -> OverlayModel.Text(id, title, "已登录" + ((s.state as? AuthState.OAuth)?.accountLabel?.let { "：$it" } ?: ""))
-            is OAuthStep.Failed -> OverlayModel.Text(id, title, "登录失败：${s.message}\n可点「重试」重新登录")
+            is OAuthStep.Progress -> OverlayModel.Text(id, title, s.message, flow = FlowState.RUNNING)
+            is OAuthStep.Done -> OverlayModel.Text(id, title, "已登录" + ((s.state as? AuthState.OAuth)?.accountLabel?.let { "：$it" } ?: ""), flow = FlowState.DONE)
+            is OAuthStep.Failed -> OverlayModel.Text(id, title, "登录失败：${s.message}\n可点「重试」重新登录", flow = FlowState.FAILED)
         }
     }
 

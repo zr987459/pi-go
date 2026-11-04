@@ -27,7 +27,15 @@ interface ModelPanels {
     /** `/logout` 选择器：已登录的服务商。 */
     suspend fun logoutPicker(): OverlayModel
 
-    /** 面板内的操作回传（选中某项、提交表单、点键帽）。 */
+    /**
+     * 面板内的操作回传（选中某项、提交表单、点键帽）。
+     *
+     * 结果的落地约定（两种形态与设置页一致）：
+     * - [ActionResult.Done] = 成功 / 结束，关闭该面板；
+     * - [ActionResult.Toast] = 提示（含失败、校验不通过），**面板保持打开、已填值保留**，提示显示在面板里；
+     * - [ActionResult.Overlay] = 下一步面板：与栈顶同 id 则替换栈顶；与栈中更下面某层同 id 表示「回到那一层」，
+     *   终端形态会弹出其上的各层再替换它。因此同一流程里**不同的子面板必须用不同的 id**（PR #18 审查第 3 轮 Nit 4）。
+     */
     suspend fun onPanelEvent(overlayId: String, key: String, value: String? = null): ActionResult
 }
 

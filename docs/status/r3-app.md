@@ -101,3 +101,8 @@
 - 代码 5c0ef5a：Android debug build（push 41771064968 / PR 41771070096）、真 pi 桥接（41771064901 / 41771069764）全绿；模拟器：UiCoverageTest 5、AppCoverageTest 3（新）、SettingsScreenUiTest 9，失败 0。
 - PR #21 描述已补“审查第 1 轮修复”逐条表、越界改动、CI 链接；未改 .github。
 - 未完成 / 交接 PR 2：TERM_WIRED 改 true 并接线 TermSurface（返回键、附件同样接入）；删 SettingsHub 等旧路由；相机 / 剪贴板图片入口（本轮只接系统照片选择器）。
+
+### 12:27 CST — merge main@3726c1f（PR #18 r3/term 已合入）
+- 普通 merge（两父提交，不 rebase、不 force）。冲突只有 `RealModelPanels.kt` 的 oauthPanel：以 main 为准（Text 带 `flow = FlowState.*`），保留本轮 NeedCode 授权链接。
+- CalmPanelLogic.isOAuthFinal 同时认 main 新增的 `FlowState.DONE/FAILED`。
+- 下一步：等 CI；之后可能再 merge PR #23（r3/session-overlay）。

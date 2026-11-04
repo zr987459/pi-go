@@ -1,0 +1,49 @@
+
+ pi v1.5.0
+ escape to interrupt · ctrl+c to clear · shift+tab to cycle thinking · ctrl+l
+ to select model · / for commands · ! to run bash
+
+ 帮我看看 src/Login.kt 里 token 为什么会过期？
+
+
+ 先读 Login.kt，再看刷新逻辑。
+
+ 原因
+
+ 刷新令牌在 refresh() 里没有轮换，过期时间沿用了旧值。
+
+ 1. 读取 src/Login.kt
+ 2. 修改 refresh()
+
+ ```kotlin
+   val expires = now + ttl
+ ```
+
+
+ read src/Login.kt:1-40
+
+
+
+ $ ./gradlew test
+
+ ... (5 earlier lines, ctrl+o to expand)
+ > Task :core:test6
+ > Task :core:test7
+ > Task :core:test8
+ > Task :core:test9
+ FAILED: 1 test
+
+ Took 8.4s
+
+
+ 测试失败一条，我先修 refresh()。
+
+ ⠹ Working... 9s (escape to interrupt)
+
+ ╭─ high ─────────────────────────────────────────────────────────────────────╮
+ │ 顺便把单测也补上                                                           │
+ ╰────────────────────────────────────────────────────────────────────────────╯
+~/proj (main) • 修复登录                                                    [UI]
+↑12k ↓3.4k R80k W2.0k CH85.1% $0.042 38.0%/200k (auto)  claude-sonnet-4.5 • high
+
+ Esc  Tab  ⇣  ↑队  ^C  ⌃O  ⌕  ⇞⇟  ⤢  /  @  !  📎  ⇄UI  ⏎
