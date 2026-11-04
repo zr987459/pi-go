@@ -33,7 +33,10 @@ data class SettingsModel(
     )
 
     sealed interface Open {
-        data class Picker(val tab: ModelPickerTab) : Open
+        /** 打开模型面板；[mode] 非 null 时点一行就写默认值 / 切换常用（不切当前会话的模型）。 */
+        data class Picker(val tab: ModelPickerTab, val mode: SettingsPanelLogic.PickMode? = null) : Open
+        /** 本页内编辑 pi `settings.json` 的 [settingKey]（思考预算、每模型思考档）。 */
+        data class Advanced(val settingKey: String) : Open
         data class Event(val overlayId: String, val key: String) : Open
         data object None : Open
     }
@@ -67,7 +70,7 @@ object SettingsModelBuilder {
         val defaultDetail = if (dp != null && dm != null) listOfNotNull("$dp/$dm", dt).joinToString(" · ") else "未设置"
         val default = SettingsModel.Section(
             "default", spec.getValue("default").title,
-            listOf(SettingsModel.Row("default", "默认模型", defaultDetail, open = SettingsModel.Open.Picker(ModelPickerTab.ALL))),
+            listOf(SettingsModel.Row("default", "默认模型", defaultDetail, open = SettingsModel.Open.Picker(ModelPickerTab.ALL, SettingsPanelLogic.PickMode.DEFAULT))),
         )
 
         // 常用模型（= enabledModels / scoped-models）
@@ -75,7 +78,7 @@ object SettingsModelBuilder {
         val scopedCount = scopedPanel?.groups?.sumOf { it.items.size } ?: 0
         val scoped = SettingsModel.Section(
             "scoped", spec.getValue("scoped").title,
-            listOf(SettingsModel.Row("scoped", "常用模型", if (scopedCount == 0) "未设置" else "$scopedCount 个", open = SettingsModel.Open.Picker(ModelPickerTab.SCOPED))),
+            listOf(SettingsModel.Row("scoped", "常用模型", if (scopedCount == 0) "未设置" else "$scopedCount 个", open = SettingsModel.Open.Picker(ModelPickerTab.ALL, SettingsPanelLogic.PickMode.SCOPED))),
         )
 
         // 服务商：同一个 providerList 面板拆成已连接 / 全部 / 自定义三段
@@ -98,8 +101,13 @@ object SettingsModelBuilder {
         val advanced = SettingsModel.Section(
             "advanced", spec.getValue("advanced").title,
             ADVANCED.map { (key, label, settingKey) ->
-                val detail = settingKey?.let { k -> values[k]?.let { "已设置" } ?: "默认" } ?: "从 pi 重新读取"
-                SettingsModel.Row(key, label, detail, open = if (settingKey == null) SettingsModel.Open.Event("model.select", "refresh") else SettingsModel.Open.None)
+                val detail = settingKey?.let { k -> if (piSettings == null) "暂不可编辑" else values[k]?.let { "已设置" } ?: "默认" } ?: "从 pi 重新读取"
+                val open = when {
+                    settingKey == null -> SettingsModel.Open.Event("model.select", "refresh")
+                    piSettings == null -> SettingsModel.Open.None
+                    else -> SettingsModel.Open.Advanced(settingKey)
+                }
+                SettingsModel.Row(key, label, detail, open = open)
             },
         )
         return SettingsModel(listOf(default, scoped, connected, providers, custom, advanced), query)

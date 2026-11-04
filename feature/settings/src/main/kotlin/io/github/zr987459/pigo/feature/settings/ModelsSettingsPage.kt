@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -30,6 +31,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -43,6 +45,7 @@ import io.github.zr987459.pigo.feature.settings.ui.PlainBackdrop
 import io.github.zr987459.pigo.feature.settings.ui.SettingsColors
 import io.github.zr987459.pigo.feature.settings.ui.SettingsSection
 import io.github.zr987459.pigo.feature.settings.ui.SettingsTile
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -55,6 +58,11 @@ object SettingsTags {
     const val PANEL = "settings.panel"
     fun section(key: String) = "settings.section:$key"
     fun row(key: String) = "settings.row:$key"
+    const val PANEL_TEXT = "settings.panel.text"
+    const val PANEL_MESSAGE = "settings.panel.message"
+    const val OPEN_URL = "settings.panel.openUrl"
+    fun panelItem(key: String) = "settings.panel.item:$key"
+    fun cap(actionId: String) = "settings.panel.cap:$actionId"
 }
 
 /**
@@ -68,34 +76,77 @@ fun ModelsSettingsPage(
     piSettings: PiSettings?,
     modifier: Modifier = Modifier,
     onBack: (() -> Unit)? = null,
+    /** 打开 OAuth 授权链接（默认用系统浏览器 / Custom Tab）；测试可替换。 */
+    openUrl: ((String) -> Unit)? = null,
 ) {
+    val uriHandler = LocalUriHandler.current
+    val openLink: (String) -> Unit = openUrl ?: { url -> runCatching { uriHandler.openUri(url) } }
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     var query by remember { mutableStateOf("") }
     var version by remember { mutableIntStateOf(0) }
     var model by remember { mutableStateOf<SettingsModel?>(null) }
     var panel by remember { mutableStateOf<OverlayModel?>(null) }
+    var pickMode by remember { mutableStateOf<SettingsPanelLogic.PickMode?>(null) }
+    var message by remember { mutableStateOf<String?>(null) }
+    var openedUrl by remember { mutableStateOf<String?>(null) }
     val piValues = piSettings?.values
 
     LaunchedEffect(panels, query, version, piValues?.value) {
         model = runCatching { SettingsModelBuilder.build(panels, piSettings, query) }.getOrNull()
     }
 
+    fun closePanel() { panel = null; pickMode = null; message = null; openedUrl = null }
+
     fun handle(r: ActionResult) {
         when (r) {
-            is ActionResult.Overlay -> panel = r.model
-            is ActionResult.Toast -> { panel = null; scope.launch { snackbar.showSnackbar(r.text) } }
-            is ActionResult.LocalBlock -> panel = OverlayModel.Text("local", r.title, r.text)
-            ActionResult.Done -> panel = null
+            is ActionResult.Overlay -> { panel = r.model; message = null }
+            // Toast 不关面板（审查第 2 轮 Nit 3）：消息显示在面板里；没有面板时用 snackbar。
+            is ActionResult.Toast -> if (panel != null) message = r.text else scope.launch { snackbar.showSnackbar(r.text) }
+            is ActionResult.LocalBlock -> { panel = OverlayModel.Text("local", r.title, r.text); message = null }
+            ActionResult.Done -> closePanel()
         }
         version++
     }
 
+    /** 面板事件的唯一出口（键帽协议见契约 KeyCap）：高级表单本页处理，其余交给 ModelPanels。 */
+    fun send(p: OverlayModel, key: String, value: String?) = scope.launch {
+        if (SettingsPanelLogic.isAdvanced(p.id)) {
+            if (key == "submit" && piSettings != null) handle(SettingsPanelLogic.submitAdvanced(piSettings, p.id, RealFormJson.parse(value)))
+            return@launch
+        }
+        handle(panels.onPanelEvent(p.id, key, value))
+    }
+
+    fun dismiss() {
+        val p = panel
+        closePanel()
+        version++
+        if (p != null) SettingsPanelLogic.dismissEvent(p)?.let { k -> scope.launch { panels.onPanelEvent(p.id, k, null) } }
+    }
+
     fun open(row: SettingsModel.Row) = scope.launch {
         when (val o = row.open) {
-            is SettingsModel.Open.Picker -> panel = panels.modelPicker(o.tab, "")
-            is SettingsModel.Open.Event -> handle(panels.onPanelEvent(o.overlayId, o.key))
-            SettingsModel.Open.None -> snackbar.showSnackbar("在 ⌘ › pi 设置 中修改")
+            is SettingsModel.Open.Picker -> { pickMode = o.mode; message = null; panel = panels.modelPicker(o.tab, "") }
+            is SettingsModel.Open.Event -> { pickMode = null; handle(panels.onPanelEvent(o.overlayId, o.key)) }
+            is SettingsModel.Open.Advanced -> {
+                pickMode = null; message = null
+                panel = SettingsPanelLogic.advancedForm(o.settingKey, piSettings?.values?.value.orEmpty())
+            }
+            SettingsModel.Open.None -> snackbar.showSnackbar("需要 pi 设置可用后才能修改")
+        }
+    }
+
+    // OAuth：每秒拉一次进度，直到成功或失败；出现授权链接时自动打开一次（审查第 2 轮 Important 1）。
+    val current = panel
+    LaunchedEffect(current) {
+        val url = SettingsPanelLogic.oauthUrl(current)
+        if (url != null && url != openedUrl) { openedUrl = url; openLink(url) }
+        while (SettingsPanelLogic.needsOAuthPolling(panel) && panel == current) {
+            delay(1_000)
+            val p = panel ?: break
+            if (p != current) break
+            handle(panels.onPanelEvent(p.id, "refresh"))
         }
     }
 
@@ -156,16 +207,28 @@ fun ModelsSettingsPage(
     panel?.let { p ->
         PanelDialog(
             model = p,
-            onDismiss = { panel = null; version++ },
-            onEvent = { key, value -> scope.launch { handle(panels.onPanelEvent(p.id, key, value)) } },
+            mode = pickMode,
+            message = message,
+            onDismiss = { dismiss() },
+            onEvent = { key, value -> send(p, key, value) },
+            onOpenUrl = openLink,
         )
     }
 }
 
 /** 面板的极简渲染（SelectList / Form / Text / Confirm）；其他类型只显示标题。密文字段遮挡显示（契约 [io.github.zr987459.pigo.contract.session.FormField.secret]）。 */
 @Composable
-internal fun PanelDialog(model: OverlayModel, onDismiss: () -> Unit, onEvent: (key: String, value: String?) -> Unit) {
+internal fun PanelDialog(
+    model: OverlayModel,
+    onDismiss: () -> Unit,
+    onEvent: (key: String, value: String?) -> Unit,
+    mode: SettingsPanelLogic.PickMode? = null,
+    message: String? = null,
+    onOpenUrl: (String) -> Unit = {},
+) {
+    // Toast 不替换面板，所以表单已填值保留；「获取模型」等返回新表单时按新值重建。
     val formValues = remember(model) { mutableStateMapOf<String, String>().apply { if (model is OverlayModel.Form) putAll(model.values) } }
+    var highlighted by remember(model.id) { mutableStateOf<String?>(null) }
     var listQuery by remember(model) { mutableStateOf((model as? OverlayModel.SelectList)?.query.orEmpty()) }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -182,16 +245,37 @@ internal fun PanelDialog(model: OverlayModel, onDismiss: () -> Unit, onEvent: (k
                         model.groups.forEach { g ->
                             g.title?.let { Text(it, style = MaterialTheme.typography.labelLarge, color = SettingsColors.faint, modifier = Modifier.padding(top = 8.dp)) }
                             g.items.forEach { item ->
-                                Row(Modifier.fillMaxWidth().clickable(enabled = item.enabled) { onEvent(item.key, null) }.padding(vertical = 8.dp)) {
+                                val isHi = highlighted == item.key
+                                Row(
+                                    Modifier.fillMaxWidth()
+                                        .testTag(SettingsTags.panelItem(item.key))
+                                        .clickable(enabled = item.enabled) {
+                                            when (val c = SettingsPanelLogic.rowClick(model, item.key, mode)) {
+                                                is SettingsPanelLogic.Click.Event -> onEvent(c.key, c.value)
+                                                is SettingsPanelLogic.Click.Highlight -> highlighted = c.key
+                                            }
+                                        }
+                                        .padding(vertical = 8.dp),
+                                ) {
                                     Column(Modifier.weight(1f)) {
-                                        Text((if (item.starred == true) "★ " else "") + item.label, style = MaterialTheme.typography.bodyLarge)
+                                        Text(
+                                            (if (isHi) "▸ " else "") + (if (item.starred == true) "★ " else "") + item.label + (item.keyHint?.let { "（$it）" } ?: ""),
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            color = if (isHi) MaterialTheme.colorScheme.primary else Color.Unspecified,
+                                        )
                                         item.detail?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = SettingsColors.faint) }
                                     }
                                 }
                             }
                         }
-                        if (model.keyCaps.isNotEmpty()) Row {
-                            model.keyCaps.forEach { c -> TextButton(onClick = { onEvent(c.actionId, model.selectedKey) }) { Text(c.label) } }
+                        val caps = SettingsPanelLogic.visibleKeyCaps(model, mode)
+                        if (caps.isNotEmpty()) Row(Modifier.horizontalScroll(rememberScrollState())) {
+                            caps.forEach { c ->
+                                TextButton(
+                                    onClick = { onEvent(c.actionId, SettingsPanelLogic.keyCapValue(model, highlighted)) },
+                                    modifier = Modifier.testTag(SettingsTags.cap(c.actionId)),
+                                ) { Text(c.label) }
+                            }
                         }
                     }
                     is OverlayModel.Form -> model.fields.forEach { f ->
@@ -206,17 +290,27 @@ internal fun PanelDialog(model: OverlayModel, onDismiss: () -> Unit, onEvent: (k
                             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                         )
                     }
-                    is OverlayModel.Text -> Text(model.text)
+                    is OverlayModel.Text -> {
+                        Text(model.text, modifier = Modifier.testTag(SettingsTags.PANEL_TEXT))
+                        SettingsPanelLogic.oauthUrl(model)?.let { url ->
+                            TextButton(onClick = { onOpenUrl(url) }, modifier = Modifier.testTag(SettingsTags.OPEN_URL)) { Text("打开链接") }
+                        }
+                    }
                     is OverlayModel.Confirm -> Text(model.message)
                     else -> Unit
+                }
+                message?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp).testTag(SettingsTags.PANEL_MESSAGE))
                 }
             }
         },
         confirmButton = {
             when (model) {
                 is OverlayModel.Form -> Row {
-                    formActions(model.id).forEach { (k, label) -> TextButton(onClick = { onEvent(k, formJson(formValues)) }) { Text(label) } }
-                    TextButton(onClick = { onEvent("submit", formJson(formValues)) }) { Text(model.submitLabel ?: "保存") }
+                    SettingsPanelLogic.formActions(model).forEach { (k, label) ->
+                        TextButton(onClick = { onEvent(k, formJson(formValues)) }, modifier = Modifier.testTag(SettingsTags.cap(k))) { Text(label) }
+                    }
+                    TextButton(onClick = { onEvent("submit", formJson(formValues)) }, modifier = Modifier.testTag(SettingsTags.cap("submit"))) { Text(model.submitLabel ?: "保存") }
                 }
                 is OverlayModel.Confirm -> TextButton(onClick = { onEvent("confirm", null) }) { Text(model.confirmLabel) }
                 else -> Unit
@@ -226,12 +320,15 @@ internal fun PanelDialog(model: OverlayModel, onDismiss: () -> Unit, onEvent: (k
     )
 }
 
-/** 表单上除「保存」外的操作（与 RealModelPanels 的事件 key 一致）。 */
-internal fun formActions(overlayId: String): List<Pair<String, String>> = when {
-    overlayId.startsWith("provider.form:") -> listOf("test" to "测试")
-    overlayId.startsWith("provider.custom") -> listOf("discover" to "获取模型", "test" to "测试")
-    else -> emptyList()
-}
+/** 表单上除「保存」外的操作（兜底；面板自带 actions 时用面板的）。 */
+internal fun formActions(overlayId: String): List<Pair<String, String>> = SettingsPanelLogic.formActions(overlayId)
 
 internal fun formJson(values: Map<String, String>): String = JsonObject(values.mapValues { JsonPrimitive(it.value) }).toString()
 
+
+/** 表单值 JSON（与 [formJson] 相反）。 */
+internal object RealFormJson {
+    fun parse(value: String?): Map<String, String> = runCatching {
+        (kotlinx.serialization.json.Json.parseToJsonElement(value.orEmpty()) as JsonObject).mapValues { (it.value as? JsonPrimitive)?.content.orEmpty() }
+    }.getOrDefault(emptyMap())
+}

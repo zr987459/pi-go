@@ -89,13 +89,18 @@ class RealModelPanels(
     /** 表单里填了但还没保存的 Key：只在内存里，不进 [OverlayModel.Form.values]，也就不进 OverlayStack。 */
     private val pendingKeys = mutableMapOf<String, String>()
 
+    /** [pendingKeys] 填写时的「名称|接口地址」：之后两者任一变化就丢弃该 Key。 */
+    private val pendingKeyOwner = mutableMapOf<String, String>()
+
     /** 模型面板当前页签（搜索时保持）。 */
     @Volatile private var modelTab: ModelPickerTab = ModelPickerTab.ALL
+    @Volatile private var modelQuery: String = ""
 
     // ---------------------------------------------------------------- 模型面板
 
     override suspend fun modelPicker(tab: ModelPickerTab, query: String): OverlayModel {
         modelTab = tab
+        modelQuery = query
         val entries = catalog.entries().okOr(emptyList())
         val providers = catalog.providers().okOr(emptyList())
         val names = providers.associate { it.id to it.displayName }
@@ -190,10 +195,11 @@ class RealModelPanels(
         val oauth = p.authKinds.any { it == AuthKind.OAUTH_PKCE || it == AuthKind.OAUTH_DEVICE }
         return OverlayModel.Form(
             id = "provider.form:$providerId",
-            title = p.displayName + (if (oauth) "（可用账号登录：键 oauth）" else ""),
+            title = p.displayName,
             fields = fields,
             values = emptyMap(), // 密文不回填；只显示末四位（help）
             submitLabel = "保存",
+            actions = providerFormActions(oauth = oauth, configured = st.configured, hasKeyFields = fields.isNotEmpty()),
         )
     }
 
@@ -260,6 +266,11 @@ class RealModelPanels(
             ),
             values = values,
             submitLabel = "保存",
+            actions = listOfNotNull(
+                KeyCap("", "获取模型", "discover"),
+                KeyCap("", "测试", "test"),
+                if (existing != null) KeyCap("", "删除", "remove") else null,
+            ),
         )
     }
 
@@ -333,7 +344,8 @@ class RealModelPanels(
 
     private suspend fun onProvidersEvent(key: String, value: String?): ActionResult = when {
         key == "query" -> ActionResult.Overlay(providerList(value.orEmpty()))
-        key == "custom" -> ActionResult.Overlay(customProviderForm(null))
+        // 每次「＋ 添加」都是全新表单：上一次没保存的草稿与 Key 一律丢弃（审查第 2 轮 Nit 2）。
+        key == "custom" -> { forgetDraft(""); ActionResult.Overlay(customProviderForm(null)) }
         key.startsWith("custom:") -> ActionResult.Overlay(customProviderForm(key.removePrefix("custom:")))
         key.startsWith("provider:") -> {
             val id = key.removePrefix("provider:")
@@ -364,7 +376,7 @@ class RealModelPanels(
 
     private suspend fun onOAuthEvent(providerId: String, key: String, value: String?): ActionResult = when {
         key == "refresh" -> ActionResult.Overlay(oauthPanel(providerId))
-        key == "code" -> {
+        key == "code" || key == "submit" -> {
             auth.submitCode(providerId, parseValues(value)["code"] ?: value.orEmpty())
             ActionResult.Overlay(oauthPanel(providerId))
         }
@@ -391,7 +403,15 @@ class RealModelPanels(
     private suspend fun onCustomEvent(providerId: String?, key: String, value: String?): ActionResult {
         val values = parseValues(value)
         val draftKey = providerId ?: ""
-        values[KEY_FIELD]?.takeIf { it.isNotBlank() }?.let { pendingKeys[draftKey] = it }
+        val owner = values["id"].orEmpty().trim().let { providerId ?: it } + "|" + values["baseUrl"].orEmpty().trim()
+        val typedKey = values[KEY_FIELD]?.takeIf { it.isNotBlank() }
+        if (typedKey != null) {
+            pendingKeys[draftKey] = typedKey
+            pendingKeyOwner[draftKey] = owner
+        } else if (values.isNotEmpty() && pendingKeyOwner[draftKey] != null && pendingKeyOwner[draftKey] != owner) {
+            // 名称或接口地址变了：之前填的 Key 不属于这个服务器，丢弃（不会把 A 的 Key 发给 B）。
+            pendingKeys.remove(draftKey); pendingKeyOwner.remove(draftKey)
+        }
         if (values.isNotEmpty()) customDrafts[draftKey] = values - KEY_FIELD
         val id = providerId ?: values["id"].orEmpty().trim()
         val api = ProviderApi.fromWire(values["api"]) ?: ProviderApi.OPENAI_COMPLETIONS
@@ -455,6 +475,7 @@ class RealModelPanels(
         customDrafts.remove(draftKey)
         discoveredModels.remove(draftKey)
         pendingKeys.remove(draftKey)
+        pendingKeyOwner.remove(draftKey)
     }
 
     private suspend fun testProvider(providerId: String): ActionResult {
@@ -487,7 +508,7 @@ class RealModelPanels(
         val cur = scopedRefs()
         val next = if (ref in cur) cur - ref else cur + ref
         return when (val r = s.set("enabledModels", JsonArray(next.map(::JsonPrimitive)))) {
-            is Outcome.Ok -> ActionResult.Overlay(modelPicker(ModelPickerTab.SCOPED))
+            is Outcome.Ok -> ActionResult.Overlay(modelPicker(modelTab, modelQuery))
             is Outcome.Err -> ActionResult.Toast("保存失败：${r.message}")
         }
     }
@@ -570,6 +591,13 @@ class RealModelPanels(
          * 保存自定义服务商时的模型列表：按表单里的 id 顺序，优先用已存的模型（保留推理 / 看图 / 上下文等能力），
          * 其次用「发现模型」得到的，都没有才新建只有 id 的模型（能力未指定，由存储层写成「不写该字段」）。
          */
+        /** 服务商表单上「保存」之外的按钮：测试、账号登录（支持 OAuth 时）、清除（已配置时）。 */
+        fun providerFormActions(oauth: Boolean, configured: Boolean, hasKeyFields: Boolean): List<KeyCap> = listOfNotNull(
+            if (hasKeyFields) KeyCap("", "测试", "test") else null,
+            if (oauth) KeyCap("", "账号登录", "oauth") else null,
+            if (configured) KeyCap("", "清除", "clear") else null,
+        )
+
         fun mergeModels(ids: List<String>, existing: List<CustomModel>, discovered: List<CustomModel>): List<CustomModel> {
             val old = existing.associateBy { it.id }
             val found = discovered.associateBy { it.id }

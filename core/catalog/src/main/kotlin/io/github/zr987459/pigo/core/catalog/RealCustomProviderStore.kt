@@ -40,6 +40,8 @@ class RealCustomProviderStore(
                     reasoning = m.reasoning ?: false,
                     input = if (m.supportsImages == true) setOf("text", "image") else setOf("text"),
                     cost = m.cost?.let { ModelCost(it.input, it.output, it.cacheRead, it.cacheWrite) },
+                    reasoningExplicit = m.reasoning,
+                    imagesExplicit = m.supportsImages,
                 )
             },
             headers = c.headers,
@@ -57,8 +59,8 @@ class RealCustomProviderStore(
                 PiProviderConfigStore.CustomModel(
                     id = m.id,
                     name = m.name,
-                    reasoning = capability(m.reasoning, old[m.id]?.reasoning),
-                    supportsImages = capability("image" in m.input, old[m.id]?.supportsImages),
+                    reasoning = capability(m.reasoningExplicit, m.reasoning, old[m.id]?.reasoning),
+                    supportsImages = capability(m.imagesExplicit, "image" in m.input, old[m.id]?.supportsImages),
                     contextWindow = m.contextWindow,
                     maxTokens = m.maxTokens,
                     cost = m.cost?.let { BuiltinCatalog.Cost(it.input, it.output, it.cacheRead, it.cacheWrite) },
@@ -73,18 +75,7 @@ class RealCustomProviderStore(
         Outcome.Err(ErrCode.PROVIDER, e.message ?: "保存失败", e)
     }
 
-    /**
-     * 能力字段的「未指定」语义：契约里 `CustomModel.reasoning` / `input` 不能为空，false / 只有 text 既可能是
-     * 「明确关闭」也可能是「没填」。原来就有值（true 或 false）时照写新值；原来没写、新值又是 false 时写 null
-     * （不写该字段），避免每次保存都把未指定的能力写成关闭（PR #19 审查 Important 4）。
-     */
-    private fun capability(new: Boolean, old: Boolean?): Boolean? = when {
-        new -> true
-        old != null -> false
-        else -> null
-    }
-
-    override suspend fun remove(id: String): Outcome<Unit> = try {
+    override suspend fun remove    override suspend fun remove(id: String): Outcome<Unit> = try {
         config.removeCustom(id); Outcome.Ok(Unit)
     } catch (e: IllegalArgumentException) {
         Outcome.Err(ErrCode.PROVIDER, e.message ?: "删除失败")
@@ -135,5 +126,19 @@ class RealCustomProviderStore(
             ProviderTester.testBuiltIn(rt, ref.provider, envVar, key, ref.id, extraEnv = env)
         }
         return Outcome.Ok(ProbeOutcome(r.ok, r.message, r.httpStatus, r.elapsedMs.takeIf { it > 0 } ?: (clock() - start)))
+    }
+
+    companion object {
+        /**
+         * 写盘时一个能力字段的值（null = 不写该字段）：
+         * - [explicit] 非 null：用户显式开 / 关，照写（显式关闭写 false，不会被抹成「未指定」）；
+         * - 否则按推断值 [inferred]：true 写 true；原文件有值（[old] 非 null）时写 false；原来就没写时写 null。
+         */
+        internal fun capability(explicit: Boolean?, inferred: Boolean, old: Boolean?): Boolean? = when {
+            explicit != null -> explicit
+            inferred -> true
+            old != null -> false
+            else -> null
+        }
     }
 }

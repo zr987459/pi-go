@@ -16,4 +16,5 @@
 
 ## 进度
 - 09:03 已 merge main → e8f7f66（普通 merge，无冲突）。
+- 09:24 代码进行中（未编译）：契约 KeyCap 注释 + Form.actions + CustomModel 显式能力；RealCustomProviderStore 三态；RealModelPanels 表单按钮/新建清草稿/Key 绑定名称地址/OAuth submit；设置页 SettingsPanelLogic（选取模式、高亮、Toast 不关、OAuth 轮询、高级表单）。下一步：本地编译 JVM 部分、补单测、androidTest、CI。
 - 09:10 读完审查与代码，方案：设置页面板加「选取模式」（默认/常用）与高亮项，键帽回传高亮项；Toast 不关面板（面板内显示消息）；OAuth 面板 1 秒轮询 refresh、OpenUrl 自动打开链接；Form 加 actions（契约最小改动）补「账号登录」「清除」；高级两项在设置页内表单直接写 pi settings；SettingsScreenUiTest 先滚到分区再取行，加进模拟器名单（.github 改动）；CustomModel 加显式能力三态（契约最小改动）。
