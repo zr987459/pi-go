@@ -26,7 +26,7 @@ import io.github.zr987459.pigo.contract.session.UiForm
 import io.github.zr987459.pigo.feature.chat.ui.calm.CalmSurface
 import io.github.zr987459.pigo.feature.chat.ui.calm.PanelEventSink
 import io.github.zr987459.pigo.form.FormHost
-import io.github.zr987459.pigo.form.TermPlaceholder
+import io.github.zr987459.pigo.feature.term.TermSurface
 import io.github.zr987459.pigo.form.toggleForm
 import io.github.zr987459.pigo.settings.ModelsPageExtras
 import kotlinx.coroutines.CoroutineScope
@@ -65,7 +65,7 @@ class AppCoverageTest {
             FormHost(
                 host,
                 calm = { CalmSurface(host, backHandler = { enabled, onBack -> BackHandler(enabled, onBack) }) },
-                term = { TermPlaceholder(onBackToUi = { host.toggleForm() }) },
+                term = { TermSurface(host) },
                 onBackground = { background++ },
             )
         }
