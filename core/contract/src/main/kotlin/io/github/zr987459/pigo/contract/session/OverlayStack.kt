@@ -30,4 +30,10 @@ class OverlayStack {
     fun remove(id: String) = _items.update { list -> list.filterNot { it.id == id } }
 
     fun clear() { _items.value = emptyList() }
+
+    /**
+     * 一次原子地改写整个栈（单次 `update`，可能重试 [transform]，所以它必须是纯函数）。
+     * 供宿主做「回到同 id 面板」「就地替换」「同步扩展对话框」这类多步调整，避免与其他协程的 push / remove 交错。
+     */
+    fun update(transform: (List<OverlayModel>) -> List<OverlayModel>) = _items.update(transform)
 }

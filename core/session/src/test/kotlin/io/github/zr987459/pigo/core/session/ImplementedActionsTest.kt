@@ -140,7 +140,7 @@ class ImplementedActionsTest {
         },
         "session.tree" to {
             assertTrue((run("session.tree") as ActionResult.Overlay).model is OverlayModel.Tree)
-            assertTrue("未设 skipPrompt 时先问要不要摘要", (run("session.tree", "e3") as ActionResult.Overlay).model is OverlayModel.Confirm)
+            assertEquals("未设 skipPrompt 时先问要不要摘要（摘要 / 不摘要 / 关闭 = 取消）", OverlayPanels.SUMMARIZE + "e3", overlayId(run("session.tree", "e3")))
             ops.navEditorText = "原来的问题"
             run("session.tree", "e3 summarize")
             assertEquals(mapOf("entryId" to "e3", "summarize" to "true"), engine.commands.value.last { it.type == "tree_nav" }.args)
