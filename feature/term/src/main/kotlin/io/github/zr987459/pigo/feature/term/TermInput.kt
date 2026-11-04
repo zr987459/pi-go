@@ -122,6 +122,32 @@ object TermInput {
         return AtQuery(i, e, text.substring(i + 1, c))
     }
 
+    /** 面板事件是否交给面板宿主：不在动作表里的面板（ModelPanels 的表单、确认框、账号登录…）走 `onPanelEvent`。 */
+    fun routesToPanel(overlayId: String, catalogIds: Set<String>): Boolean = overlayId !in catalogIds
+
+    /** 表单值 → JSON 对象（面板事件 value，与 UI 形态的设置页一致）。 */
+    fun formJson(values: Map<String, String>): String =
+        kotlinx.serialization.json.JsonObject(values.mapValues { kotlinx.serialization.json.JsonPrimitive(it.value) }).toString()
+
+    /**
+     * 账号登录面板（`oauth:<provider>` 的 Text）上的键帽：总有「刷新」（看下一步）；失败时加「重试」（面板事件 `retry`）。
+     * 返回（标签, 事件 key）。
+     */
+    fun oauthCaps(model: io.github.zr987459.pigo.contract.session.OverlayModel): List<Pair<String, String>> {
+        if (!model.id.startsWith("oauth:") || model !is io.github.zr987459.pigo.contract.session.OverlayModel.Text) return emptyList()
+        val failed = model.text.startsWith("登录失败")
+        return listOfNotNull("r 刷新" to "refresh", if (failed) "enter 重试" to "retry" else null)
+    }
+
+    /**
+     * `@` 补全结果只在与产生它的查询词一致时可用（审查第 2 轮 Nit 1）：防抖期间还是上一个词的结果，不能用来插入。
+     */
+    fun atMatchesFor(current: AtQuery?, resultFor: AtQuery?, matches: List<FileMatch>): List<FileMatch> =
+        if (current != null && current == resultFor) matches else emptyList()
+
+    /** 补全最多显示几条：照用户的 `autocompleteMaxVisible`（至少 1）。 */
+    fun visibleCount(maxVisible: Int): Int = maxVisible.coerceAtLeast(1)
+
     /** 重试倒计时剩余秒数（向上取整，不小于 0）。 */
     fun retrySecondsLeft(delayMs: Long, elapsedMs: Long): Long = ((delayMs - elapsedMs).coerceAtLeast(0) + 999) / 1000
 

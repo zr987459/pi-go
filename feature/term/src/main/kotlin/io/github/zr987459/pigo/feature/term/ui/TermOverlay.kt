@@ -49,15 +49,18 @@ fun TermOverlay(
     tokens: PiTokens,
     catalog: List<PiActionSpec>,
     onRun: (String, String?) -> Unit,
-    onPanelEvent: (overlayId: String, key: String, value: String?) -> Unit = { _, _, _ -> },
+    onPanelEvent: (overlayId: String, key: String, value: String?, closeOnToast: Boolean) -> Unit = { _, _, _, _ -> },
 ) {
     val scope = rememberCoroutineScope()
     val catalogIds = remember(catalog) { catalog.map { it.id }.toSet() }
-    // 面板自带的键帽（OverlayModel.keyCaps）按面板事件协议回传（调度者裁定，PR #19 审查 Nit 1）：
-    // key = KeyCap.actionId，value = 当前高亮项（SelectList.selectedKey），交给面板宿主（ModelPanels.onPanelEvent）分发，
-    // 与 UI 形态一致；只有动作表里存在的 id（selectorCaps）才走 runAction。
-    fun panelCap(id: String, selected: String?) {
-        if (id in catalogIds) onRun(id, null) else onPanelEvent(model.id, id, selected)
+    // 面板路由（审查第 2 轮 Nit 2 与契约 KeyCap 协议）：
+    // - 面板自带的键帽（keyCaps / Form.actions）**一律**发面板事件 `onPanelEvent(面板 id, actionId, 高亮项或表单值 JSON)`，
+    //   即使 actionId 恰好是动作表 id；
+    // - 不在动作表里的面板（ModelPanels 产出的 provider.form:*、provider.custom*、oauth:*、确认框等）的选中 / 提交 / 确认
+    //   也走面板事件（[TermInput.routesToPanel]）；动作表里的面板（/tree、/resume…）照旧交给 runAction(面板 id, 值)。
+    val toPanel = TermInput.routesToPanel(model.id, catalogIds)
+    fun pick(value: String?, closeOnToast: Boolean = false) {
+        if (toPanel) onPanelEvent(model.id, value ?: "", null, closeOnToast) else onRun(model.id, value)
     }
     val style = monoStyle(fontSp.sp, tokens)
     fun line(spans: List<Span>, bg: String? = null) = TermLine(listOf(Span(" ")) + spans, bg)
@@ -116,14 +119,16 @@ fun TermOverlay(
                                 fontSp.sp, tokens,
                                 Modifier.clickable(enabled = it.enabled) {
                                     host.overlay.replaceTop(model.copy(selectedKey = it.key))
-                                    onRun(model.id, it.key)
+                                    pick(it.key)
                                 }.testTag("overlay:${model.id}:item:${it.key}"),
                             )
                         }
                     }
                 }
-                KeyCapRow(model.keyCaps.map { it.key + " " + it.label to it.actionId } + selectorCaps(model.id, catalog), style, tokens, model.id) { id, a ->
-                    if (model.keyCaps.any { it.actionId == id }) panelCap(id, model.selectedKey) else onRun(id, a)
+                // 面板键帽带 PANEL_CAP 前缀，与动作表键帽（selectorCaps）区分，不按 id 是否在动作表里判断；两者都带上高亮项。
+                KeyCapRow(model.keyCaps.map { it.key + " " + it.label to PANEL_CAP + it.actionId } + selectorCaps(model.id, catalog), style, tokens, model.id) { id, _ ->
+                    if (id.startsWith(PANEL_CAP)) onPanelEvent(model.id, id.removePrefix(PANEL_CAP), model.selectedKey, false)
+                    else onRun(id, model.selectedKey)
                 }
             }
 
@@ -136,6 +141,8 @@ fun TermOverlay(
                             BasicTextField(
                                 value = v, enabled = f.enabled,
                                 onValueChange = { nv -> host.overlay.replaceTop(model.copy(values = model.values + (f.key to nv))) },
+                                // 密文字段（API Key）遮挡显示（契约 FormField.secret）
+                                visualTransformation = if (f.secret) androidx.compose.ui.text.input.PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
                                 textStyle = style.copy(color = tokens.fgOf("accent")), cursorBrush = SolidColor(tokens.fgOf("accent")),
                                 modifier = Modifier.fillMaxWidth().testTag("overlay:${model.id}:field:${f.key}"),
                             )
@@ -143,10 +150,18 @@ fun TermOverlay(
                         f.help?.let { TermLineText(line(listOf(Span("  $it", "dim"))), fontSp.sp, tokens) }
                     }
                 }
+                // Form.actions（「测试」「获取模型」「账号登录」「清除」…）：面板事件，value = 表单值 JSON（契约 OverlayModel.Form.actions）
                 KeyCapRow(
-                    listOf("enter ${model.submitLabel ?: "保存"}" to "submit") + selectorCaps(model.id, catalog), style, tokens, model.id,
+                    listOf("enter ${model.submitLabel ?: "保存"}" to "submit") +
+                        model.actions.map { (if (it.key.isBlank()) "" else it.key + " ") + it.label to PANEL_CAP + it.actionId } +
+                        selectorCaps(model.id, catalog),
+                    style, tokens, model.id,
                 ) { id, _ ->
-                    if (id == "submit") { val vals = model.values; close(); onRun(model.id, vals.entries.joinToString("\n") { "${it.key}=${it.value}" }) } else onRun(id, null)
+                    when {
+                        id == "submit" -> submitForm(host, model, toPanel, onRun, onPanelEvent)
+                        id.startsWith(PANEL_CAP) -> onPanelEvent(model.id, id.removePrefix(PANEL_CAP), TermInput.formJson(model.values), false)
+                        else -> onRun(id, null)
+                    }
                 }
             }
 
@@ -154,13 +169,21 @@ fun TermOverlay(
                 Column(Modifier.heightIn(max = (fontSp * 1.35f * 14).dp).verticalScroll(rememberScrollState())) {
                     TermFormatter.wrapSpans(listOf(Span(model.text)), cols - 2).forEach { TermLineText(line(it), fontSp.sp, tokens) }
                 }
-                KeyCapRow(listOf("escape 关闭" to "close") + selectorCaps(model.id, catalog), style, tokens, model.id) { id, a -> if (id == "close") close() else onRun(id, a) }
+                // 账号登录面板（ModelPanels 的 oauth:*）：「刷新」看下一步，失败时「重试」重新登录，都经面板事件回传
+                val oauthCaps = TermInput.oauthCaps(model)
+                KeyCapRow(oauthCaps.map { it.first to PANEL_CAP + it.second } + listOf("escape 关闭" to "close") + selectorCaps(model.id, catalog), style, tokens, model.id) { id, a ->
+                    when {
+                        id == "close" -> close()
+                        id.startsWith(PANEL_CAP) -> onPanelEvent(model.id, id.removePrefix(PANEL_CAP), null, false)
+                        else -> onRun(id, a)
+                    }
+                }
             }
 
             is OverlayModel.Confirm -> {
                 TermFormatter.wrapSpans(listOf(Span(model.message, if (model.dangerous) "warning" else null)), cols - 2).forEach { TermLineText(line(it), fontSp.sp, tokens) }
                 KeyCapRow(listOf("enter ${model.confirmLabel}" to "confirm", "escape 取消" to "cancel"), style, tokens, model.id) { id, _ ->
-                    close(); if (id == "confirm") onRun(model.id, "confirm")
+                    confirmAnswer(host, model, id == "confirm", toPanel, onRun, onPanelEvent)
                 }
             }
 
@@ -202,7 +225,7 @@ fun TermOverlay(
                             fontSp.sp, tokens,
                             Modifier.clickable {
                                 host.overlay.replaceTop(model.copy(selectedId = n.id))
-                                onRun(model.id, n.id)
+                                pick(n.id)
                             }.testTag("overlay:${model.id}:node:${n.id}"),
                         )
                     }
@@ -261,6 +284,28 @@ fun TermOverlay(
     }
 }
 
+/** 面板自带键帽在 KeyCapRow 里的 id 前缀（与动作表键帽区分）。 */
+private const val PANEL_CAP = "\u0000panel:"
+
+/** 表单提交：面板宿主的表单发 `submit` + 表单值 JSON（提示后关闭）；动作表里的表单照旧关闭后 runAction(面板 id, k=v 行)。 */
+internal fun submitForm(
+    host: SessionHost, model: OverlayModel.Form, toPanel: Boolean,
+    onRun: (String, String?) -> Unit, onPanelEvent: (String, String, String?, Boolean) -> Unit,
+) {
+    if (toPanel) onPanelEvent(model.id, "submit", TermInput.formJson(model.values), true)
+    else { val vals = model.values; host.overlay.pop(); onRun(model.id, vals.entries.joinToString("\n") { "${it.key}=${it.value}" }) }
+}
+
+/** 确认框：先关掉确认框本身，再回传（面板宿主：`confirm` / `cancel` 面板事件；动作表：runAction(面板 id, "confirm")）。 */
+internal fun confirmAnswer(
+    host: SessionHost, model: OverlayModel.Confirm, yes: Boolean, toPanel: Boolean,
+    onRun: (String, String?) -> Unit, onPanelEvent: (String, String, String?, Boolean) -> Unit,
+) {
+    if (host.overlay.top?.id == model.id) host.overlay.pop()
+    if (toPanel) onPanelEvent(model.id, if (yes) "confirm" else "cancel", null, false)
+    else if (yes) onRun(model.id, "confirm")
+}
+
 private fun selectorCaps(overlayId: String, catalog: List<PiActionSpec>): List<Pair<String, String>> {
     val selector = TermInput.SELECTOR_OVERLAY.entries.firstOrNull { it.value == overlayId }?.key ?: return emptyList()
     return TermInput.keyCapsFor(selector, catalog)
@@ -290,23 +335,29 @@ private fun KeyCapRow(
  * 外接键盘在 overlay 打开时按 Enter（审查第 1 轮 Nit 7）：与点「enter …」键帽 / 选中项相同。
  * 返回 true 表示已处理。扩展 `editor`（多行）对话框里 Enter 仍是换行，交给输入框。
  */
-fun overlayEnter(host: SessionHost, model: OverlayModel, scope: kotlinx.coroutines.CoroutineScope, onRun: (String, String?) -> Unit): Boolean {
+fun overlayEnter(
+    host: SessionHost, model: OverlayModel, scope: kotlinx.coroutines.CoroutineScope, onRun: (String, String?) -> Unit,
+    catalogIds: Set<String> = emptySet(),
+    onPanelEvent: (String, String, String?, Boolean) -> Unit = { _, _, _, _ -> },
+): Boolean {
+    val toPanel = TermInput.routesToPanel(model.id, catalogIds)
+    fun pick(v: String) { if (toPanel) onPanelEvent(model.id, v, null, false) else onRun(model.id, v) }
     when (model) {
         is OverlayModel.SelectList -> {
             val q = model.query.lowercase()
             val visible = model.groups.flatMap { g -> g.items.filter { q.isEmpty() || it.label.lowercase().contains(q) || it.key.lowercase().contains(q) || (it.detail?.lowercase()?.contains(q) == true) } }
                 .filter { it.enabled }
-            val pick = visible.firstOrNull { it.key == model.selectedKey } ?: visible.firstOrNull() ?: return true
-            host.overlay.replaceTop(model.copy(selectedKey = pick.key))
-            onRun(model.id, pick.key)
+            val chosen = visible.firstOrNull { it.key == model.selectedKey } ?: visible.firstOrNull() ?: return true
+            host.overlay.replaceTop(model.copy(selectedKey = chosen.key))
+            pick(chosen.key)
         }
-        is OverlayModel.Form -> {
-            val vals = model.values
-            host.overlay.pop()
-            onRun(model.id, vals.entries.joinToString("\n") { "${it.key}=${it.value}" })
-        }
-        is OverlayModel.Confirm -> { host.overlay.pop(); onRun(model.id, "confirm") }
+        is OverlayModel.Form -> submitForm(host, model, toPanel, onRun, onPanelEvent)
+        is OverlayModel.Confirm -> confirmAnswer(host, model, true, toPanel, onRun, onPanelEvent)
         is OverlayModel.Text -> host.overlay.pop()
+        // /tree：Enter 选中高亮节点（pi 树选择器同样）；没有高亮项时消费掉 Enter，不往草稿插换行（审查第 2 轮 Nit 3）
+        is OverlayModel.Tree -> model.selectedId?.let { pick(it) }
+        // 完整输出：Enter 关闭
+        is OverlayModel.FullOutput -> host.overlay.pop()
         is OverlayModel.ExtDialog -> {
             val r = model.request
             when (r.method) {

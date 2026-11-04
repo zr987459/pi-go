@@ -147,3 +147,45 @@ class HistoryNavTest {
         org.junit.Assert.assertFalse(nav.browsing)
     }
 }
+
+/** PR #18 审查第 2 轮 Nit 1、Nit 2 与契约新项（Form.actions、OAuth 重试）的纯逻辑。 */
+class TermPanelRoutingTest {
+    @org.junit.Test
+    fun atResultOnlyUsableForItsOwnQuery() {
+        val m = listOf(FileMatch("src/a.kt", false, "@src/a.kt"))
+        val q1 = TermInput.AtQuery(0, 3, "sr")
+        val q2 = TermInput.AtQuery(0, 4, "src")
+        org.junit.Assert.assertEquals(m, TermInput.atMatchesFor(q1, q1, m))
+        org.junit.Assert.assertTrue("防抖期间旧词的结果不可用", TermInput.atMatchesFor(q2, q1, m).isEmpty())
+        org.junit.Assert.assertTrue(TermInput.atMatchesFor(null, q1, m).isEmpty())
+    }
+
+    @org.junit.Test
+    fun autocompleteMaxVisibleBelowFiveIsHonoured() {
+        org.junit.Assert.assertEquals(3, TermInput.visibleCount(3))
+        org.junit.Assert.assertEquals(1, TermInput.visibleCount(0))
+        org.junit.Assert.assertEquals(8, TermInput.visibleCount(8))
+    }
+
+    @org.junit.Test
+    fun panelsOutsideCatalogRouteToPanelHost() {
+        val ids = io.github.zr987459.pigo.contract.actions.PiActionCatalog.all.map { it.id }.toSet()
+        org.junit.Assert.assertTrue(TermInput.routesToPanel("provider.form:anthropic", ids))
+        org.junit.Assert.assertTrue(TermInput.routesToPanel("oauth:github-copilot", ids))
+        org.junit.Assert.assertFalse(TermInput.routesToPanel("session.tree", ids))
+    }
+
+    @org.junit.Test
+    fun formJsonIsAJsonObject() {
+        org.junit.Assert.assertEquals("""{"key":"sk-1","baseUrl":"http://x"}""", TermInput.formJson(linkedMapOf("key" to "sk-1", "baseUrl" to "http://x")))
+    }
+
+    @org.junit.Test
+    fun oauthPanelOffersRetryOnlyWhenFailed() {
+        val failed = io.github.zr987459.pigo.contract.session.OverlayModel.Text("oauth:x", "登录 x", "登录失败：超时\n可点「重试」重新登录")
+        val ok = io.github.zr987459.pigo.contract.session.OverlayModel.Text("oauth:x", "登录 x", "正在开始登录…")
+        org.junit.Assert.assertEquals(listOf("refresh", "retry"), TermInput.oauthCaps(failed).map { it.second })
+        org.junit.Assert.assertEquals(listOf("refresh"), TermInput.oauthCaps(ok).map { it.second })
+        org.junit.Assert.assertTrue(TermInput.oauthCaps(io.github.zr987459.pigo.contract.session.OverlayModel.Text("about", "关于", "登录失败")).isEmpty())
+    }
+}

@@ -180,6 +180,7 @@ private fun TermScreen(
     val surfaceExt by host.extras.extensionSurface.collectAsState()
     val usage by host.extras.usageState.collectAsState()
     val catalog = host.actions.all
+    val catalogIds = remember(catalog) { catalog.map { it.id }.toSet() }
     val bashRunningExt by env.bashRunning.collectAsState()
     var localBashJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     val bashActive = bashRunningExt || localBashJob?.isActive == true
@@ -215,14 +216,24 @@ private fun TermScreen(
      * 面板事件（键帽点击）交给面板宿主 [TermEnv.onPanelEvent] 分发，结果在这里落地一次：
      * 面板 → 同 id 替换栈顶、否则压栈；提示 → toast。未接线时给出提示，不当作动作 id 执行。
      */
-    fun panelEvent(overlayId: String, key: String, value: String?) {
+    fun panelEvent(overlayId: String, key: String, value: String?, closeOnToast: Boolean = false) {
         val dispatch = env.onPanelEvent
         if (dispatch == null) { toast = "面板操作未接线：$overlayId/$key"; return }
         scope.launch {
             when (val r = dispatch(overlayId, key, value)) {
                 is io.github.zr987459.pigo.contract.actions.ActionResult.Overlay ->
-                    if (host.overlay.top?.id == r.model.id) host.overlay.replaceTop(r.model) else host.overlay.push(r.model)
-                is io.github.zr987459.pigo.contract.actions.ActionResult.Toast -> toast = r.text
+                    if (host.overlay.top?.id == r.model.id) host.overlay.replaceTop(r.model)
+                    // 同一面板流程里的下一步（如确认后回到服务商表单）：已在栈里就回到它，不重复压栈
+                    else if (host.overlay.items.value.any { it.id == r.model.id }) {
+                        while (host.overlay.top != null && host.overlay.top?.id != r.model.id) host.overlay.pop()
+                        host.overlay.replaceTop(r.model)
+                    } else host.overlay.push(r.model)
+                is io.github.zr987459.pigo.contract.actions.ActionResult.Toast -> {
+                    toast = r.text
+                    // 提交成功后关表单；「测试」等提示不关，已填的值不丢
+                    if (closeOnToast && host.overlay.top?.id == overlayId) host.overlay.pop()
+                }
+                io.github.zr987459.pigo.contract.actions.ActionResult.Done -> if (host.overlay.top?.id == overlayId) host.overlay.pop()
                 else -> Unit
             }
         }
@@ -241,14 +252,29 @@ private fun TermScreen(
 
     // ---- @ 文件模糊搜索（pi-tui CombinedAutocompleteProvider 的 @ 前缀补全，§3.3；候选源由装配层注入） ----
     val atQuery = remember(draft.text, draft.safeSelectionStart) { TermInput.atQuery(draft.text, draft.safeSelectionStart) }
-    var atMatches by remember { mutableStateOf(emptyList<FileMatch>()) }
+    // 结果与产生它的查询词绑在一起（审查第 2 轮 Nit 1）：防抖期间旧词的结果不可用
+    var atResult by remember { mutableStateOf<Pair<TermInput.AtQuery?, List<FileMatch>>>(null to emptyList()) }
     LaunchedEffect(atQuery, env.fileSearch) {
         val q = atQuery
         val fs = env.fileSearch
-        if (q == null || fs == null) { atMatches = emptyList(); return@LaunchedEffect }
+        if (q == null || fs == null) { atResult = null to emptyList(); return@LaunchedEffect }
         delay(100)
-        atMatches = runCatching { fs(q.query) }.getOrDefault(emptyList())
+        atResult = q to runCatching { fs(q.query) }.getOrDefault(emptyList())
     }
+    val atMatches = TermInput.atMatchesFor(atQuery, atResult.first, atResult.second)
+    /** 正在防抖 / 搜索中：有 @ 查询词、有候选源，但结果还不是这个词的。 */
+    val atPending = atQuery != null && env.fileSearch != null && atResult.first != atQuery
+    /** Enter / Tab 碰上防抖中的 @ 查询：等这个词的结果；有候选就插入第一个，没有就执行 [orElse]（Enter = 发送，Tab = 不动）。 */
+    fun pickAtWhenReady(orElse: () -> Unit) {
+        val fs = env.fileSearch ?: return orElse()
+        val q = TermInput.atQuery(host.draft.value.text, host.draft.value.safeSelectionStart) ?: return orElse()
+        scope.launch {
+            val m = runCatching { fs(q.query) }.getOrDefault(emptyList())
+            val still = TermInput.atQuery(host.draft.value.text, host.draft.value.safeSelectionStart)
+            if (still == q && m.isNotEmpty()) pickAt(m.first()) else if (still == q) orElse()
+        }
+    }
+
     fun pickAt(m: FileMatch) {
         val d = host.draft.value
         val q = TermInput.atQuery(d.text, d.safeSelectionStart) ?: return
@@ -315,6 +341,7 @@ private fun TermScreen(
             TermInput.KEY_TAB -> {
                 val atPick = atMatches.firstOrNull()
                 if (atPick != null) pickAt(atPick)
+                else if (atPending) pickAtWhenReady {}
                 else TermInput.slashQuery(host.draft.value.text)?.let { q ->
                     TermInput.slashCandidates(q, catalog, commands).firstOrNull()?.let { setDraftText("/${it.name} ") }
                 }
@@ -365,8 +392,9 @@ private fun TermScreen(
                 when {
                     "app.interrupt" in ids -> { onEsc(); true }
                     // overlay 打开时 Enter 提交 / 确认（Nit 7）
-                    "tui.input.submit" in ids && top != null -> overlayEnter(host, top, scope) { id, a -> run(id, a) }
+                    "tui.input.submit" in ids && top != null -> overlayEnter(host, top, scope, { id, a -> run(id, a) }, catalogIds, ::panelEvent)
                     "tui.input.submit" in ids && atMatches.isNotEmpty() -> { pickAt(atMatches.first()); true }
+                    "tui.input.submit" in ids && atPending -> { pickAtWhenReady { submit() }; true }
                     "tui.input.submit" in ids -> { submit(); true }
                     // 编辑器单行时 ↑ / ↓ 翻历史（Nit 2，pi 的 tui.editor.cursorUp 在首行时翻历史）
                     (chord == "up" || chord == "down") && top == null && !host.draft.value.text.contains('\n') &&
@@ -502,7 +530,7 @@ private fun TermScreen(
                 overlays.lastOrNull()?.let { top ->
                     TermOverlay(host, top, cols, fontSp, tokens, catalog, onRun = { id, a -> run(id, a) }, onPanelEvent = ::panelEvent)
                 }
-                if (atMatches.isNotEmpty() && overlays.isEmpty()) AtCompletion(atMatches.take(maxVisible.coerceAtLeast(5)), cols, fontSp, tokens, ::pickAt)
+                if (atMatches.isNotEmpty() && overlays.isEmpty()) AtCompletion(atMatches.take(TermInput.visibleCount(maxVisible)), cols, fontSp, tokens, ::pickAt)
                 TermInput.slashQuery(draft.text)?.let { q ->
                     val cands = TermInput.slashCandidates(q, catalog, commands).take(maxVisible)
                     if (cands.isNotEmpty() && overlays.isEmpty()) Completion(cands, cols, fontSp, tokens, catalog) { c ->
