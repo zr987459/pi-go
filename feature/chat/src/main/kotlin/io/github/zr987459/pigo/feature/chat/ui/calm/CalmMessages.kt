@@ -6,6 +6,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -90,9 +91,25 @@ internal fun CalmMessages(
         }
     }
     var follow by remember { mutableStateOf(host.scrollAnchor.value?.followBottom ?: true) }
+    // 是否贴底跟随只由「用户拖动」和「一次滚动结束时停在哪」决定。
+    // 原来是「滚动进行中就 follow = atBottom」：程序自己滚到底（scrollToItem）的那一帧 layoutInfo 还没更新，
+    // atBottom 会读成 false，于是贴底被意外关掉。之后流式输出在上方长高，就会把刚出现的结果块挤出视口。
+    var dragging by remember { mutableStateOf(false) }
     LaunchedEffect(list) {
-        snapshotFlow { list.isScrollInProgress to atBottom }.distinctUntilChanged().collect { (scrolling, bottom) ->
-            if (scrolling) follow = bottom
+        list.interactionSource.interactions.collect {
+            when (it) {
+                is DragInteraction.Start -> dragging = true
+                is DragInteraction.Stop, is DragInteraction.Cancel -> dragging = false
+                else -> Unit
+            }
+        }
+    }
+    LaunchedEffect(list) {
+        var wasScrolling = false
+        snapshotFlow { Triple(list.isScrollInProgress, atBottom, dragging) }.distinctUntilChanged().collect { (scrolling, bottom, drag) ->
+            if (drag) follow = bottom // 手指拖动中：跟手
+            else if (wasScrolling && !scrolling) follow = bottom // 惯性、无障碍或程序滚动停下：停在底部才贴底
+            wasScrolling = scrolling
         }
     }
     // 贴底跟随：新内容（含流式增长）到来时滚到底。

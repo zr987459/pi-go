@@ -18,4 +18,7 @@ UI 形态缺少入口或结果标记：[help.powershell（Explain）, help.env�
   UiCoverageTest 按目录顺序逐个点；它们排在 `transcript.jump`（VIEW_LOCAL_ACTIONS，jumpTick++ → CalmMessages `follow = false` 并滚到上一条提示）之后。
   之后追加的「说明」本地块落在视口外，LazyColumn 不组合 → `local:explain:<id>` 找不到。这是真实 UX 缺陷：跳到上方后再执行说明类动作，用户看不到结果。
 - [x] 修复（越界最小改动，feature/chat/src/main/**/ui/calm/CalmMessages.kt，属 r3/calm）：本地结果块条数增加时恢复贴底并滚到新块；初值取进入时条数，切形态回来不强制滚动（§5.3）。测试未改。
-- [ ] 等 CI（含模拟器 job）全绿 → 更新 PR #20 描述 → 状态写「完成，PR #20」。
+- [x] 09:19 CI@9f6bc22（含 413cee8）：powershell、easterEgg 已过，仍剩 `help.env` 失败（偶发，时序相关）。
+  第二个根因：CalmMessages 原来写的是「滚动进行中就 follow = atBottom」。程序 scrollToItem 到底的那一帧 layoutInfo 还没更新，atBottom 读成 false，贴底被关掉；之后流式内容在上方长高，就把新出现的结果块挤出视口。
+  修法：follow 只在两种情况下改变：用户拖动中跟手（DragInteraction），或一次滚动结束时停在底部才贴底。程序滚到底不会再误关贴底。
+- [ ] 等新 SHA 的 CI（含模拟器 job）全绿 → 补 PR #20 描述 → 状态写「完成，PR #20」。
