@@ -42,7 +42,7 @@ interface SessionChatPort {
     /**
      * 停止生成（Esc / 停止键）：先收起阻塞对话框、等在途发送，再 clear_queue → abort。撤回的排队消息进**共享草稿**
      * （草稿为空时放进输入框，否则进 [DraftState.recalled]，随草稿持久化），两种形态都看得到（审查第 2 轮 I2）。
-     * 返回停止结果（撤回的快照）。
+     * 返回停止结果（撤回的快照）。**失败时端口自己发一条 [notices]**（如「停止失败：…」），调用方不再重复提示。
      */
     suspend fun stop(): Outcome<QueueSnapshot>
 

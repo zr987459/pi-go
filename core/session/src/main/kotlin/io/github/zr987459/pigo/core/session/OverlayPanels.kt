@@ -50,6 +50,8 @@ object OverlayPanels {
         val replace: OverlayModel? = null,
         /** 按实例（引用相等）移除的面板：耗时操作开始时那一个实例，期间重新打开的同 id 面板不受影响（审查第 1 轮 N1）。 */
         val closeInstances: List<OverlayModel> = emptyList(),
+        /** (面板 id, 打开序号)：只在该面板仍是那一次打开时关闭（[SessionHostImpl.panelOpenSeq]），期间就地替换不影响。 */
+        val closeOpened: List<Pair<String, Long>> = emptyList(),
     )
 
     /**

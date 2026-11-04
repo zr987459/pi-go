@@ -181,8 +181,10 @@ class SessionHostImpl(
             is ActionResult.Overlay -> { modelPanelIds += r.model.id; show(r.model) }
             ActionResult.Done -> overlay.remove(sourceId)
             is ActionResult.LocalBlock -> addLocalBlock(sourceId, r.title, r.text)
-            // 提示不关面板：失败时已填的值不丢。终端形态提交前已弹栈的表单按提交值压回（审查第 1 轮 N2；密钥字段不回填）。
-            is ActionResult.Toast -> if (key == "submit" && source is OverlayModel.Form && overlay.items.value.none { it.id == sourceId }) {
+            // 提示不关面板：失败时已填的值不丢。终端形态提交前已弹栈的表单**只在失败时**按提交值压回（审查第 1 轮 N2；
+            // 密钥字段不回填）；保存成功（「已保存…」）不再弹回一个 Key 已清空的表单（PR #23 第 2 轮 Nit 1）。
+            is ActionResult.Toast -> if (key == "submit" && source is OverlayModel.Form && isFailureToast(r.text) &&
+                overlay.items.value.none { it.id == sourceId }) {
                 val secret = source.fields.filter { it.secret }.map { it.key }.toSet()
                 val submitted = OverlayPanels.parseForm(value, OverlayPanels.fieldKeys(source)) - secret
                 show(source.copy(values = source.values + submitted))
@@ -197,8 +199,10 @@ class SessionHostImpl(
         val res = impl.onPanel(panelId, args, panel ?: form)
         val closeIds = res.close.toSet()
         val closeRefs = res.closeInstances
-        if (closeIds.isNotEmpty() || closeRefs.isNotEmpty()) {
-            overlay.update { list -> list.filterNot { m -> m.id in closeIds || closeRefs.any { it === m } } }
+        // 按打开序号关闭：期间就地替换过（筛选 / 折叠 / 时间）仍是同一次打开 → 关；关掉又重新打开过 → 不关（PR #23 第 2 轮 Nit 2）。
+        val closeOpened = res.closeOpened.filter { (id, seq) -> panelOpenSeq(id) == seq }.map { it.first }.toSet()
+        if (closeIds.isNotEmpty() || closeRefs.isNotEmpty() || closeOpened.isNotEmpty()) {
+            overlay.update { list -> list.filterNot { m -> m.id in closeIds || m.id in closeOpened || closeRefs.any { it === m } } }
         }
         res.replace?.let { m -> replaceById(m) }
         when (val r = res.result) {
@@ -213,6 +217,13 @@ class SessionHostImpl(
         return res.result
     }
 
+    /** 面板 id → 最近一次「新打开」（压栈时栈里没有同 id）的序号；就地替换（筛选、折叠）不变。 */
+    private val openSeq = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val openCounter = java.util.concurrent.atomic.AtomicLong()
+
+    /** [id] 面板当前这一次打开的序号；不在栈里为 null。耗时操作开始时记下，结束时只关「还是那一次打开」的面板。 */
+    fun panelOpenSeq(id: String): Long? = if (overlay.items.value.any { it.id == id }) openSeq[id] else null
+
     /** 扩展阻塞对话框与 editor-text-offer：等用户应答，任何面板替换 / 回退都不能把它们弹掉或压到下面（审查第 1 轮 I2）。 */
     private fun isPinned(m: OverlayModel) = m is OverlayModel.ExtDialog || m.id == EDITOR_OFFER_ID
 
@@ -223,6 +234,7 @@ class SessionHostImpl(
      * - 扩展对话框 / editor-text-offer 始终保留并留在最上面，不被移除、不被应答。
      */
     private fun show(m: OverlayModel) {
+        if (overlay.items.value.none { it.id == m.id }) openSeq[m.id] = openCounter.incrementAndGet()
         overlay.update { list -> placed(list, m) }
         if (m.id in modelPanelIds) {
             lastModelPanel[m.id] = m
@@ -306,6 +318,14 @@ class SessionHostImpl(
     }
 
     companion object {
+        /**
+         * ModelPanels 的结果没有成功标记，按提示文字区分（RealModelPanels：失败为「…失败：」「请填写…」「✗ …」「未知…」「没有…」「先…」，
+         * 成功为「已保存…」「已切换…」「已登录」等）。
+         */
+        internal fun isFailureToast(text: String): Boolean =
+            text.contains("失败") || text.startsWith("请填写") || text.startsWith("✗") || text.startsWith("未知") ||
+                text.startsWith("没有") || text.startsWith("先") || text.startsWith("无效")
+
         const val EDITOR_OFFER_ID = "overlay:editor-text-offer"
         /** 结果面板来自 ModelPanels 的动作。 */
         val MODEL_PANEL_ACTIONS = setOf("model.select", "model.scoped", "auth.login", "auth.logout", "provider.custom")
