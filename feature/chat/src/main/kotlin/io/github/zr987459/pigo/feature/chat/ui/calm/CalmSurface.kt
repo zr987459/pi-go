@@ -29,6 +29,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -143,8 +147,14 @@ private fun CalmSurfaceBody(
 
     LaunchedEffect(view.toast) { if (view.toast != null) { delay(2500); view.toast = null } }
 
-    Box(modifier.fillMaxSize().background(c.background).testTag("calm:surface")) {
+    // 顶栏下沿（相对本形态的位置，px）：面板 / 扩展对话框的遮罩从这里往下画，顶栏的 ⇄ 在面板打开时仍可点
+    // （硬性要求 ②「一键即切」；面板、扩展对话框在两种形态共用，切过去照样在）。
+    var surfaceY by remember { mutableFloatStateOf(0f) }
+    var topBarBottom by remember { mutableFloatStateOf(0f) }
+    val density = LocalDensity.current
+    Box(modifier.fillMaxSize().background(c.background).testTag("calm:surface").onGloballyPositioned { surfaceY = it.positionInRoot().y }) {
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
+            Box(Modifier.onGloballyPositioned { topBarBottom = it.positionInRoot().y + it.size.height }) {
             CalmTopBar(
                 title = chat.sessionName,
                 subtitle = subtitleOf(chat.running, chat.statusLine, chat.retry?.let { "重试 ${it.attempt}/${it.maxAttempts}" }, ephemeral),
@@ -154,6 +164,7 @@ private fun CalmSurfaceBody(
                 onToggleForm = toggleForm,
                 onAction = run,
             )
+            }
             if (engineStatus is EngineStatus.Crashed) {
                 val s = engineStatus as EngineStatus.Crashed
                 Text(
@@ -232,10 +243,12 @@ private fun CalmSurfaceBody(
                     }
                 }
             }
-            CalmSheet(
-                host = host, model = top, onAction = run, panel = panel,
-                onDismiss = { dismissTop(top) },
-            )
+            Box(Modifier.fillMaxSize().padding(top = with(density) { (topBarBottom - surfaceY).coerceAtLeast(0f).toDp() })) {
+                CalmSheet(
+                    host = host, model = top, onAction = run, panel = panel,
+                    onDismiss = { dismissTop(top) },
+                )
+            }
         }
 
         view.toast?.let { t ->
