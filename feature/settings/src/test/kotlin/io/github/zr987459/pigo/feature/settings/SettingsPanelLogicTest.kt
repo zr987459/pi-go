@@ -70,6 +70,13 @@ class SettingsPanelLogicTest {
         assertNull(SettingsPanelLogic.dismissEvent(OverlayModel.Form("provider.form:deepseek", "DeepSeek")))
     }
 
+    /** PR #19 定向复核 Nit 3：确认框（删除 / 清除 / 退出登录）点「关闭」= 取消，发 cancel 让面板方清理已填 Key 与待定状态。 */
+    @Test fun dismissingModelConfirmSendsCancel() {
+        for (id in listOf("confirm.remove:my", "confirm.clear:deepseek", "confirm.logout:deepseek")) {
+            assertEquals(id, "cancel", SettingsPanelLogic.dismissEvent(OverlayModel.Confirm(id, "确认", "确定？", "确定", dangerous = true)))
+        }
+    }
+
     @Test fun oauthPollingAndUrl() {
         val start = OverlayModel.Text("oauth:anthropic", "登录", "正在开始登录…")
         val url = OverlayModel.Text("oauth:anthropic", "登录", "在浏览器中打开：\nhttps://example.com/oauth/authorize?provider=anthropic\n在浏览器里完成授权")

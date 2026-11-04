@@ -317,22 +317,32 @@ class RealModelPanels(
     private suspend fun dispatch(overlayId: String, key: String, value: String?): ActionResult = when {
         overlayId == ID_MODEL -> onModelEvent(key, value)
         overlayId == ID_PROVIDERS && key == CAP_SELECT ->
-            value?.takeIf { it.isNotBlank() }?.let { onProvidersEvent(it, null) } ?: ActionResult.Toast("先选中一个服务商")
+            value?.takeIf { it.isNotBlank() }?.let { onProvidersEvent(it, null) } ?: fail("先选中一个服务商")
         overlayId == ID_PROVIDERS -> onProvidersEvent(key, value)
         overlayId == ID_LOGOUT && key.startsWith("provider:") -> ActionResult.Overlay(clearConfirm(key.removePrefix("provider:"), CONFIRM_LOGOUT))
-        overlayId.startsWith(CONFIRM_REMOVE) -> if (key == "confirm") removeCustom(overlayId.removePrefix(CONFIRM_REMOVE)) else ActionResult.Done
+        // 确认框的「关闭 / 取消」等同取消整个表单：清掉已填未存的 Key、草稿和该服务商的待选模型（PR #19 定向复核 Nit 3），
+        // 并回到清理后的表单（设置页关闭时不接这个结果；UI / 终端形态用它刷新栈里的表单，不再显示「已填写」）。
+        overlayId.startsWith(CONFIRM_REMOVE) -> if (key == "confirm") removeCustom(overlayId.removePrefix(CONFIRM_REMOVE)) else {
+            val id = overlayId.removePrefix(CONFIRM_REMOVE)
+            cancelForm(id, draftKey = id)
+            ActionResult.Overlay(customProviderForm(id))
+        }
         overlayId.startsWith(CONFIRM_CLEAR) -> if (key == "confirm") {
             val p = overlayId.removePrefix(CONFIRM_CLEAR)
-            when (val r = logout(p)) { is ActionResult.Toast -> if (r.text.startsWith("已退出")) ActionResult.Overlay(providerForm(p)) else r; else -> r }
-        } else ActionResult.Done
+            when (val r = logout(p)) { is ActionResult.Toast -> if (!r.failed) ActionResult.Overlay(providerForm(p)) else r; else -> r }
+        } else {
+            val p = overlayId.removePrefix(CONFIRM_CLEAR)
+            cancelForm(p, draftKey = null)
+            ActionResult.Overlay(providerForm(p))
+        }
         overlayId.startsWith(CONFIRM_LOGOUT) -> if (key == "confirm") {
-            when (val r = logout(overlayId.removePrefix(CONFIRM_LOGOUT))) { is ActionResult.Toast -> if (r.text.startsWith("已退出")) ActionResult.Overlay(logoutPicker()) else r; else -> r }
+            when (val r = logout(overlayId.removePrefix(CONFIRM_LOGOUT))) { is ActionResult.Toast -> if (!r.failed) ActionResult.Overlay(logoutPicker()) else r; else -> r }
         } else ActionResult.Done
         overlayId.startsWith("provider.form:") -> onProviderFormEvent(overlayId.removePrefix("provider.form:"), key, value)
         overlayId.startsWith("oauth:") -> onOAuthEvent(overlayId.removePrefix("oauth:"), key, value)
         overlayId == ID_CUSTOM || overlayId.startsWith("$ID_CUSTOM:") ->
             onCustomEvent(overlayId.removePrefix(ID_CUSTOM).removePrefix(":").ifEmpty { null }, key, value)
-        else -> ActionResult.Toast("未知面板操作：$overlayId/$key")
+        else -> fail("未知面板操作：$overlayId/$key")
     }
 
     private suspend fun onModelEvent(key: String, value: String?): ActionResult = when {
@@ -340,21 +350,21 @@ class RealModelPanels(
         key == "query" -> ActionResult.Overlay(modelPicker(modelTab, value.orEmpty()))
         key == CAP_REFRESH -> when (val r = catalog.refresh()) {
             is Outcome.Ok -> ActionResult.Overlay(modelPicker(modelTab))
-            is Outcome.Err -> ActionResult.Toast("刷新失败：${r.message}")
+            is Outcome.Err -> fail("刷新失败：${r.message}")
         }
         key == CAP_PROVIDERS -> ActionResult.Overlay(providerList())
-        key == CAP_SELECT -> selectedRef(value)?.let { selectModel(it) } ?: ActionResult.Toast("先选中一个模型")
-        key == CAP_DEFAULT -> (selectedRef(value) ?: currentRef())?.let { setDefault(it) } ?: ActionResult.Toast("先选中一个模型")
-        key == CAP_STAR -> selectedRef(value)?.let { toggleScoped(it.toString()) } ?: ActionResult.Toast("先选中一个模型")
-        key.startsWith("model:") -> ModelRef.parse(key.removePrefix("model:"))?.let { selectModel(it) } ?: ActionResult.Toast("无效模型")
+        key == CAP_SELECT -> selectedRef(value)?.let { selectModel(it) } ?: fail("先选中一个模型")
+        key == CAP_DEFAULT -> (selectedRef(value) ?: currentRef())?.let { setDefault(it) } ?: fail("先选中一个模型")
+        key == CAP_STAR -> selectedRef(value)?.let { toggleScoped(it.toString()) } ?: fail("先选中一个模型")
+        key.startsWith("model:") -> ModelRef.parse(key.removePrefix("model:"))?.let { selectModel(it) } ?: fail("无效模型")
         key.startsWith("star:") -> toggleScoped(key.removePrefix("star:"))
-        key.startsWith("default:") -> ModelRef.parse(key.removePrefix("default:"))?.let { setDefault(it) } ?: ActionResult.Toast("无效模型")
-        else -> ActionResult.Toast("未知操作：$key")
+        key.startsWith("default:") -> ModelRef.parse(key.removePrefix("default:"))?.let { setDefault(it) } ?: fail("无效模型")
+        else -> fail("未知操作：$key")
     }
 
     /** 选模型：已配置 → `set_model`（生成中也发，提示「下一轮生效」）；未配置 → 记下待选，打开该服务商表单。 */
     suspend fun selectModel(ref: ModelRef): ActionResult {
-        val entry = catalog.find(ref) ?: return ActionResult.Toast("目录里没有 $ref")
+        val entry = catalog.find(ref) ?: return fail("目录里没有 $ref")
         if (entry.availability != ModelAvailability.READY) {
             _pending.value = ref
             return ActionResult.Overlay(providerForm(ref.provider))
@@ -371,7 +381,7 @@ class RealModelPanels(
                 val name = entry.model.name ?: entry.model.id
                 ActionResult.Toast(if (generating) "已切换到 $name，$NEXT_TURN" else "已切换到 $name")
             }
-            is Outcome.Err -> ActionResult.Toast("切换失败：${r.message}")
+            is Outcome.Err -> fail("切换失败：${r.message}")
         }
     }
 
@@ -397,7 +407,7 @@ class RealModelPanels(
                 ActionResult.Overlay(oauthFlow(id))
             } else ActionResult.Overlay(providerForm(id))
         }
-        else -> ActionResult.Toast("未知操作：$key")
+        else -> fail("未知操作：$key")
     }
 
     private suspend fun onProviderFormEvent(providerId: String, key: String, value: String?): ActionResult = when (key) {
@@ -410,11 +420,11 @@ class RealModelPanels(
             val rawKey = values[KEY_FIELD]?.takeIf { it.isNotBlank() }
             val extra = p?.let { ProviderFormLogic.fieldsToSave(it.fields, values, shown = emptySet()) } ?: emptyMap()
             when (val r = auth.setApiKey(providerId, rawKey, extra)) {
-                is Outcome.Err -> ActionResult.Toast("保存失败：${r.message}")
+                is Outcome.Err -> fail("保存失败：${r.message}")
                 is Outcome.Ok -> credentialsReady(providerId) ?: ActionResult.Toast("已保存")
             }
         }
-        else -> ActionResult.Toast("未知操作：$key")
+        else -> fail("未知操作：$key")
     }
 
     private suspend fun onOAuthEvent(providerId: String, key: String, value: String?): ActionResult = when {
@@ -442,7 +452,7 @@ class RealModelPanels(
             val ok = _oauth.value[providerId] is OAuthStep.Done
             if (ok) (pendingSelectedToast(providerId) ?: ActionResult.Done) else ActionResult.Overlay(oauthPanel(providerId))
         }
-        else -> ActionResult.Toast("未知操作：$key")
+        else -> fail("未知操作：$key")
     }
 
     /**
@@ -476,12 +486,13 @@ class RealModelPanels(
             keyDropped += draftKey
         }
         if (typedKey != null) keyDropped -= draftKey
-        val dropped = draftKey in keyDropped
-        return withKeyNotice(dropped, onCustomEventInner(providerId, key, values, draftKey))
+        val r = onCustomEventInner(providerId, key, values, draftKey)
+        // 处理**之后**再判断：保存成功 / 取消 / 删除时 forgetDraft 已清掉丢弃标记，成功提示不再要求重新填 Key（PR #19 定向复核 Nit 1）。
+        return withKeyNotice(draftKey in keyDropped, r)
     }
 
     private fun withKeyNotice(dropped: Boolean, r: ActionResult): ActionResult =
-        if (dropped && r is ActionResult.Toast) ActionResult.Toast(r.text + "\n" + KEY_DROPPED) else r
+        if (dropped && r is ActionResult.Toast) r.copy(text = r.text + "\n" + KEY_DROPPED) else r
 
     private suspend fun onCustomEventInner(providerId: String?, key: String, values: Map<String, String>, draftKey: String): ActionResult {
         if (values.isNotEmpty()) customDrafts[draftKey] = values - KEY_FIELD
@@ -496,25 +507,25 @@ class RealModelPanels(
                     customDrafts[draftKey] = (values - KEY_FIELD) + ("models" to r.value.joinToString(",") { it.id })
                     ActionResult.Overlay(customProviderForm(providerId))
                 }
-                is Outcome.Err -> ActionResult.Toast("发现模型失败：${r.message}")
+                is Outcome.Err -> fail("发现模型失败：${r.message}")
             }
             // 测试连接**不落盘**：表单与已存配置不同（新建、改了地址 / 协议、填了新 Key）时用表单值临时探测；
             // 与已存一致时才用已存配置做完整测试。只有「保存」才写 models.json / Key。
             "test" -> {
-                if (id.isEmpty()) return ActionResult.Toast("请填写名称")
+                if (id.isEmpty()) return fail("请填写名称")
                 val saved = providerId?.let { pid -> custom.list().firstOrNull { it.id == pid } }
                 val sameAsSaved = saved != null && rawKey == null && saved.baseUrl == baseUrl && saved.api == api
                 if (sameAsSaved) {
                     val m = splitList(values["models"]).firstOrNull() ?: saved!!.models.firstOrNull()?.id
-                        ?: return ActionResult.Toast("没有模型可测试")
+                        ?: return fail("没有模型可测试")
                     probeText(custom.test(ModelRef(id, m)))
                 } else when (val r = custom.discover(baseUrl, api, rawKey, providerId)) {
                     is Outcome.Ok -> ActionResult.Toast("✓ 连接成功，接口返回 ${r.value.size} 个模型（未保存）")
-                    is Outcome.Err -> ActionResult.Toast("✗ 测试失败（未保存）：${r.message}")
+                    is Outcome.Err -> fail("✗ 测试失败（未保存）：${r.message}")
                 }
             }
             "submit" -> {
-                if (id.isEmpty()) return ActionResult.Toast("请填写名称")
+                if (id.isEmpty()) return fail("请填写名称")
                 val existing = providerId?.let { pid -> custom.list().firstOrNull { it.id == pid } }
                 val cp = CustomProvider(
                     id = id,
@@ -526,7 +537,7 @@ class RealModelPanels(
                     }.toMap(),
                 )
                 when (val r = custom.upsert(cp, rawKey)) {
-                    is Outcome.Err -> ActionResult.Toast("保存失败：${r.message}")
+                    is Outcome.Err -> fail("保存失败：${r.message}")
                     is Outcome.Ok -> {
                         forgetDraft(draftKey)
                         onCredentialsChanged(id)
@@ -536,10 +547,10 @@ class RealModelPanels(
             }
             "cancel" -> { forgetDraft(draftKey); ActionResult.Done }
             // 删除连同 Key 一起删：先确认（审查第 3 轮 Nit 1）。
-            "remove" -> if (id.isEmpty()) ActionResult.Toast("请填写名称") else ActionResult.Overlay(
+            "remove" -> if (id.isEmpty()) fail("请填写名称") else ActionResult.Overlay(
                 OverlayModel.Confirm("$CONFIRM_REMOVE$id", "删除自定义服务商", "删除 $id 及其 API Key？此操作不能撤销。", "删除", dangerous = true),
             )
-            else -> ActionResult.Toast("未知操作：$key")
+            else -> fail("未知操作：$key")
         }
     }
 
@@ -549,7 +560,13 @@ class RealModelPanels(
     /** 确认后删除：成功即关闭面板（返回 Done），草稿与 Key 一并丢弃，表单不会再被「保存」重建。 */
     private suspend fun removeCustom(id: String): ActionResult = when (val r = custom.remove(id)) {
         is Outcome.Ok -> { forgetDraft(id); onCredentialsChanged(id); ActionResult.Done }
-        is Outcome.Err -> ActionResult.Toast("删除失败：${r.message}")
+        is Outcome.Err -> fail("删除失败：${r.message}")
+    }
+
+    /** 关闭 / 取消表单：丢弃 [draftKey] 的草稿与已填 Key；该服务商的待选模型也不再自动选回。 */
+    private fun cancelForm(providerId: String, draftKey: String?) {
+        draftKey?.let(::forgetDraft)
+        if (_pending.value?.provider == providerId) _pending.value = null
     }
 
     private fun forgetDraft(draftKey: String) {
@@ -561,18 +578,18 @@ class RealModelPanels(
     }
 
     private suspend fun testProvider(providerId: String): ActionResult {
-        val m = catalog.entries(providerId).okOr(emptyList()).firstOrNull() ?: return ActionResult.Toast("$providerId 没有可测试的模型")
+        val m = catalog.entries(providerId).okOr(emptyList()).firstOrNull() ?: return fail("$providerId 没有可测试的模型")
         return probeText(custom.test(m.model.ref))
     }
 
     private fun probeText(r: Outcome<io.github.zr987459.pigo.contract.ProbeOutcome>): ActionResult = when (r) {
-        is Outcome.Ok -> ActionResult.Toast((if (r.value.ok) "✓ " else "✗ ") + r.value.message + " · ${r.value.elapsedMs}ms")
-        is Outcome.Err -> ActionResult.Toast("测试失败：${r.message}")
+        is Outcome.Ok -> ActionResult.Toast((if (r.value.ok) "✓ " else "✗ ") + r.value.message + " · ${r.value.elapsedMs}ms", failed = !r.value.ok)
+        is Outcome.Err -> fail("测试失败：${r.message}")
     }
 
     private suspend fun logout(providerId: String): ActionResult = when (val r = auth.clear(providerId)) {
         is Outcome.Ok -> { onCredentialsChanged(providerId); ActionResult.Toast("已退出 $providerId") }
-        is Outcome.Err -> ActionResult.Toast("退出失败：${r.message}")
+        is Outcome.Err -> fail("退出失败：${r.message}")
     }
 
     // ---------------------------------------------------------------- settings.json
@@ -586,12 +603,12 @@ class RealModelPanels(
         (piSettings?.values?.value?.get("enabledModels") as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull } ?: emptyList()
 
     private suspend fun toggleScoped(ref: String): ActionResult {
-        val s = piSettings ?: return ActionResult.Toast("常用模型暂不可编辑")
+        val s = piSettings ?: return fail("常用模型暂不可编辑")
         val cur = scopedRefs()
         val next = if (ref in cur) cur - ref else cur + ref
         return when (val r = s.set("enabledModels", JsonArray(next.map(::JsonPrimitive)))) {
             is Outcome.Ok -> ActionResult.Overlay(modelPicker(modelTab, modelQuery))
-            is Outcome.Err -> ActionResult.Toast("保存失败：${r.message}")
+            is Outcome.Err -> fail("保存失败：${r.message}")
         }
     }
 
@@ -600,7 +617,7 @@ class RealModelPanels(
      * 任何一步失败就把已写的键恢复原值，保证不会出现「provider 已改、model 还是旧的」的半写状态。
      */
     private suspend fun setDefault(ref: ModelRef): ActionResult {
-        val s = piSettings ?: return ActionResult.Toast("默认模型暂不可编辑")
+        val s = piSettings ?: return fail("默认模型暂不可编辑")
         val thinking = engine.chat.value.thinkingLevel
         val writes = linkedMapOf<String, JsonElement?>(
             "defaultProvider" to JsonPrimitive(ref.provider),
@@ -609,7 +626,7 @@ class RealModelPanels(
         ).filterValues { it != null }
         return when (val r = setAllOrRollback(s, writes)) {
             is Outcome.Ok -> ActionResult.Toast("已设为默认：$ref" + (thinking?.let { " · $it" } ?: ""))
-            is Outcome.Err -> ActionResult.Toast("保存失败：${r.message}")
+            is Outcome.Err -> fail("保存失败：${r.message}")
         }
     }
 
@@ -707,6 +724,9 @@ class RealModelPanels(
             }
             return Outcome.Ok(Unit)
         }
+
+        /** 失败提示：带结构化标志 [ActionResult.Toast.failed]，SessionHost 据此决定是否把表单压回（PR #24 审查 Nit 1）。 */
+        private fun fail(text: String) = ActionResult.Toast(text, failed = true)
 
         private fun <T> Outcome<T>.okOr(default: T): T = (this as? Outcome.Ok)?.value ?: default
     }

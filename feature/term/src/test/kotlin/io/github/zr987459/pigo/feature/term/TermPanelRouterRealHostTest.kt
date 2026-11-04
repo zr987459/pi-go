@@ -80,7 +80,7 @@ class TermPanelRouterRealHostTest {
                 overlayId == "auth.login" && key == "provider:github-copilot" -> ActionResult.Overlay(oauthFlow("github-copilot"))
                 overlayId == "auth.login" && key.startsWith("provider:") -> ActionResult.Overlay(providerForm(key.removePrefix("provider:")))
                 overlayId.startsWith("provider.form:") && key == "submit" ->
-                    if (value?.contains("sk-good") == true) ActionResult.Done else ActionResult.Toast("保存失败：Key 无效")
+                    if (value?.contains("sk-good") == true) ActionResult.Done else ActionResult.Toast("保存失败：Key 无效", failed = true)
                 overlayId.startsWith("oauth:") && key == "done" -> ActionResult.Toast("已登录，已自动选回模型")
                 overlayId.startsWith("oauth:") -> ActionResult.Done
                 else -> ActionResult.Toast("未知：$overlayId/$key")

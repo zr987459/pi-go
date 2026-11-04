@@ -58,10 +58,14 @@ object SettingsPanelLogic {
     /** 只有 [ActionResult.Done] 关闭面板；Toast 只显示消息、面板保持打开（不丢刚输入的内容）。 */
     fun closesPanel(result: ActionResult): Boolean = result == ActionResult.Done
 
-    /** 关闭面板时要发给面板的事件：OAuth 取消登录、自定义服务商丢弃草稿与 Key；其他面板不发。 */
+    /**
+     * 关闭面板时要发给面板的事件：OAuth 取消登录、自定义服务商丢弃草稿与 Key；ModelPanels 的确认框（删除 / 清除 / 退出登录）
+     * 关闭 = 取消，由面板方清理它所属表单的已填 Key 与待定状态（PR #19 定向复核 Nit 3）；其他面板不发。
+     */
     fun dismissEvent(model: OverlayModel): String? = when {
         model.id.startsWith("oauth:") && !isOAuthFinal(model) -> "cancel"
         model.id.startsWith("provider.custom") -> "cancel"
+        model is OverlayModel.Confirm && model.id.startsWith("confirm.") -> "cancel"
         else -> null
     }
 
