@@ -72,6 +72,9 @@ object EngineBindings {
             wakeLock = AndroidWakeLock(app),
             runMarker = SharedPrefsRunMarker(app),
             foreground = ServiceForegroundPort(app),
+            // r3/core（DESIGN-r3 §5.6、§7.2）：随包桥接扩展从 assets 安装；pi 进程 PID 经 ProcessTree 找。
+            bridgeSource = io.github.zr987459.pigo.core.engine.AndroidBridgeSource(app),
+            enginePidResolver = { root -> io.github.zr987459.pigo.core.runtime.process.ProcessTree().enginePid(root, android.os.Process.myUid()) },
         )
         EngineService.boundEngine = engine
         // N1：App 在后台时，一轮完成 / 出错 / 需要回答发一条 pigo-tasks 通知（停止不发）。
