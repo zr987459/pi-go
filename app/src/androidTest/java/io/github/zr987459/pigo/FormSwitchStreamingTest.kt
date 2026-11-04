@@ -1,25 +1,24 @@
 package io.github.zr987459.pigo
 
-import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.Density
-import androidx.compose.ui.test.onRoot
-import androidx.compose.ui.test.printToString
-import java.util.concurrent.atomic.AtomicInteger
-import android.view.WindowManager
-import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.printToString
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.test.assertIsDisplayed
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import java.util.concurrent.atomic.AtomicInteger
 import androidx.test.platform.app.InstrumentationRegistry
 import io.github.zr987459.pigo.di.BindingContext
 import io.github.zr987459.pigo.di.Mode
@@ -73,11 +72,16 @@ import org.junit.runner.RunWith
  *
  * 全部切换都经真实 UI：UI 形态顶栏的 ⇄ 与终端键条固定在最右的 ⇄UI（同一个测试标签 form:toggle）。
  * 段号、全文、搜索词尽量从屏幕语义节点读。
+ *
+ * 宿主是 [MainWindowTestActivity]（仅 debug）：窗口配置与 [MainActivity] 相同——清单 adjustResize、onCreate 里 enableEdgeToEdge。
+ * 之前用 ui-test-manifest 的 ComponentActivity（默认 adjustPan）：UI 形态输入框进入时请求焦点、软键盘弹出，窗口被整体上推
+ * （CI 9e592d4 / 4f1b69c 实测根节点顶边 -128 / -152），顶栏 ⇄ 被推出屏幕；运行中再调 enableEdgeToEdge + setSoftInputMode(adjustResize) 仍被上推（4f1b69c）。
+ * 换成与 App 同配置的宿主，测到的才是 App 的真实窗口行为（键盘由 imePadding 让位、窗口不平移）。
  */
 @RunWith(AndroidJUnit4::class)
 class FormSwitchStreamingTest {
     @get:Rule
-    val rule = createAndroidComposeRule<ComponentActivity>()
+    val rule = createAndroidComposeRule<MainWindowTestActivity>()
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -246,52 +250,6 @@ class FormSwitchStreamingTest {
     }
 
     /**
-     * PR #26 第 2 轮 Nit 3：320dp / 360dp 窄屏下 ⇄UI（终端键条）与 ⇄（UI 顶栏）都在屏幕内、可点。
-     *
-     * CI 模拟器本身就是 320×640dp（avd 默认 skin 320x640、160dpi）。360dp 比屏幕宽，旧写法 `requiredWidth(360.dp)`
-     * 会把内容居中、左右各裁掉 20dp，测的不是「360dp 宽的屏幕」。这里按需缩小密度（同 `DeviceConfigurationOverride.ForcedSize`
-     * 的做法），让内容按 [w] 宽排版并整体落在窗口内；窄于窗口时靠左排版。
-     *
-     * 窗口配置与 MainActivity 一致（edge-to-edge + adjustResize，键盘由 imePadding 让位）。测试默认的 ComponentActivity
-     * 是 adjustPan：终端编辑器拿到焦点、软键盘弹出后整个窗口上推（CI 9e592d4 实测 root 顶边 -128px），UI 形态顶栏的 ⇄
-     * 被推出屏幕——这是测试宿主与 App 窗口配置不同造成的，App 里不会发生。
-     */
-    @Test
-    fun narrowScreensKeepToggleVisibleAndClickable() {
-        val ctx = BindingContext(InstrumentationRegistry.getInstrumentation().targetContext.applicationContext, scope)
-        val host = SessionBindings.host(Mode.FAKE, ctx, UiForm.TERM) { error("A 档只用 FAKE") } as FakeSessionHost
-        currentForm = { host.form.value }
-        rule.runOnUiThread {
-            rule.activity.enableEdgeToEdge()
-            rule.activity.window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
-        }
-        var screenW by mutableStateOf(320.dp)
-        rule.setContent {
-            BoxWithConstraints {
-                val d = LocalDensity.current
-                val scale = if (maxWidth < screenW) maxWidth / screenW else 1f
-                CompositionLocalProvider(LocalDensity provides Density(d.density * scale, d.fontScale)) {
-                    Box(Modifier.width(screenW).fillMaxHeight()) {
-                        ChatPage(
-                            host = host, panelEvents = null, panelSource = null, fileSearch = null,
-                            cwd = "/root/pi-cwd", home = "/root", onOpenSettings = {}, onAttachImage = {}, onBackground = {},
-                        )
-                    }
-                }
-            }
-        }
-        for (w in listOf(320.dp, 360.dp)) {
-            rule.runOnIdle { screenW = w; host.form.value = UiForm.TERM }
-            rule.waitForIdle()
-            for (want in listOf(UiForm.CALM, UiForm.TERM)) {
-                assertToggleOnScreen(w)
-                clickToggle()
-                assertEquals("${w} 宽度下点 form:toggle", want, host.form.value)
-            }
-        }
-    }
-
-    /**
      * PR #26 增量审查 I1、Nit 1：UI 形态里有面板 / 扩展对话框时，顶栏只有 ⇄ 可点。
      * - 扩展对话框等待应答：点 ⌘、⋯、☰、标题都不改变栈顶（仍是 ext:<id>）、不发命令、不出菜单 / 会话列表；
      * - ⇄ 照常切换，切过去、切回来对话框都还在栈顶；
@@ -348,12 +306,60 @@ class FormSwitchStreamingTest {
         assertEquals("model.select", host.overlay.top?.id)
     }
 
-    /** ⇄ 节点显示着、整体落在窗口（根节点）内、尺寸非零；失败时带上形态、边界与语义树，便于在 CI 日志里定位。 */
-    private fun assertToggleOnScreen(w: Dp) {
+    /**
+     * PR #26 第 2 轮 Nit 3：320dp / 360dp 窄屏下 ⇄UI（终端键条）与 ⇄（UI 顶栏）都在屏幕内、可点。
+     *
+     * CI 模拟器本身就是 320×640dp（avd 默认 skin 320x640、160dpi）。360dp 比屏幕宽：按需缩小密度（同
+     * `DeviceConfigurationOverride.ForcedSize` 的做法），让内容按该宽度排版并整体落在窗口内；窄于窗口时靠左排版。
+     * 窗口是 [MainWindowTestActivity]（与 MainActivity 同配置），见类注释。
+     */
+    @Test
+    fun narrowScreensKeepToggleVisibleAndClickable() {
+        val ctx = BindingContext(InstrumentationRegistry.getInstrumentation().targetContext.applicationContext, scope)
+        val host = SessionBindings.host(Mode.FAKE, ctx, UiForm.TERM) { error("A 档只用 FAKE") } as FakeSessionHost
+        var screenW by mutableStateOf(320.dp)
+        rule.setContent {
+            BoxWithConstraints {
+                val d = LocalDensity.current
+                val scale = if (maxWidth < screenW) maxWidth / screenW else 1f
+                CompositionLocalProvider(LocalDensity provides Density(d.density * scale, d.fontScale)) {
+                    Box(Modifier.width(screenW).fillMaxHeight()) {
+                        ChatPage(
+                            host = host, panelEvents = null, panelSource = null, fileSearch = null,
+                            cwd = "/root/pi-cwd", home = "/root", onOpenSettings = {}, onAttachImage = {}, onBackground = {},
+                        )
+                    }
+                }
+            }
+        }
+        for (w in listOf(320.dp, 360.dp)) {
+            rule.runOnIdle { screenW = w; host.form.value = UiForm.TERM }
+            rule.waitForIdle()
+            for (want in listOf(UiForm.CALM, UiForm.TERM)) {
+                assertToggleOnScreen(w, host)
+                rule.onNodeWithTag("form:toggle", useUnmergedTree = true).performClick()
+                rule.waitForIdle()
+                assertEquals("${w} 宽度下点 form:toggle", want, host.form.value)
+            }
+        }
+    }
+
+    /** ⇄ 显示着、整体落在窗口（根节点）内、尺寸非零；失败时带上形态、边界、窗口软键盘配置与语义树，便于在 CI 日志里定位。 */
+    private fun assertToggleOnScreen(w: Dp, host: FakeSessionHost) {
         val node = rule.onNodeWithTag("form:toggle", useUnmergedTree = true)
         val b = node.fetchSemanticsNode().boundsInWindow
         val root = rule.onRoot().fetchSemanticsNode().boundsInWindow
-        fun diag() = "w=$w form=${currentForm()} toggle=$b root=$root\n" + rule.onRoot(useUnmergedTree = true).printToString(maxDepth = 6)
+        fun diag(): String {
+            var win = ""
+            rule.runOnUiThread {
+                val decor = rule.activity.window.decorView
+                val ins = ViewCompat.getRootWindowInsets(decor)
+                win = "softInputMode=0x${Integer.toHexString(rule.activity.window.attributes.softInputMode)} " +
+                    "ime=${ins?.isVisible(WindowInsetsCompat.Type.ime())}/${ins?.getInsets(WindowInsetsCompat.Type.ime())} " +
+                    "decorScrollY=${decor.scrollY}"
+            }
+            return "w=$w form=${host.form.value} toggle=$b root=$root $win\n" + rule.onRoot(useUnmergedTree = true).printToString(maxDepth = 6)
+        }
         try {
             node.assertIsDisplayed()
         } catch (e: AssertionError) {
@@ -363,8 +369,6 @@ class FormSwitchStreamingTest {
             b.width > 0f && b.height > 0f && b.left >= root.left - 0.5f && b.right <= root.right + 0.5f &&
                 b.top >= root.top - 0.5f && b.bottom <= root.bottom + 0.5f)
     }
-
-    private var currentForm: () -> UiForm? = { null }
 
     /** 轮询引擎侧条件（不碰 Compose、不等界面空闲）。 */
     private fun pollUntil(what: String, timeoutMs: Long = 20_000, cond: () -> Boolean) {
