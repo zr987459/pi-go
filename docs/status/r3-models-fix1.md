@@ -29,3 +29,4 @@
 ## 接手（第 2 位修复工作者）
 - 2026-11-04 08:32 CST：**已开始**，基于 3fccae9。
 - 计划：① 看 3fccae9 CI，红了先修；② 普通 merge main（含 r3/core PR#16）；③ Important 2 按上面方案做（SettingsModel 纯函数 + SettingsScreen 逐行渲染 + JVM 界面模型测试 + androidTest 编译）；④ 更新 PR #19 描述；⑤ CI 绿后写完成。
+- 08:55 3fccae9 CI 进行中；main 已在分支内（compare 显示 main 无新提交）。Important 2 代码已写（SettingsModel.kt、ModelsSettingsPage.kt、SettingsScreen 新增 panels/piSettings 参数、SettingsOnlyModelsTest 改为对界面模型断言、androidTest SettingsScreenUiTest），正在本地编译。下一步：编译通过 → 推送 → CI → PR 描述 → 完成。

@@ -125,6 +125,10 @@ data class CustomEndpointPrefill(val baseUrl: String, val modelIds: List<String>
  * @param discoverModels 自定义端点「获取模型列表」：(id, baseUrl, rawKey) → 模型 id 列表；rawKey 为空表示用已保存的 Key。
  * @param testConnection 「测试连接」；为 null 时不显示按钮。
  * @param onBack 左上角返回圆钮；为 null 时不显示。
+ * @param panels 模型配置面板（`feature/models` 的 RealModelPanels，r3/app 装配时传入）。**有它时整页按 DESIGN-r3 §6.1
+ *   渲染**（[ModelsSettingsPage]：默认模型、常用模型、已连接、全部服务商（拼音搜索）、自定义、高级），其余参数不再使用；
+ *   为 null 时保留旧版列表，只为 r3/app 装配前不坏。
+ * @param piSettings pi 的 `settings.json`（默认模型、高级项的当前值）；可为 null。
  * @param onModelClick 「选择默认模型」入口；为 null 时用本页的默认模型对话框（现有行为）。
  *   留给 features 工作流接完整的模型选择器。
  */
@@ -143,7 +147,13 @@ fun SettingsScreen(
     testConnection: (suspend (ConnectionTarget) -> ConnectionCheck)? = null,
     onModelClick: (() -> Unit)? = null,
     onBack: (() -> Unit)? = null,
+    panels: io.github.zr987459.pigo.contract.models.ModelPanels? = null,
+    piSettings: io.github.zr987459.pigo.contract.settings.PiSettings? = null,
 ) {
+    if (panels != null) {
+        ModelsSettingsPage(panels, piSettings, modifier, onBack)
+        return
+    }
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     var configured by remember { mutableStateOf<List<String>>(emptyList()) }
