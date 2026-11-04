@@ -45,7 +45,7 @@ class RealModelPanelsTest {
     private val panels = RealModelPanels(
         catalog, auth, custom, engine, scope, settings,
         isGenerating = { generating },
-        onCredentialsChanged = { credentialEvents += it },
+        onCredentialsChanged = { credentialEvents += it; null },
     )
 
     @After fun tearDown() = scope.cancel()

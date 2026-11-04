@@ -59,11 +59,18 @@ interface PiBridge {
      */
     suspend fun reloadResources(): Outcome<Unit>
 
+    /**
+     * `/pigo:models-refresh`（r4/model-config 热加载）：让运行中的 pi 重读 models.json 与 auth.json、重算可用模型。
+     * 扩展命令在 pi 里立即执行，生成中也一样，不打断当前回复、不动排队消息。桥接不可用时返回 Err（调用方退回重启）。
+     */
+    suspend fun refreshModels(): Outcome<Unit> = Outcome.Err(io.github.zr987459.pigo.contract.ErrCode.UNKNOWN, MODELS_REFRESH_UNAVAILABLE)
+
     /** `/pigo:switch`：经扩展切换会话文件（等价于 RPC `switch_session`，但走扩展的会话替换路径）。 */
     suspend fun switchSessionViaBridge(sessionPath: String): Outcome<Unit>
 
     companion object {
         const val RELOAD_NEEDS_RESTART = "需要重启引擎才能重新加载（桥接扩展不可用）"
+        const val MODELS_REFRESH_UNAVAILABLE = "桥接扩展不可用，无法热加载模型配置"
 
         /** 桥接注册的命令名前缀；`get_commands` 结果里要过滤掉。 */
         const val COMMAND_PREFIX = "pigo:"

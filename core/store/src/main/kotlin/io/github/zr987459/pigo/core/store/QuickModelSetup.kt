@@ -8,20 +8,29 @@ import io.github.zr987459.pigo.contract.sanitizeApiKey
  *
  * 流程参照 agegr/pi-web@025e24e 的模型配置（MIT）：服务商 + Key、上游 `/models` 自动拉列表
  * （`lib/model-discovery.ts`、`app/api/models-config/discover/route.ts`）、一条「Reply with OK only.」测试连接
- * （`app/api/models-config/test/route.ts`）。不同点：Key 仍只进 Keystore + 进程环境（DESIGN.md §3.10），
- * 所以「保存」之后**重启 pi 进程**（保留当前会话）让新 Key 进环境、重读 models.json，再对当前会话发 `set_model`。
+ * （`app/api/models-config/test/route.ts`）。保存时 Key 存 Keystore，并写进 pi 自己读的 auth.json（[PiProviderConfigStore.syncAuthReferences]），
+ * 然后**热加载**（pigo-bridge `/pigo:models-refresh`，不重启 pi、不打断生成），再对当前会话发 `set_model`。
  *
  * @param catalogModels pi 内置服务商的模型 id（来自 pi 的模型目录）
- * @param restartEngine 重启 pi（续接当前会话）；新进程启动时由 [PiProviderConfigStore.env] 注入 Key
+ * @param applyConfig 让运行中的 pi 用上新配置：装配方先热加载；做不到才退回重启（生成中等本轮结束再重启，等待时调
+ *   `onWaiting` 让页面提示，PR #29 审查 I1）。返回 Ok(true) = 热加载，Ok(false) = 重启
  * @param setModel 当前会话切到该模型（RPC `set_model`）
+ * @param discover / [probe] 拉模型列表 / 测试连接；最后一个参数是 M9 代理（与 pi 进程的 HTTPS_PROXY 一致，审查 N4）
  */
 class QuickModelSetup(
     private val config: PiProviderConfigStore,
     private val catalogModels: suspend (provider: String) -> List<String>,
-    private val restartEngine: suspend (reason: String) -> Outcome<Unit>,
+    private val applyConfig: suspend (provider: String, reason: String, onWaiting: () -> Unit) -> Outcome<Boolean>,
     private val setModel: suspend (provider: String, modelId: String) -> Outcome<*>,
-    private val discover: suspend (baseUrl: String, key: String) -> Outcome<List<String>> = ModelDiscovery::discover,
-    private val probe: suspend (baseUrl: String, key: String, model: String) -> ProbeResult = { b, k, m -> ProviderTester.testOpenAiCompatible(b, k, m) },
+    private val discover: suspend (baseUrl: String, key: String, proxy: java.net.Proxy) -> Outcome<List<String>> = { b, k, p ->
+        when (val r = ModelDiscovery.discoverDetailed(b, k, null, p)) {
+            is Outcome.Ok -> Outcome.Ok(r.value.map { it.id })
+            is Outcome.Err -> r
+        }
+    },
+    private val probe: suspend (baseUrl: String, key: String, model: String, proxy: java.net.Proxy) -> ProbeResult = { b, k, m, p ->
+        ProviderTester.testOpenAiCompatible(b, k, m, proxy = p)
+    },
 ) {
     /**
      * 一个常用服务商。[builtIn] 为 true 时用 pi 内置服务商（[id] 是 pi 的 provider id，Key 经它的环境变量注入）；
@@ -31,6 +40,8 @@ class QuickModelSetup(
 
     companion object {
         const val CUSTOM = "custom-openai"
+        const val PROGRESS_APPLYING = "已保存，正在让 pi 读取新配置…"
+        const val PROGRESS_WAITING = "已保存。这项配置要重启 pi 才生效：等这一轮回复结束后自动重启并切换模型（不会打断当前回复）…"
 
         /** 国内小白常用的几家（其余服务商、账号登录、代理在「高级」里）。 */
         val PRESETS: List<Preset> = listOf(
@@ -45,18 +56,32 @@ class QuickModelSetup(
 
         fun preset(id: String): Preset? = PRESETS.firstOrNull { it.id == id }
 
-        /** 自定义端点的 provider id：取接口地址的主机名（`api.example.com` → `example`）。 */
-        fun customIdFor(baseUrl: String): String {
-            val host = runCatching { java.net.URI(baseUrl.trim()).host }.getOrNull().orEmpty().lowercase()
-            val parts = host.split('.').filter { it.isNotEmpty() && it != "www" && it != "api" }
-            val core = when {
-                parts.size >= 2 -> parts[parts.size - 2]
-                parts.size == 1 -> parts[0]
-                else -> "custom"
+        /**
+         * 自定义端点的 provider id：域名取主机名的主体（`api.example.com` → `example`），IP 用完整 IP（`192.168.1.5` → `192-168-1-5`）。
+         * [existing] 是 models.json 里已有的自定义端点（id → baseUrl）：同 id 但地址不同就加 `-2`、`-3`…，不覆盖别人的端点（审查 N3）；
+         * 地址相同则复用原 id（等于更新它）。
+         */
+        fun customIdFor(baseUrl: String, existing: Map<String, String> = emptyMap()): String {
+            val url = baseUrl.trim().trimEnd('/')
+            val host = runCatching { java.net.URI(url).host }.getOrNull().orEmpty().lowercase().removePrefix("[").removeSuffix("]")
+            val isIp = host.matches(Regex("""\d{1,3}(\.\d{1,3}){3}""")) || ':' in host
+            val core = if (isIp) host.replace('.', '-').replace(':', '-') else {
+                val parts = host.split('.').filter { it.isNotEmpty() && it != "www" && it != "api" }
+                when {
+                    parts.size >= 2 -> parts[parts.size - 2]
+                    parts.size == 1 -> parts[0]
+                    else -> "custom"
+                }
             }
-            val id = ProviderPresets.normalizeCustomId(core).ifEmpty { "custom" }
-            val taken = id == ProviderPresets.OTHER_CUSTOM || ProviderSpecs.get(id) != null || ProviderPresets.BUILT_IN.any { it.provider == id }
-            return if (taken) "$id-api" else id
+            val norm = ProviderPresets.normalizeCustomId(core).ifEmpty { "custom" }
+            val reserved = norm == ProviderPresets.OTHER_CUSTOM || ProviderSpecs.get(norm) != null || ProviderPresets.BUILT_IN.any { it.provider == norm } ||
+                PRESETS.any { !it.builtIn && it.id == norm && it.baseUrl.trimEnd('/') != url }
+            val base = if (reserved) "$norm-api" else norm
+            fun sameEndpoint(id: String) = existing[id]?.trim()?.trimEnd('/').equals(url, ignoreCase = true)
+            if (existing[base] == null || sameEndpoint(base)) return base
+            var n = 2
+            while (existing["$base-$n"] != null && !sameEndpoint("$base-$n")) n++
+            return "$base-$n"
         }
     }
 
@@ -70,16 +95,22 @@ class QuickModelSetup(
         if (r.ok) return Check(Verdict.OK, "连接成功，可以用 $model 聊天了（${r.elapsedMs} ms）")
         val code = r.httpStatus
         val text = r.message.lowercase()
-        val modelMissing = code == 404 || (code == 400 && ("model" in text && ("not exist" in text || "not found" in text || "does not exist" in text || "invalid model" in text || "不存在" in text)))
+        val modelMissing = (code == 400 && ("model" in text && ("not exist" in text || "not found" in text || "does not exist" in text || "invalid model" in text || "不存在" in text)))
         return when {
             code == null && ("地址" in r.message && "开头" in r.message) -> Check(Verdict.BAD_URL, "接口地址不对：要以 https:// 开头")
             code == null -> Check(Verdict.NETWORK, "网络不通：${r.message}")
             code == 401 || code == 403 -> Check(Verdict.BAD_KEY, "Key 不对或没有权限，请重新复制 Key（HTTP $code）")
+            // 404 多半是接口地址少了 /v1 之类的路径，也可能是模型名不对：不能只叫人换模型（审查 N2）。
+            code == 404 -> Check(Verdict.BAD_URL, "接口地址或模型不对：检查地址是否完整（常见是少了 /v1），或换一个模型（HTTP 404）")
             modelMissing -> Check(Verdict.MODEL_NOT_FOUND, "模型不存在：$model，请换一个模型（HTTP $code）")
             code == 402 || code == 429 -> Check(Verdict.QUOTA, "额度不足或请求太频繁（HTTP $code）")
             else -> Check(Verdict.OTHER, "连接失败：${r.message}")
         }
     }
+
+    /** 宿主侧请求走「高级」里设的代理（与 pi 进程一致）；没设或地址解析不了就直连。 */
+    private suspend fun proxyFor(url: String): java.net.Proxy =
+        runCatching { HostProxy.select(config.proxy(), url) }.getOrDefault(java.net.Proxy.NO_PROXY)
 
     private fun baseUrlFor(presetId: String, customBaseUrl: String?): String =
         if (presetId == CUSTOM) customBaseUrl.orEmpty().trim().trimEnd('/') else preset(presetId)?.baseUrl.orEmpty()
@@ -93,20 +124,21 @@ class QuickModelSetup(
         }
         val key = sanitizeApiKey(rawKey)
         if (key.isEmpty()) return Outcome.Err(io.github.zr987459.pigo.contract.ErrCode.PROVIDER, "先填写 API Key")
-        return when (val r = discover(baseUrlFor(presetId, customBaseUrl), key)) {
+        val url = baseUrlFor(presetId, customBaseUrl)
+        return when (val r = discover(url, key, proxyFor(url))) {
             is Outcome.Ok -> Outcome.Ok(r.value)
             is Outcome.Err -> Outcome.Err(r.code, r.message)
         }
     }
 
-    /** 测试连接：对选中的模型发一条最短请求（宿主侧直连，不经容器）。 */
+    /** 测试连接：对选中的模型发一条最短请求（宿主侧，走与 pi 相同的代理设置）。 */
     suspend fun test(presetId: String, rawKey: String, model: String, customBaseUrl: String? = null): Check {
         val key = sanitizeApiKey(rawKey)
         if (key.isEmpty()) return Check(Verdict.BAD_KEY, "先填写 API Key")
         if (model.isBlank()) return Check(Verdict.MODEL_NOT_FOUND, "先选一个模型")
         val url = baseUrlFor(presetId, customBaseUrl)
         if (!url.startsWith("https://") && !url.startsWith("http://")) return Check(Verdict.BAD_URL, "接口地址不对：要以 https:// 开头")
-        return classify(probe(url, key, model.trim()), model.trim())
+        return classify(probe(url, key, model.trim(), proxyFor(url)), model.trim())
     }
 
     /** 保存的结果：最终用的 provider/model，以及给用户的一句话。 */
@@ -117,8 +149,16 @@ class QuickModelSetup(
      * （新 Key 进环境、重读配置，续接当前会话）→ 当前会话 `set_model`。任何一步失败返回中文原因。
      *
      * @param models 列表里拉到的模型（OpenAI 兼容端点一起写进 models.json，之后 `/model` 里也能切）；必含 [model]
+     * @param onProgress 进度文字（例如「正在等当前回复结束」），给页面显示
      */
-    suspend fun save(presetId: String, rawKey: String, model: String, models: List<String> = emptyList(), customBaseUrl: String? = null): Outcome<Saved> {
+    suspend fun save(
+        presetId: String,
+        rawKey: String,
+        model: String,
+        models: List<String> = emptyList(),
+        customBaseUrl: String? = null,
+        onProgress: (String) -> Unit = {},
+    ): Outcome<Saved> {
         val p = preset(presetId) ?: return err("不认识的服务商")
         val m = model.trim()
         if (m.isEmpty()) return err("先选一个模型")
@@ -130,7 +170,7 @@ class QuickModelSetup(
                 p.id
             } else {
                 val url = baseUrlFor(presetId, customBaseUrl)
-                val id = if (presetId == CUSTOM) customIdFor(url) else p.id
+                val id = if (presetId == CUSTOM) customIdFor(url, config.customProviders().mapValues { it.value.baseUrl }) else p.id
                 val all = (listOf(m) + models.map { it.trim() }).filter { it.isNotEmpty() }.distinct().take(200)
                 config.upsertCustomProvider(id, url, PiProviderConfigStore.CustomApi.OPENAI_COMPLETIONS, rawKey, all.map { PiProviderConfigStore.CustomModel(it) })
                 id
@@ -145,9 +185,11 @@ class QuickModelSetup(
         } catch (e: Exception) {
             return err("Key 已保存，但默认模型没写进去：${e.message}")
         }
-        // 根因修复：Key 只在 pi 进程启动时经环境变量注入、models.json 也只在启动时读，所以必须重启 pi 才用得上。
-        when (val r = restartEngine("模型配置已更新")) {
-            is Outcome.Err -> return err("已保存，但 pi 没能重启：${r.message}")
+        // 根因修复：原来 Key 只在 pi 启动时经环境变量注入、models.json 也只在启动时读，保存后运行中的 pi 根本看不到。
+        // 现在 Key 在 auth.json 里，热加载让 pi 重读；只有热加载做不到时才退回重启。
+        onProgress(PROGRESS_APPLYING)
+        when (val r = applyConfig(provider, "模型配置已更新") { onProgress(PROGRESS_WAITING) }) {
+            is Outcome.Err -> return err("已保存，但 pi 没能读到新配置：${r.message}")
             is Outcome.Ok -> Unit
         }
         // 续接的会话里记着旧模型（pi 恢复会话时用会话里的模型，不看默认值），所以再对当前会话发一次 set_model。

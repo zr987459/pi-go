@@ -77,7 +77,13 @@ class AppGraph(context: Context) {
     val liveExtras: EngineExtras? get() = if (extrasReady) extras else null
 
     // 模型目录、服务商与登录、代理与费用显示（W2）
-    val models: ModelsBindings.Models by lazy { ModelsBindings.models(BindingMode.models, ctx, runtime, secrets, engine) }
+    val models: ModelsBindings.Models by lazy {
+        ModelsBindings.models(BindingMode.models, ctx, runtime, secrets, engine) { provider ->
+            // OAuth 登录 / 退出（AuthService）后的重启也走同一个入口：生成中排到本轮结束后，失败给提示。
+            val r = credentialReloader.request(provider)
+            if (r is io.github.zr987459.pigo.di.CredentialReloader.Result.Failed) notices.tryEmit(io.github.zr987459.pigo.di.CredentialReloader.failedText(r.message))
+        }
+    }
 
     // 文件、附件、导出（W3）
     val workspace: WorkspaceBindings.Workspace by lazy { WorkspaceBindings.workspace(BindingMode.workspace, ctx, runtime, engine, extras) }
@@ -102,7 +108,8 @@ class AppGraph(context: Context) {
                 models.catalog, models.auth, models.custom, setModelSignal, appScope, piSettings,
                 // r4 根因修复：Key 只在 pi 启动时经环境变量注入、models.json 只在启动时读；保存 Key / 自定义端点后
                 // 必须重启 pi（续接当前会话）才用得上。原来这里没接，保存后 pi 进程里根本没有这个 Key。
-                onCredentialsChanged = { p -> engine.restart("$p 的凭据已更新"); Unit },
+                // 生成中不立刻重启，排到本轮结束后（PR #29 审查 I1）；排队 / 失败都回提示（N1）。
+                onCredentialsChanged = { p -> io.github.zr987459.pigo.di.CredentialReloader.toToast(credentialReloader.request(p)) },
             ),
         )
     }
@@ -113,8 +120,34 @@ class AppGraph(context: Context) {
         io.github.zr987459.pigo.core.store.QuickModelSetup(
             config = io.github.zr987459.pigo.di.StoreBindings.piConfig(ctx, secrets),
             catalogModels = { p -> (models.catalog.entries(p) as? io.github.zr987459.pigo.contract.Outcome.Ok)?.value?.map { it.model.id }.orEmpty() },
-            restartEngine = { reason -> engine.restart(reason) },
+            applyConfig = { provider, reason, onWaiting -> credentialReloader.apply(provider, reason, onWaiting) },
             setModel = { p, m -> engine.setModel(p, m) },
+        )
+    }
+
+    /** 「保存并使用」在 App 作用域里跑（PR #29 审查 I2）：离开设置页、转屏都不中断，结束时弹全局提示。 */
+    val quickSaver: io.github.zr987459.pigo.feature.settings.QuickSaveRunner by lazy {
+        io.github.zr987459.pigo.di.QuickSetupWiring.runner(quickModelSetup, appScope) { notices.tryEmit(it.message) }
+    }
+
+    /** 全局一句话提示（导航宿主的 Snackbar 显示）：后台完成的重启、保存结果。 */
+    val notices = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 8)
+
+    /**
+     * 凭据变化后让 pi 用上新配置：热加载（pigo-bridge `/pigo:models-refresh`，不重启、不打断生成）；
+     * 做不到时退回重启，生成中等本轮结束再重启（PR #29 审查 I1）。
+     */
+    val credentialReloader: io.github.zr987459.pigo.di.CredentialReloader by lazy {
+        val config = io.github.zr987459.pigo.di.StoreBindings.piConfig(ctx, secrets)
+        io.github.zr987459.pigo.di.CredentialReloader(
+            engine, appScope,
+            hotReload = {
+                runCatching { config.syncAuthReferences() }
+                (engine as? io.github.zr987459.pigo.contract.bridge.PiBridge)?.refreshModels()
+                    ?: io.github.zr987459.pigo.contract.Outcome.Err(io.github.zr987459.pigo.contract.ErrCode.UNKNOWN, "引擎不支持热加载")
+            },
+            canHotReload = { p -> config.hotReloadable(p) },
+            notify = { notices.tryEmit(it) },
         )
     }
 

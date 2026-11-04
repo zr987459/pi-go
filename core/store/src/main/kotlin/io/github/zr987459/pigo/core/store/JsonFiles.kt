@@ -47,6 +47,13 @@ internal object JsonFiles {
         setOwnerOnly(file)
     }
 
+    /** 是否已经是 600（不支持 POSIX 权限的文件系统上视为是）。 */
+    fun isOwnerOnly(f: File): Boolean = try {
+        Files.getPosixFilePermissions(f.toPath()) == setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE)
+    } catch (_: UnsupportedOperationException) {
+        true
+    }
+
     /** chmod 600。 */
     fun setOwnerOnly(f: File) {
         try {

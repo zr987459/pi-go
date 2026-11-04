@@ -29,9 +29,13 @@ object ModelsBindings {
         val savedFields: suspend (String) -> Map<String, String> = { emptyMap() },
     )
 
-    fun models(mode: Mode, ctx: BindingContext, runtime: RuntimeManager, secrets: SecretStore, engine: EngineClient): Models = when (mode) {
+    fun models(
+        mode: Mode, ctx: BindingContext, runtime: RuntimeManager, secrets: SecretStore, engine: EngineClient,
+        /** 凭据变化后让 pi 读到新凭据（装配层的 CredentialReloader；默认直接重启）。 */
+        onCredentialsChanged: suspend (provider: String) -> Unit = { p -> engine.restart(p.ifBlank { "凭据已更新" }) },
+    ): Models = when (mode) {
         Mode.FAKE -> fake()
-        Mode.REAL -> real(ctx, runtime, secrets, engine)
+        Mode.REAL -> real(ctx, runtime, secrets, engine, onCredentialsChanged)
     }
 
     fun fake(): Models {
@@ -39,7 +43,10 @@ object ModelsBindings {
         return Models(FakeModelCatalog(auth), auth, FakeCustomProviderStore(), FakeAppSettingsStore())
     }
 
-    fun real(ctx: BindingContext, runtime: RuntimeManager, secrets: SecretStore, engine: EngineClient): Models {
+    fun real(
+        ctx: BindingContext, runtime: RuntimeManager, secrets: SecretStore, engine: EngineClient,
+        onCredentialsChanged: suspend (provider: String) -> Unit = { p -> engine.restart(p.ifBlank { "凭据已更新" }) },
+    ): Models {
         val g = CatalogGraph(
             ctx.appContext,
             runtime,
@@ -47,7 +54,7 @@ object ModelsBindings {
             StoreBindings.piConfig(ctx, secrets),
             ctx.appScope,
             runtimeModels = { (engine.models() as? Outcome.Ok)?.value },
-            onCredentialsChanged = { reason -> engine.restart(reason.ifBlank { "凭据已更新" }); Unit },
+            onCredentialsChanged = onCredentialsChanged,
         )
         val auth: RealAuthManager = g.auth
         return Models(g.catalog, auth, g.custom, g.settings, savedFields = { id -> auth.savedFields(id) })

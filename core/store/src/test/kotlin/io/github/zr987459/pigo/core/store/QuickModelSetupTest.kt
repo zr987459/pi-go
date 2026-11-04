@@ -25,7 +25,8 @@ import org.junit.Test
 
 /**
  * r4/model-config：极简模型配置写出的文件与 pi 1.5.0 的格式一致（docs/models.md「Configure a compatible endpoint」、
- * docs/settings.md 的 defaultProvider/defaultModel、auth.json 的 api_key 条目），且保存后先重启 pi 再 set_model。
+ * docs/settings.md 的 defaultProvider/defaultModel、auth.json 的 api_key 条目，与 pi 原生 /login 存 Key 的格式相同），
+ * Key 写进 pi 自己读的 auth.json（权限 600，热加载用），不进进程环境；保存后先让 pi 读到新配置（热加载）再 set_model。
  */
 class QuickModelSetupTest {
     private class MemSecrets : SecretStore {
@@ -41,7 +42,7 @@ class QuickModelSetupTest {
     private lateinit var config: PiProviderConfigStore
     private val secrets = MemSecrets()
     private val calls = mutableListOf<String>()
-    private var restartResult: Outcome<Unit> = Outcome.Ok(Unit)
+    private var applyResult: Outcome<Boolean> = Outcome.Ok(true)
     private val key = "sk-test-0123456789abcdef"
     private var server: Tiny? = null
 
@@ -50,7 +51,7 @@ class QuickModelSetupTest {
     ) = QuickModelSetup(
         config,
         catalogModels = { catalog },
-        restartEngine = { r -> calls += "restart:$r"; restartResult },
+        applyConfig = { p, r, _ -> calls += "apply:$p:$r"; applyResult },
         setModel = { p, m -> calls += "set_model:$p/$m"; Outcome.Ok(Unit) },
     )
 
@@ -68,28 +69,62 @@ class QuickModelSetupTest {
     private fun json(f: File): JsonObject = Json.parseToJsonElement(f.readText()).jsonObject
     private fun JsonObject.s(k: String) = (this[k] as? JsonPrimitive)?.content
 
+    private fun assertOwnerOnly(f: File) =
+        assertEquals("$f 权限 600", "rw-------", java.nio.file.attribute.PosixFilePermissions.toString(Files.getPosixFilePermissions(f.toPath())))
+
+    /** auth.json 里 [provider] 的条目：pi 的 api_key 格式（字面 Key）+ pi-go 标记。 */
+    private fun assertAuthEntry(provider: String) {
+        val e = json(paths.authJson)[provider]!!.jsonObject
+        assertEquals("api_key", e.s("type"))
+        assertEquals(key, e.s("key"))
+        assertEquals("true", e.s(PiProviderConfigStore.MANAGED_MARK))
+        assertOwnerOnly(paths.authJson)
+    }
+
+    /** 除 auth.json 外，容器里的文件都不能有 Key；进程环境里也没有（热加载不靠环境变量）。 */
+    private suspend fun assertKeyOnlyInAuthJson() {
+        rootfs.walkTopDown().filter { it.isFile && it != paths.authJson }.forEach { assertFalse("Key 只在 auth.json：$it", it.readText().contains(key)) }
+        assertFalse("不进进程环境", config.env().values.any { it == key })
+    }
+
     // ---------------------------------------------------------------- 写入格式
 
-    @Test fun builtInProviderWritesKeyToKeystoreDefaultToSettingsAndRestartsBeforeSetModel() = runBlocking {
+    @Test fun builtInProviderWritesKeyToAuthJsonDefaultToSettingsAndReloadsBeforeSetModel() = runBlocking {
         val r = setup().save("deepseek", key, "deepseek-chat")
         assertTrue("$r", r is Outcome.Ok)
         val settings = json(paths.settingsJson)
         assertEquals("deepseek", settings.s("defaultProvider"))
         assertEquals("deepseek-chat", settings.s("defaultModel"))
-        assertEquals("Key 只在 Keystore", key, secrets.map[ProviderPresets.builtInAlias("deepseek")])
-        assertEquals("新进程启动时经环境变量注入", key, config.env()["DEEPSEEK_API_KEY"])
+        assertEquals("Keystore 仍是主存", key, secrets.map[ProviderPresets.builtInAlias("deepseek")])
+        assertAuthEntry("deepseek")
         assertFalse("内置服务商不写 models.json", paths.modelsJson.exists())
-        assertEquals("先重启 pi（新 Key 进环境），再对当前会话 set_model", listOf("restart:模型配置已更新", "set_model:deepseek/deepseek-chat"), calls)
-        rootfs.walkTopDown().filter { it.isFile }.forEach { assertFalse("容器文件里不能有 Key：$it", it.readText().contains(key)) }
+        assertEquals("先让 pi 读到新配置，再对当前会话 set_model", listOf("apply:deepseek:模型配置已更新", "set_model:deepseek/deepseek-chat"), calls)
+        assertKeyOnlyInAuthJson()
     }
 
-    @Test fun sharedEnvProviderWritesAuthJsonReferenceNotKey() = runBlocking {
+    @Test fun sharedEnvProviderWritesLiteralKeyToAuthJson() = runBlocking {
+        // 用户自己的 OAuth 条目与手写条目不动
+        paths.authJson.parentFile.mkdirs()
+        paths.authJson.writeText("""{"anthropic":{"type":"oauth","access":"a","refresh":"r","expires":1},"mine":{"type":"api_key","key":"sk-mine"}}""")
         assertTrue(setup(listOf("kimi-k2")).save("moonshotai-cn", key, "kimi-k2") is Outcome.Ok)
-        val entry = json(paths.authJson)["moonshotai-cn"]!!.jsonObject
-        assertEquals("api_key", entry.s("type"))
-        assertEquals("\$PIGO_PK_MOONSHOTAI_CN", entry.s("key"))
-        assertFalse(paths.authJson.readText().contains(key))
-        assertEquals(key, config.env()["PIGO_PK_MOONSHOTAI_CN"])
+        assertAuthEntry("moonshotai-cn")
+        val root = json(paths.authJson)
+        assertEquals("oauth", root["anthropic"]!!.jsonObject.s("type"))
+        assertEquals("sk-mine", root["mine"]!!.jsonObject.s("key"))
+        assertKeyOnlyInAuthJson()
+        // 清除：只删 pi-go 的条目
+        config.clearProvider("moonshotai-cn")
+        assertFalse("moonshotai-cn" in json(paths.authJson))
+        assertTrue("mine" in json(paths.authJson))
+    }
+
+    @Test fun legacyEnvReferenceIsMigratedToLiteralKey() = runBlocking {
+        // 旧版写的 $PIGO_PK_* 引用：下次同步换成字面 Key（升级后不重新填也能热加载）
+        secrets.put(ProviderPresets.builtInAlias("moonshotai-cn"), key)
+        paths.authJson.parentFile.mkdirs()
+        paths.authJson.writeText("""{"moonshotai-cn":{"type":"api_key","key":"${'$'}PIGO_PK_MOONSHOTAI_CN"}}""")
+        config.env()
+        assertAuthEntry("moonshotai-cn")
     }
 
     @Test fun compatiblePresetWritesModelsJsonInPiSchema() = runBlocking {
@@ -103,23 +138,71 @@ class QuickModelSetupTest {
         val p = providers["bailian"]!!.jsonObject
         assertEquals("https://dashscope.aliyuncs.com/compatible-mode/v1", p.s("baseUrl"))
         assertEquals("openai-completions", p.s("api"))
-        assertEquals("apiKey 是 \$NAME 环境变量引用（pi 1.5.0 docs/models.md）", "\$PIGO_KEY_BAILIAN", p.s("apiKey"))
+        // apiKey 留作 pi-go 条目的标记（未注入的 $NAME 引用）；实际 Key 在 auth.json，pi 优先用 auth.json 的凭据
+        // （pi 1.5.0 provider-composer composeApiKeyAuth：有 stored credential 就用它）。
+        assertEquals("\$PIGO_KEY_BAILIAN", p.s("apiKey"))
         assertEquals(listOf("qwen-plus", "qwen-max"), (p["models"] as JsonArray).map { (it as JsonObject).s("id") })
-        assertFalse(paths.modelsJson.readText().contains(key))
-        assertEquals(key, config.env()["PIGO_KEY_BAILIAN"])
+        assertOwnerOnly(paths.modelsJson)
+        assertAuthEntry("bailian")
+        assertKeyOnlyInAuthJson()
         assertEquals("bailian", json(paths.settingsJson).s("defaultProvider"))
-        assertEquals(listOf("restart:模型配置已更新", "set_model:bailian/qwen-plus"), calls)
+        assertEquals(listOf("apply:bailian:模型配置已更新", "set_model:bailian/qwen-plus"), calls)
+        // 删除端点：auth.json 的条目一起删
+        config.removeCustom("bailian")
+        assertFalse("bailian" in json(paths.authJson))
     }
 
     @Test fun customEndpointIdComesFromHost() = runBlocking {
         assertEquals("example", QuickModelSetup.customIdFor("https://api.example.com/v1"))
         assertEquals("siliconflow", QuickModelSetup.customIdFor("https://api.siliconflow.cn/v1"))
         assertEquals("与内置重名时加后缀", "deepseek-api", QuickModelSetup.customIdFor("https://api.deepseek.com"))
+        // 审查 N3：IP 用完整 IP；与已有的不同端点撞 id 时加后缀，同一端点复用原 id
+        assertEquals("192-168-1-5", QuickModelSetup.customIdFor("http://192.168.1.5:11434/v1"))
+        assertEquals("192-168-1-6", QuickModelSetup.customIdFor("http://192.168.1.6:11434/v1"))
+        val existing = mapOf("example" to "https://a.example.com/v1", "example-2" to "https://b.example.net/v1")
+        assertEquals("example-3", QuickModelSetup.customIdFor("https://example.org/v1", existing))
+        assertEquals("example", QuickModelSetup.customIdFor("https://a.example.com/v1/", existing))
+        assertEquals("example-2", QuickModelSetup.customIdFor("https://b.example.net/v1", existing))
         val r = setup().save(QuickModelSetup.CUSTOM, key, "m1", customBaseUrl = "https://api.example.com/v1/")
         assertTrue("$r", r is Outcome.Ok)
         val p = json(paths.modelsJson)["providers"]!!.jsonObject["example"]!!.jsonObject
         assertEquals("https://api.example.com/v1", p.s("baseUrl"))
         assertEquals("\$PIGO_KEY_EXAMPLE", p.s("apiKey"))
+        // 另一个主机名主体相同的端点：不覆盖已存的 example
+        assertTrue(setup().save(QuickModelSetup.CUSTOM, key, "m2", customBaseUrl = "https://example.org/v1") is Outcome.Ok)
+        val providers = json(paths.modelsJson)["providers"]!!.jsonObject
+        assertEquals("https://api.example.com/v1", providers["example"]!!.jsonObject.s("baseUrl"))
+        assertEquals("https://example.org/v1", providers["example-2"]!!.jsonObject.s("baseUrl"))
+        assertEquals("example-2", json(paths.settingsJson).s("defaultProvider"))
+    }
+
+    @Test fun probeAndDiscoveryUseConfiguredProxy() = runBlocking {
+        // 审查 N4：测试连接 / 拉模型列表走「高级」里设的代理，与 pi 进程的 HTTPS_PROXY 一致
+        config.setProxy("http://127.0.0.1:7890")
+        val seen = mutableListOf<java.net.Proxy>()
+        val q = QuickModelSetup(
+            config, catalogModels = { emptyList() }, applyConfig = { _, _, _ -> Outcome.Ok(true) }, setModel = { _, _ -> Outcome.Ok(Unit) },
+            discover = { _, _, p -> seen += p; Outcome.Ok(listOf("m")) },
+            probe = { _, _, _, p -> seen += p; ProbeResult(true, "ok", 200, 1) },
+        )
+        q.models("openrouter-x", key) // 不认识的服务商：不发请求
+        q.models("bailian", key)
+        assertEquals(Verdict.OK, q.test("openrouter", key, "openai/gpt-4o").verdict)
+        assertEquals(2, seen.size)
+        seen.forEach { assertEquals(java.net.Proxy.Type.HTTP, it.type()); assertTrue(it.address().toString().contains("7890")) }
+    }
+
+    @Test fun saveReportsWaitingWhenFallingBackToRestartDuringTurn() = runBlocking {
+        // 热加载做不到、退回重启且正在生成：装配方先报 onWaiting（等本轮结束再重启），保存把它变成给页面的进度文字
+        val progress = mutableListOf<String>()
+        val q = QuickModelSetup(
+            config, catalogModels = { emptyList() },
+            applyConfig = { _, _, onWaiting -> onWaiting(); calls += "restart"; Outcome.Ok(false) },
+            setModel = { p, m -> calls += "set_model:$p/$m"; Outcome.Ok(Unit) },
+        )
+        assertTrue(q.save("deepseek", key, "deepseek-chat", onProgress = { progress += it }) is Outcome.Ok)
+        assertEquals(listOf(QuickModelSetup.PROGRESS_APPLYING, QuickModelSetup.PROGRESS_WAITING), progress)
+        assertEquals(listOf("restart", "set_model:deepseek/deepseek-chat"), calls)
     }
 
     @Test fun validationAndRestartFailureAreReportedInChinese() = runBlocking {
@@ -127,9 +210,9 @@ class QuickModelSetupTest {
         assertEquals("请填写「API Key」", (q.save("deepseek", "", "deepseek-chat") as Outcome.Err).message)
         assertEquals("先选一个模型", (q.save("deepseek", key, " ") as Outcome.Err).message)
         assertTrue((q.save(QuickModelSetup.CUSTOM, key, "m", customBaseUrl = "ftp://x") as Outcome.Err).message.contains("https://"))
-        restartResult = Outcome.Err(ErrCode.ENGINE_START, "运行环境未就绪")
+        applyResult = Outcome.Err(ErrCode.ENGINE_START, "运行环境未就绪")
         val r = q.save("deepseek", key, "deepseek-chat") as Outcome.Err
-        assertTrue(r.message, r.message.contains("pi 没能重启"))
+        assertTrue(r.message, r.message.contains("pi 没能读到新配置"))
         assertFalse("重启失败就不发 set_model", calls.any { it.startsWith("set_model") })
     }
 
@@ -201,7 +284,9 @@ class QuickModelSetupTest {
         assertEquals(Verdict.BAD_KEY, bad.verdict)
         assertTrue(bad.message.startsWith("Key 不对"))
         assertEquals(Verdict.MODEL_NOT_FOUND, q.test(QuickModelSetup.CUSTOM, key, "m-gone", url).verdict)
-        assertEquals(Verdict.MODEL_NOT_FOUND, q.test(QuickModelSetup.CUSTOM, key, "m-404", url).verdict)
+        val notFound = q.test(QuickModelSetup.CUSTOM, key, "m-404", url)
+        assertEquals("404 多半是地址不对（审查 N2）", Verdict.BAD_URL, notFound.verdict)
+        assertTrue(notFound.message, notFound.message.startsWith("接口地址或模型不对"))
         assertEquals(Verdict.QUOTA, q.test(QuickModelSetup.CUSTOM, key, "m-busy", url).verdict)
         val s = server!!
         val port = s.port

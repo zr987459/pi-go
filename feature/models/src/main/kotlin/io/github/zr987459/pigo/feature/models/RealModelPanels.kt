@@ -72,8 +72,11 @@ class RealModelPanels(
     private val piSettings: PiSettings? = null,
     /** 是否正在生成；默认读引擎的 `chat.running`。 */
     private val isGenerating: () -> Boolean = { engine.chat.value.running },
-    /** 凭据变化后（保存 Key、OAuth 完成、退出登录）由装配方决定如何让 pi 读到新凭据。 */
-    private val onCredentialsChanged: suspend (provider: String) -> Unit = {},
+    /**
+     * 凭据变化后（保存 Key、OAuth 完成、退出登录、删除服务商）由装配方决定如何让 pi 读到新凭据。
+     * 返回要告诉用户的话：null = 已生效、不用多说；非失败的提示 = 排到本轮结束后生效；失败 = 没能生效（PR #29 审查 N1）。
+     */
+    private val onCredentialsChanged: suspend (provider: String) -> ActionResult.Toast? = { null },
     /** 毫秒时钟（测试可替换）：OAuth「正在验证…」的超时判断用。 */
     private val clock: () -> Long = System::currentTimeMillis,
 ) : ModelPanels {
@@ -394,13 +397,18 @@ class RealModelPanels(
 
     /** 凭据刚配好：若有待选模型属于该服务商且已可用，自动选回。 */
     private suspend fun credentialsReady(provider: String): ActionResult? {
-        onCredentialsChanged(provider)
+        // 没能立刻生效（排到本轮结束后，或重启失败）：新凭据 pi 还读不到，这时 set_model 必然失败，先把原因告诉用户。
+        onCredentialsChanged(provider)?.let { return withNotice("已保存", it) }
         val p = _pending.value ?: return null
         if (p.provider != provider) return null
         val e = catalog.find(p) ?: return null
         if (e.availability != ModelAvailability.READY) return null
         return applyModel(e)
     }
+
+    /** 「已保存」类提示后接上重启的说明（排到本轮结束后 / 失败）。 */
+    private fun withNotice(base: String, notice: ActionResult.Toast?): ActionResult.Toast =
+        if (notice == null) ActionResult.Toast(base) else ActionResult.Toast("$base。${notice.text}", notice.failed)
 
     private suspend fun onProvidersEvent(key: String, value: String?): ActionResult = when {
         key == "query" -> ActionResult.Overlay(providerList(value.orEmpty()))
@@ -547,8 +555,7 @@ class RealModelPanels(
                     is Outcome.Err -> fail("保存失败：${r.message}")
                     is Outcome.Ok -> {
                         forgetDraft(draftKey)
-                        onCredentialsChanged(id)
-                        ActionResult.Toast("已保存 $id")
+                        withNotice("已保存 $id", onCredentialsChanged(id))
                     }
                 }
             }
@@ -568,7 +575,7 @@ class RealModelPanels(
 
     /** 确认后删除：成功即关闭面板（返回 Done），草稿与 Key 一并丢弃，表单不会再被「保存」重建。 */
     private suspend fun removeCustom(id: String): ActionResult = when (val r = custom.remove(id)) {
-        is Outcome.Ok -> { forgetDraft(id); onCredentialsChanged(id); ActionResult.Done }
+        is Outcome.Ok -> { forgetDraft(id); onCredentialsChanged(id)?.takeIf { it.failed } ?: ActionResult.Done }
         is Outcome.Err -> fail("删除失败：${r.message}")
     }
 
@@ -597,7 +604,7 @@ class RealModelPanels(
     }
 
     private suspend fun logout(providerId: String): ActionResult = when (val r = auth.clear(providerId)) {
-        is Outcome.Ok -> { onCredentialsChanged(providerId); ActionResult.Toast("已退出 $providerId") }
+        is Outcome.Ok -> withNotice("已退出 $providerId", onCredentialsChanged(providerId))
         is Outcome.Err -> fail("退出失败：${r.message}")
     }
 

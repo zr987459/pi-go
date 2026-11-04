@@ -1627,6 +1627,22 @@ class PiEngine(
         }
     }
 
+    /** r4/model-config 热加载：`/pigo:models-refresh`（见 pigo-bridge.ts）。不重启进程，生成中也可以调用。 */
+    override suspend fun refreshModels(): Outcome<Unit> {
+        if (!bridgeReady()) return Outcome.Err(ErrCode.ENGINE_START, PiBridge.MODELS_REFRESH_UNAVAILABLE + "：" + unavailableReason())
+        return bridgeSerial("models-refresh") {
+            val req = bridge.newReq()
+            when (val r = bridgeCall(PigoBridge.modelsRefreshCommand(req), bridge.expectReply("models-refresh", req), config.bridgeReplyTimeoutMs)) {
+                is Outcome.Ok -> (r.value as PigoBridge.Message.Reply).let { m ->
+                    if (!m.ok) return@bridgeSerial Outcome.Err(ErrCode.RPC_REJECTED, m.error ?: "刷新模型配置失败")
+                    m.str("warning")?.let { log.w(TAG, "models-refresh 警告：${it.take(300)}") }
+                    Outcome.Ok(Unit)
+                }
+                is Outcome.Err -> r
+            }
+        }
+    }
+
     override suspend fun switchSessionViaBridge(sessionPath: String): Outcome<Unit> {
         if (sessionPath.isBlank() || sessionPath.any { it == '\n' || it == '\r' }) return Outcome.Err(ErrCode.RPC_REJECTED, "会话路径不合法")
         if (!bridgeReady()) return Outcome.Err(ErrCode.UNKNOWN, unavailableReason())

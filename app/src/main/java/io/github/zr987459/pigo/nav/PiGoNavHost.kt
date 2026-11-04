@@ -114,6 +114,8 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
     fun toast(msg: String) {
         scope.launch { snackbar.showSnackbar(msg) }
     }
+    // 后台完成的事（生成结束后的重启、「保存并使用」的结果）在任何页面都提示。
+    LaunchedEffect(graph) { graph.notices.collect { toast(it) } }
 
     // 运行环境就绪后预先拉起引擎（握手、冷启动回到上次会话 L5），聊天页一打开就有模型与会话信息。
     // 跑在 appScope 里且只做一次：旋转、切换深色模式等 Activity 重建不会取消或重复启动。
@@ -212,25 +214,7 @@ private fun SettingsPage(graph: AppGraph, focus: String?, onBack: () -> Unit) {
         graph.engine.chat.map { c -> c.model?.let { "${it.provider}/${it.id}" } }
             .stateIn(scope, kotlinx.coroutines.flow.SharingStarted.Eagerly, graph.engine.chat.value.model?.let { "${it.provider}/${it.id}" })
     }
-    val actions = remember(graph, current) {
-        io.github.zr987459.pigo.feature.settings.QuickSetupActions(
-            presets = io.github.zr987459.pigo.core.store.QuickModelSetup.PRESETS.map {
-                io.github.zr987459.pigo.feature.settings.QuickPreset(
-                    id = it.id, label = it.label, needsBaseUrl = it.id == io.github.zr987459.pigo.core.store.QuickModelSetup.CUSTOM,
-                    keyUrl = it.keyUrl, hint = it.hint, listWithoutKey = it.builtIn,
-                )
-            },
-            currentModel = current,
-            loadModels = { id, key, url -> setup.models(id, key, url) },
-            test = { id, key, model, url -> setup.test(id, key, model, url).let { io.github.zr987459.pigo.feature.settings.QuickCheck(it.verdict == io.github.zr987459.pigo.core.store.QuickModelSetup.Verdict.OK, it.message) } },
-            save = { id, key, model, models, url ->
-                when (val r = setup.save(id, key, model, models, url)) {
-                    is Outcome.Ok -> Outcome.Ok(r.value.message)
-                    is Outcome.Err -> r
-                }
-            },
-        )
-    }
+    val actions = remember(graph, current) { io.github.zr987459.pigo.di.QuickSetupWiring.actions(setup, graph.quickSaver, current) }
     io.github.zr987459.pigo.feature.settings.QuickModelSetupPage(actions, onBack = onBack, onAdvanced = { advanced = true })
 }
 

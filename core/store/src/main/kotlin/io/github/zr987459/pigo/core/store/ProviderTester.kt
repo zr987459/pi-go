@@ -45,7 +45,14 @@ object ProviderTester {
     }.toString()
 
     /** 测试自定义 OpenAI 兼容端点。 */
-    suspend fun testOpenAiCompatible(baseUrl: String, rawKey: String, model: String, clock: () -> Long = System::currentTimeMillis): ProbeResult =
+    suspend fun testOpenAiCompatible(
+        baseUrl: String,
+        rawKey: String,
+        model: String,
+        clock: () -> Long = System::currentTimeMillis,
+        /** M9 的代理（[HostProxy.select]），与 pi 进程的 HTTPS_PROXY 一致；默认直连。 */
+        proxy: java.net.Proxy = java.net.Proxy.NO_PROXY,
+    ): ProbeResult =
         withContext(Dispatchers.IO) {
             val key = sanitizeApiKey(rawKey)
             if (model.isBlank()) return@withContext ProbeResult(false, "先填写或选择一个模型 id")
@@ -56,7 +63,7 @@ object ProviderTester {
             }
             val t0 = clock()
             try {
-                val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                val conn = (URL(url).openConnection(proxy) as HttpURLConnection).apply {
                     requestMethod = "POST"
                     doOutput = true
                     connectTimeout = HTTP_TIMEOUT_MS

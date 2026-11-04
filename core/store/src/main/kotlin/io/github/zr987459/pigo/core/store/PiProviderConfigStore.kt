@@ -16,11 +16,16 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
 /**
- * 模型与 Key 的写入（DESIGN.md §3.10）。**Key 只存在宿主的 [SecretStore] 里，从不写进容器文件。**
- * （OAuth 订阅登录的凭据是唯一例外，由 pi 自己写进 auth.json，见 `:core:catalog`。）
+ * 模型与 Key 的写入（DESIGN.md §3.10）。Key 的主存仍是宿主的 [SecretStore]（Keystore）。
  *
- * - 内置 Provider：引擎启动时由 [env] 把 `DEEPSEEK_API_KEY=…` 及多变量服务商的全部字段放进进程环境；
- *   共用 Key 变量的服务商在 `auth.json` 只写变量引用（[syncAuthReferences]），不写 Key。
+ * r4/model-config（用户 2026-11-05 决定）：为了**热加载**——保存 Key 后不重启 pi——能热加载的 Key 同时写进 pi 自己读的
+ * `/root/.pi/agent/auth.json`（权限 600，与 pi 原生 `/login` 保存 Key 的格式一致：`{"type":"api_key","key":"<Key>"}`）。
+ * pi 1.5.0 的 `AuthStorage.read` 每次按文件修订号（mtime/大小）重新读取 auth.json，`ModelRegistry.refresh()` 重读 models.json
+ * 并重算可用模型（`dist/core/auth-storage.js` `readLatestData`、`dist/core/model-runtime.js` `refresh`），
+ * App 写完文件后经 pigo-bridge 的 `/pigo:models-refresh` 触发刷新即可生效（[syncAuthReferences]）。
+ *
+ * - 能热加载的内置 Provider（只有一个密文字段，即主 Key）：Key 写 auth.json，非密文字段放在条目的 `env` 里；不再经进程环境注入。
+ * - 还有其他密文字段的内置 Provider（如 Bedrock 的 AK/SK）：仍由 [env] 在引擎启动时注入，改了要重启 pi。
  * - 自定义 OpenAI 兼容端点：合并写 `/root/.pi/agent/models.json`（权限 600），`apiKey` 写成 `$PIGO_KEY_<ID>`，
  *   其他 provider 条目、同一 provider 的其他字段、已有模型的附加字段都保留。
  * - 默认模型：合并写 `settings.json` 的 `defaultProvider` / `defaultModel` / `defaultThinkingLevel`，不动其他键。
@@ -36,6 +41,8 @@ class PiProviderConfigStore(
 
     companion object {
         const val DEFAULT_NO_PROXY = "localhost,127.0.0.1,::1"
+        /** auth.json 里 pi-go 写的条目的标记。 */
+        const val MANAGED_MARK = "pigoManaged"
         private const val ALIAS_PROXY_URL = "proxy.url"
         private const val ALIAS_NO_PROXY = "proxy.noproxy"
     }
@@ -54,7 +61,7 @@ class PiProviderConfigStore(
         require(key.isNotEmpty()) { "请填写 API Key" }
         require(key.none { it.isWhitespace() }) { "Key 中间不能有空格或换行，请检查是否粘贴完整" }
         secrets.put(ProviderPresets.builtInAlias(provider), key)
-        if (ProviderSpecs.usesAuthReference(ProviderSpecs.specFor(provider, preset.label))) syncAuthReferences()
+        syncAuthReferences()
     }
 
     /** 删除内置 Provider 的 Key（不在接口里，供设置页「清除」使用时由 scaffold 决定是否加进接口）。 */
@@ -167,6 +174,7 @@ class PiProviderConfigStore(
             // 文件写成功后再存 Key，保证不会出现「Key 存了但 models.json 没有」时被当成已配置。
             if (key.isNotEmpty()) secrets.put(alias, key)
         }
+        syncAuthReferences()
     }
 
     internal fun mergeModel(old: JsonObject?, m: CustomModel): JsonObject {
@@ -208,6 +216,7 @@ class PiProviderConfigStore(
             }
             secrets.remove(ProviderPresets.customAlias(cid))
         }
+        syncAuthReferences()
     }
 
     /** models.json 里除 [cid] 外，`apiKey` 也是 `$envVar` 的 provider id；没有则为 null。 */
@@ -329,28 +338,35 @@ class PiProviderConfigStore(
         syncAuthReferences()
     }
 
-    // ---------------------------------------------------------------- 共用环境变量的服务商：auth.json 只写变量引用
+    // ---------------------------------------------------------------- auth.json：热加载的 Key（r4/model-config）
+
+    /** 只有主 Key 一个密文字段的内置服务商：Key 可以写 auth.json 热加载。 */
+    fun hotReloadable(spec: ProviderSpecs.Spec): Boolean = spec.keyEnv != null && spec.extra.none { it.secret }
+
+    /** 这个服务商（内置 id 或自定义端点 id）改了凭据后能否不重启 pi 就生效。OAuth 凭据由 pi 自己写 auth.json，也能。 */
+    fun hotReloadable(provider: String): Boolean {
+        val spec = ProviderSpecs.get(provider) ?: return true // 自定义端点、OAuth-only 服务商
+        return spec.keyEnv == null || hotReloadable(spec)
+    }
 
     /**
-     * 让共用同一个 Key 变量的服务商（[ProviderSpecs.sharedKeyEnv]）各用各的 Key：在 `auth.json` 写
-     * `{"type":"api_key","key":"$PIGO_PK_<ID>","env":{非密文字段}}`。**auth.json 里只有变量名，没有 Key**；
-     * 只增删 pi-go 自己写的这类条目（key 以 `$PIGO_PK_` 开头），OAuth 凭据与用户自己写的条目一律不动。
-     * 写入时按 pi 的锁约定（`auth.json.lock` 目录）加锁，权限 600。
+     * 把 pi-go 管理的 Key 同步进 `auth.json`：能热加载的内置服务商与全部自定义端点各一条
+     * `{"type":"api_key","key":"<Key>","env":{非密文字段},"pigoManaged":true}`（pi 的校验只看 type/key/env，多一个字段无妨）。
+     * 只增删带 `pigoManaged` 标记的条目（以及旧版写的 `$PIGO_PK_*` 引用）；OAuth 凭据与用户自己写的条目不动。
+     * 按 pi 的锁约定（`auth.json.lock` 目录）加锁，原子写、权限 600。
      */
     suspend fun syncAuthReferences() {
         val wanted = LinkedHashMap<String, JsonObject>()
         for (p in ProviderPresets.BUILT_IN) {
             val spec = ProviderSpecs.specFor(p.provider, p.label)
-            if (!ProviderSpecs.usesAuthReference(spec) || !isBuiltInConfigured(p.provider)) continue
+            if (!hotReloadable(spec) || !isBuiltInConfigured(p.provider)) continue
             val v = storedValues(spec)
+            val key = v[spec.keyEnv] ?: continue
             val env = spec.extra.filter { !it.secret }.mapNotNull { f -> v[f.envVar]?.let { f.envVar to JsonPrimitive(it) } }.toMap()
-            wanted[p.provider] = JsonObject(
-                buildMap {
-                    put("type", JsonPrimitive("api_key"))
-                    put("key", JsonPrimitive("$" + ProviderSpecs.privateKeyEnv(p.provider)))
-                    if (env.isNotEmpty()) put("env", JsonObject(env))
-                },
-            )
+            wanted[p.provider] = authEntry(key, env)
+        }
+        for (id in customProviders().keys) {
+            secrets.get(ProviderPresets.customAlias(id))?.let { wanted[id] = authEntry(it, emptyMap()) }
         }
         mutex.withLock {
             withContext(io) {
@@ -358,17 +374,27 @@ class PiProviderConfigStore(
                 if (!file.exists() && wanted.isEmpty()) return@withContext
                 AuthJsonLock.withLock(file) {
                     val root = JsonFiles.readObject(file)
-                    val kept = root.filterNot { (_, v) -> isOurReference(v) }
+                    val kept = root.filterNot { (_, v) -> isOurs(v) }
                     val next = JsonObject(kept + wanted)
-                    if (next != root) JsonFiles.writeObject(file, next)
+                    if (next != root || !JsonFiles.isOwnerOnly(file)) JsonFiles.writeObject(file, next)
                 }
             }
         }
     }
 
-    private fun isOurReference(v: JsonElement): Boolean {
+    private fun authEntry(key: String, env: Map<String, JsonPrimitive>) = JsonObject(
+        buildMap {
+            put("type", JsonPrimitive("api_key"))
+            put("key", JsonPrimitive(key))
+            if (env.isNotEmpty()) put("env", JsonObject(env))
+            put(MANAGED_MARK, JsonPrimitive(true))
+        },
+    )
+
+    private fun isOurs(v: JsonElement): Boolean {
         val o = v as? JsonObject ?: return false
-        return (o["type"] as? JsonPrimitive)?.content == "api_key" &&
+        if ((o["type"] as? JsonPrimitive)?.content != "api_key") return false
+        return (o[MANAGED_MARK] as? JsonPrimitive)?.content == "true" ||
             (o["key"] as? JsonPrimitive)?.content?.startsWith("\$PIGO_PK_") == true
     }
 
@@ -457,10 +483,14 @@ class PiProviderConfigStore(
      */
     override suspend fun env(): Map<String, String> {
         val out = LinkedHashMap<String, String>()
+        // 热加载的 Key 在 auth.json 里（每次启动前顺手同步一次，老版本升级上来的配置也就迁过去了），不再进进程环境：
+        // 否则清除 Key 后旧 Key 还留在进程环境里，直到重启才失效。
+        runCatching { syncAuthReferences() }
         for (p in ProviderPresets.BUILT_IN) {
             val spec = ProviderSpecs.specFor(p.provider, p.label)
             val v = storedValues(spec)
             if (missingFields(spec, v) != null) continue
+            if (hotReloadable(spec)) continue
             if (ProviderSpecs.usesAuthReference(spec)) {
                 v[spec.keyEnv]?.let { out[ProviderSpecs.privateKeyEnv(p.provider)] = it }
                 // 非密文字段在 auth.json 的 env 里；密文额外字段（目前共用组里没有）仍按原名注入
@@ -468,9 +498,6 @@ class PiProviderConfigStore(
             } else {
                 for ((k, value) in v) out[k] = value
             }
-        }
-        for ((id, c) in customProviders()) {
-            secrets.get(ProviderPresets.customAlias(id))?.let { out[c.envVar] = it }
         }
         proxy()?.let { px ->
             out["HTTPS_PROXY"] = px.url; out["HTTP_PROXY"] = px.url
@@ -486,7 +513,11 @@ class PiProviderConfigStore(
      * 末尾再用全部已知 Key 做一次兜底脱敏。
      */
     suspend fun diagnostics(): String {
-        val known = env().filterKeys { it !in ProviderSpecs.PROXY_ENVS && it != "NODE_USE_ENV_PROXY" }.values
+        val known = buildList {
+            addAll(env().filterKeys { it !in ProviderSpecs.PROXY_ENVS && it != "NODE_USE_ENV_PROXY" }.values)
+            for (p in ProviderPresets.BUILT_IN) secrets.get(ProviderPresets.builtInAlias(p.provider))?.let(::add)
+            for (id in customProviders().keys) secrets.get(ProviderPresets.customAlias(id))?.let(::add)
+        }
         val sb = StringBuilder()
         sb.appendLine("模型与 Key：")
         for (p in ProviderPresets.BUILT_IN) {

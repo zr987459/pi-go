@@ -13,6 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.After
@@ -28,10 +29,21 @@ import org.junit.Test
  */
 class PickCloseOAuthTest {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val auth = FakeAuthManager()
+    private val fakeAuth = FakeAuthManager()
+    /** 登录面板压栈后才放行 Done：假设备码流程没有任何等待，不加闸门时 Done 可能早于压栈（CI 偶发超时的根因）。 */
+    private val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+    private val auth = object : io.github.zr987459.pigo.contract.AuthManager by fakeAuth {
+        override fun login(provider: String) = fakeAuth.login(provider).onEach { if (it is io.github.zr987459.pigo.contract.OAuthStep.Done) gate.await() }
+    }
     private val engine = FakeEngineClient(scope, stepDelayMs = 0)
     private val signal = SetModelSignal(engine)
-    private val panels = RealModelPanels(FakeModelCatalog(auth), auth, FakeCustomProviderStore(), signal, scope, FakePiSettings())
+    private val events = java.util.Collections.synchronizedList(mutableListOf<String>())
+    /** 与 AppGraph 同样接线：凭据变化 → CredentialReloader（热加载；这里记录调用顺序）。 */
+    private val reloader = CredentialReloader(engine, scope, hotReload = { events += "hot"; io.github.zr987459.pigo.contract.Outcome.Ok(Unit) })
+    private val panels = RealModelPanels(
+        FakeModelCatalog(fakeAuth), auth, FakeCustomProviderStore(), signal, scope, FakePiSettings(),
+        onCredentialsChanged = { p -> CredentialReloader.toToast(reloader.request(p)) },
+    )
 
     @After fun tearDown() = scope.cancel()
 
@@ -47,11 +59,10 @@ class PickCloseOAuthTest {
         assertEquals(0, signal.count)
         assertTrue(s.items.value.any { it.id == "model.select" })
         // 开始登录：登录面板压栈，设备码流程在后台走到 Done → 自动选回
-        // 假设备码流程没有任何等待，可能在 oauthFlow 返回前就到 Done（Dispatchers.Default 上的竞态，CI 偶发超时）：
-        // 先把登录面板占位压栈，再用 oauthFlow 的结果替换栈顶，后台完成落在哪一刻都确定。
-        s.push(io.github.zr987459.pigo.contract.session.OverlayModel.Text("oauth:github-copilot", "登录 github-copilot", ""))
-        val login = panels.oauthFlow("github-copilot")
-        if (s.items.value.lastOrNull()?.id == "oauth:github-copilot") s.replaceTop(login)
+        s.push(panels.oauthFlow("github-copilot"))
+        assertTrue("登录面板已压栈", s.items.value.any { it.id == "oauth:github-copilot" })
+        signal.onSwitched = { p -> events += "set_model:$p"; PickClose.afterBackgroundSwitch(s, p) }
+        gate.complete(Unit)
         withTimeout(5_000) { while (signal.count == 0) delay(10) }
         withTimeout(5_000) { while (s.items.value.any { it.id == "model.select" }) delay(10) }
         val ids = s.items.value.map { it.id }
@@ -59,6 +70,8 @@ class PickCloseOAuthTest {
         assertFalse("登录面板已关：$ids", "oauth:github-copilot" in ids)
         assertFalse("服务商表单已关：$ids", "provider.form:github-copilot" in ids)
         assertEquals("gpt-4.1", engine.chat.value.model?.id)
+        // 新路径：OAuth 完成 → 先让 pi 读到新凭据（热加载），再自动选回
+        assertEquals(listOf("hot", "set_model:github-copilot"), events.toList())
     }
 
     @Test

@@ -63,8 +63,8 @@ class QuickSetupActions(
     val currentModel: StateFlow<String?>? = null,
     val loadModels: suspend (presetId: String, key: String, baseUrl: String) -> Outcome<List<String>>,
     val test: suspend (presetId: String, key: String, model: String, baseUrl: String) -> QuickCheck,
-    /** 保存并立即使用；成功返回给用户的一句话。 */
-    val save: suspend (presetId: String, key: String, model: String, models: List<String>, baseUrl: String) -> Outcome<String>,
+    /** 「保存并使用」：在 App 级作用域里跑，页面只看它的 [QuickSaveRunner.state]（返回 / 转屏不中断）。 */
+    val saver: QuickSaveRunner,
 )
 
 object QuickTags {
@@ -102,14 +102,18 @@ fun QuickModelSetupPage(
     // Key 只在内存里（不进 saveable：进程被杀后不落到 Bundle 里）。
     var key by remember { mutableStateOf("") }
     var model by rememberSaveable { mutableStateOf("") }
+    // 上一次真正选中的服务商：转屏 / 进程重建后 LaunchedEffect 会重跑，只有服务商真变了才清空已选模型（审查 N5）。
+    var loadedPreset by rememberSaveable { mutableStateOf<String?>(null) }
     var models by remember { mutableStateOf<List<String>>(emptyList()) }
     var busy by remember { mutableStateOf<String?>(null) }
     var result by remember { mutableStateOf<QuickCheck?>(null) }
+    val saveState by actions.saver.state.collectAsState()
+    val saving = saveState is QuickSaveState.Running
     val current = actions.currentModel?.collectAsState()?.value
     val preset = actions.presets.firstOrNull { it.id == presetId }
 
     fun fetch() = scope.launch {
-        busy = "正在获取模型列表…"; result = null
+        busy = "正在获取模型列表…"; result = null; actions.saver.acknowledge()
         when (val r = actions.loadModels(presetId, key, baseUrl)) {
             is Outcome.Ok -> {
                 models = r.value
@@ -122,9 +126,13 @@ fun QuickModelSetupPage(
 
     // 内置服务商的模型来自 pi 的目录，不用 Key：选中就拉。
     LaunchedEffect(presetId) {
-        models = emptyList(); model = ""; result = null
+        if (loadedPreset != null && loadedPreset != presetId) { model = ""; result = null; actions.saver.acknowledge() }
+        loadedPreset = presetId
+        models = emptyList()
         if (preset?.listWithoutKey == true) fetch()
     }
+    // 保存成功后清掉内存里的 Key。
+    LaunchedEffect(saveState) { if (saveState is QuickSaveState.Done) key = "" }
 
     PlainBackdrop(modifier.testTag(QuickTags.PAGE)) {
         LazyColumn(Modifier.fillMaxSize().testTag(QuickTags.LIST), contentPadding = PaddingValues(top = 8.dp, bottom = 40.dp)) {
@@ -201,33 +209,31 @@ fun QuickModelSetupPage(
             item {
                 Row(Modifier.padding(horizontal = 24.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     OutlinedButton(
-                        onClick = { scope.launch { busy = "正在测试…"; result = actions.test(presetId, key, model, baseUrl); busy = null } },
-                        enabled = busy == null, modifier = Modifier.testTag(QuickTags.TEST),
+                        onClick = { actions.saver.acknowledge(); scope.launch { busy = "正在测试…"; result = actions.test(presetId, key, model, baseUrl); busy = null } },
+                        enabled = busy == null && !saving, modifier = Modifier.testTag(QuickTags.TEST),
                     ) { Text("测试连接") }
                     Button(
-                        onClick = {
-                            scope.launch {
-                                busy = "正在保存并重启 pi…"
-                                result = when (val r = actions.save(presetId, key, model, models, baseUrl)) {
-                                    is Outcome.Ok -> QuickCheck(true, r.value).also { key = "" }
-                                    is Outcome.Err -> QuickCheck(false, r.message)
-                                }
-                                busy = null
-                            }
-                        },
-                        enabled = busy == null && model.isNotBlank(), modifier = Modifier.testTag(QuickTags.SAVE),
+                        onClick = { result = null; actions.saver.start(QuickSaveRequest(presetId, key, model, models, baseUrl)) },
+                        enabled = busy == null && !saving && model.isNotBlank(), modifier = Modifier.testTag(QuickTags.SAVE),
                     ) { Text("保存并使用") }
                 }
             }
             item {
-                val text = busy ?: result?.let { (if (it.ok) "✓ " else "✗ ") + it.message }
+                // 保存的进度 / 结果优先（它在 App 作用域里跑，离开再回来也接得上），其次是本页的获取列表、测试连接。
+                val shownResult = when (val s = saveState) {
+                    is QuickSaveState.Done -> QuickCheck(true, s.message)
+                    is QuickSaveState.Failed -> QuickCheck(false, s.message)
+                    else -> result
+                }
+                val progress = (saveState as? QuickSaveState.Running)?.message ?: busy
+                val text = progress ?: shownResult?.let { (if (it.ok) "✓ " else "✗ ") + it.message }
                 if (text != null) {
                     Text(
                         text,
                         style = MaterialTheme.typography.bodyMedium,
                         color = when {
-                            busy != null -> SettingsColors.faint
-                            result?.ok == true -> Color(0xFF2E7D32)
+                            progress != null -> SettingsColors.faint
+                            shownResult?.ok == true -> Color(0xFF2E7D32)
                             else -> MaterialTheme.colorScheme.error
                         },
                         modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp).testTag(QuickTags.RESULT),
