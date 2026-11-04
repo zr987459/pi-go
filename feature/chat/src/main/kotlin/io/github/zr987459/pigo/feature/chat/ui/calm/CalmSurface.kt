@@ -313,6 +313,8 @@ private fun CalmTopBar(
     val c = Calm.colors
     var menu by remember { mutableStateOf(false) }
     val tint = if (locked) c.secondary else c.text
+    // 上锁（来了面板 / 扩展对话框）时收起 ⋯ 菜单并复位：否则对话框结束后菜单会自己重新弹出（PR #26 定向复核 Nit）
+    LaunchedEffect(locked) { if (locked) menu = false }
     Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         IconButton(onClick = onMenu, enabled = !locked, modifier = Modifier.testTag(persistentTag("session.resume") ?: "persist:session.resume")) {
             Icon(CalmIcons.Menu, contentDescription = "会话列表", tint = tint)

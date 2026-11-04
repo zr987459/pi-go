@@ -266,6 +266,10 @@ class FormSwitchStreamingTest {
             )
         }
         rule.waitForIdle()
+        // 先开 ⋯ 菜单再来扩展对话框：菜单收起，对话框结束后也不会自己重新弹出
+        rule.onNodeWithTag("calm:sessionMenu", useUnmergedTree = true).performClick()
+        rule.waitForIdle()
+        assertTrue("⋯ 菜单应已打开", exists("menu:session.clone"))
         rule.runOnIdle {
             host.showExtDialog(ExtUiRequest(id = "req-2", method = "confirm", title = "确认", message = "继续吗？", timeoutMs = 60_000), System.currentTimeMillis())
         }
@@ -294,9 +298,13 @@ class FormSwitchStreamingTest {
         assertTrue(exists("overlay:ext:req-2"))
         assertEquals("ext:req-2", host.overlay.top?.id)
 
+        // 对话框结束后 ⋯ 菜单不会自己重新弹出
+        rule.runOnIdle { host.overlay.clear() }
+        rule.waitForIdle()
+        assertTrue("对话框结束后 ⋯ 菜单重新弹出了", !exists("menu:session.clone"))
+
         // 普通面板：点 ☰ 不打开画在面板下面的会话列表
         rule.runOnIdle {
-            host.overlay.clear()
             host.overlay.push(OverlayModel.SelectList(id = "model.select", title = "选择模型", groups = listOf(SelectGroup(null, listOf(SelectItem("a/b", "b"))))))
         }
         rule.waitForIdle()
