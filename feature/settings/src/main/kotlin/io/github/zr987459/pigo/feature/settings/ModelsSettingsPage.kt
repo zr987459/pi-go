@@ -230,6 +230,9 @@ internal fun PanelDialog(
     val formValues = remember(model) { mutableStateMapOf<String, String>().apply { if (model is OverlayModel.Form) putAll(model.values) } }
     var highlighted by remember(model.id) { mutableStateOf<String?>(null) }
     var listQuery by remember(model) { mutableStateOf((model as? OverlayModel.SelectList)?.query.orEmpty()) }
+    // OAuth 的提交在途：点过一次就禁用，面板换成下一步（新 model）时复位。
+    var submitted by remember(model) { mutableStateOf(false) }
+    val guard = SettingsPanelLogic.guardsSubmit(model)
     AlertDialog(
         onDismissRequest = onDismiss,
         modifier = Modifier.testTag(SettingsTags.PANEL),
@@ -249,9 +252,9 @@ internal fun PanelDialog(
                                 Row(
                                     Modifier.fillMaxWidth()
                                         .testTag(SettingsTags.panelItem(item.key))
-                                        .clickable(enabled = item.enabled) {
+                                        .clickable(enabled = item.enabled && !(guard && submitted)) {
                                             when (val c = SettingsPanelLogic.rowClick(model, item.key, mode)) {
-                                                is SettingsPanelLogic.Click.Event -> onEvent(c.key, c.value)
+                                                is SettingsPanelLogic.Click.Event -> { if (guard) submitted = true; onEvent(c.key, c.value) }
                                                 is SettingsPanelLogic.Click.Highlight -> highlighted = c.key
                                             }
                                         }
@@ -284,7 +287,8 @@ internal fun PanelDialog(
                             onValueChange = { formValues[f.key] = it },
                             label = { Text(f.label) },
                             supportingText = f.help?.let { h -> { Text(h) } },
-                            singleLine = true,
+                            singleLine = !SettingsPanelLogic.multiline(f.type),
+                            minLines = if (SettingsPanelLogic.multiline(f.type)) 2 else 1,
                             enabled = f.enabled,
                             visualTransformation = if (f.secret) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
                             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
@@ -310,9 +314,18 @@ internal fun PanelDialog(
                     SettingsPanelLogic.formActions(model).forEach { (k, label) ->
                         TextButton(onClick = { onEvent(k, formJson(formValues)) }, modifier = Modifier.testTag(SettingsTags.cap(k))) { Text(label) }
                     }
-                    TextButton(onClick = { onEvent("submit", formJson(formValues)) }, modifier = Modifier.testTag(SettingsTags.cap("submit"))) { Text(model.submitLabel ?: "保存") }
+                    TextButton(
+                        onClick = { if (guard) submitted = true; onEvent("submit", formJson(formValues)) },
+                        enabled = !(guard && submitted),
+                        modifier = Modifier.testTag(SettingsTags.cap("submit")),
+                    ) { Text(model.submitLabel ?: "保存") }
                 }
-                is OverlayModel.Confirm -> TextButton(onClick = { onEvent("confirm", null) }) { Text(model.confirmLabel) }
+                is OverlayModel.Text -> if (SettingsPanelLogic.oauthRetryable(model)) {
+                    TextButton(onClick = { onEvent("retry", null) }, modifier = Modifier.testTag(SettingsTags.cap("retry"))) { Text("重试") }
+                } else Unit
+                is OverlayModel.Confirm -> TextButton(onClick = { onEvent("confirm", null) }, modifier = Modifier.testTag(SettingsTags.cap("confirm"))) {
+                    Text(model.confirmLabel, color = if (model.dangerous) MaterialTheme.colorScheme.error else Color.Unspecified)
+                }
                 else -> Unit
             }
         },

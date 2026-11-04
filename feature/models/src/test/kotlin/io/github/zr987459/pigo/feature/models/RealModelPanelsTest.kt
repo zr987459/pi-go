@@ -143,7 +143,10 @@ class RealModelPanelsTest {
         assertEquals(listOf("provider:qwen-token-plan-cn"), qw.groups.flatMap { it.items }.filter { it.key.startsWith("provider:") }.map { it.key })
         val lo = panels.logoutPicker() as OverlayModel.SelectList
         assertEquals(listOf("provider:deepseek"), lo.groups.single().items.map { it.key })
-        panels.onPanelEvent(RealModelPanels.ID_LOGOUT, "provider:deepseek")
+        // 审查第 3 轮 Nit 1：退出登录先确认
+        assertTrue(panels.onPanelEvent(RealModelPanels.ID_LOGOUT, "provider:deepseek") is ActionResult.Overlay)
+        assertTrue(auth.state("deepseek").configured)
+        panels.onPanelEvent("${RealModelPanels.CONFIRM_LOGOUT}deepseek", "confirm")
         assertFalse(auth.state("deepseek").configured)
     }
 

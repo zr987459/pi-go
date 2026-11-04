@@ -70,6 +70,8 @@ class RealModelPanels(
     private val isGenerating: () -> Boolean = { engine.chat.value.running },
     /** 凭据变化后（保存 Key、OAuth 完成、退出登录）由装配方决定如何让 pi 读到新凭据。 */
     private val onCredentialsChanged: suspend (provider: String) -> Unit = {},
+    /** 毫秒时钟（测试可替换）：OAuth「正在验证…」的超时判断用。 */
+    private val clock: () -> Long = System::currentTimeMillis,
 ) : ModelPanels {
 
     /** 点了未配置模型后等待配置完成再自动选回的模型（W5 PendingModel 思路）。 */
@@ -79,6 +81,15 @@ class RealModelPanels(
     private val _oauth = MutableStateFlow<Map<String, OAuthStep>>(emptyMap())
     val oauthSteps: StateFlow<Map<String, OAuthStep>> = _oauth.asStateFlow()
     private val oauthJobs = mutableMapOf<String, Job>()
+
+    /**
+     * 已提交代码 / 选择、还在等登录会话推进的服务商 → 提交时刻（审查第 3 轮 Important）。
+     * 在途时面板显示「正在验证…」（Text，渲染器会持续 refresh），重复提交直接忽略；登录流发出任何新步骤即清除。
+     */
+    private val oauthSubmitted = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    /** 名称或接口地址变了、之前填的 Key 被丢弃的草稿：表单与结果消息里提示重新填写（审查第 3 轮 Nit 3）。 */
+    private val keyDropped = mutableSetOf<String>()
 
     /** 自定义服务商表单的已填值（发现模型后回填）；**不含 API Key**。 */
     private val customDrafts = mutableMapOf<String, Map<String, String>>()
@@ -209,6 +220,7 @@ class RealModelPanels(
             oauthJobs[providerId] = scope.launch {
                 auth.login(providerId).collect { step ->
                     _oauth.update { it + (providerId to step) }
+                    oauthSubmitted.remove(providerId)
                     if (step is OAuthStep.Done) credentialsReady(providerId)
                 }
             }
@@ -219,6 +231,11 @@ class RealModelPanels(
     private fun oauthPanel(providerId: String): OverlayModel {
         val id = "oauth:$providerId"
         val title = "登录 $providerId"
+        val submittedAt = oauthSubmitted[providerId]
+        if (submittedAt != null) {
+            if (clock() - submittedAt < OAUTH_VERIFY_TIMEOUT_MS) return OverlayModel.Text(id, title, OAUTH_VERIFYING)
+            oauthSubmitted.remove(providerId) // 登录会话一直没有回应：回到当前步骤，允许再提交
+        }
         return when (val s = _oauth.value[providerId] ?: OAuthStep.Starting) {
             OAuthStep.Starting -> OverlayModel.Text(id, title, "正在开始登录…")
             is OAuthStep.OpenUrl -> OverlayModel.Text(id, title, listOfNotNull("在浏览器中打开：", s.url, s.instructions).joinToString("\n"))
@@ -227,7 +244,7 @@ class RealModelPanels(
             is OAuthStep.Select -> OverlayModel.SelectList(id, s.prompt, listOf(SelectGroup(null, s.options.map { SelectItem("select:$it", it) })))
             is OAuthStep.Progress -> OverlayModel.Text(id, title, s.message)
             is OAuthStep.Done -> OverlayModel.Text(id, title, "已登录" + ((s.state as? AuthState.OAuth)?.accountLabel?.let { "：$it" } ?: ""))
-            is OAuthStep.Failed -> OverlayModel.Text(id, title, "登录失败：${s.message}")
+            is OAuthStep.Failed -> OverlayModel.Text(id, title, "登录失败：${s.message}\n可点「重试」重新登录")
         }
     }
 
@@ -252,7 +269,11 @@ class RealModelPanels(
                 "headers" to c.headers.entries.joinToString(",") { "${it.key}: ${it.value}" },
             )
         } ?: mapOf("api" to ProviderApi.OPENAI_COMPLETIONS.wire)) - KEY_FIELD
-        val keyHelpText = if (pendingKeys.containsKey(draftKey)) "已填写（隐藏，保存后生效）；可写 !命令" else "留空保持原值；可写 !命令"
+        val keyHelpText = when {
+            pendingKeys.containsKey(draftKey) -> "已填写（隐藏，保存后生效）；可写 !命令"
+            draftKey in keyDropped -> KEY_DROPPED
+            else -> "留空保持原值；可写 !命令"
+        }
         return OverlayModel.Form(
             id = if (providerId == null) ID_CUSTOM else "$ID_CUSTOM:$providerId",
             title = if (providerId == null) "添加自定义服务商" else providerId,
@@ -284,7 +305,15 @@ class RealModelPanels(
         overlayId == ID_PROVIDERS && key == CAP_SELECT ->
             value?.takeIf { it.isNotBlank() }?.let { onProvidersEvent(it, null) } ?: ActionResult.Toast("先选中一个服务商")
         overlayId == ID_PROVIDERS -> onProvidersEvent(key, value)
-        overlayId == ID_LOGOUT && key.startsWith("provider:") -> logout(key.removePrefix("provider:"))
+        overlayId == ID_LOGOUT && key.startsWith("provider:") -> ActionResult.Overlay(clearConfirm(key.removePrefix("provider:"), CONFIRM_LOGOUT))
+        overlayId.startsWith(CONFIRM_REMOVE) -> if (key == "confirm") removeCustom(overlayId.removePrefix(CONFIRM_REMOVE)) else ActionResult.Done
+        overlayId.startsWith(CONFIRM_CLEAR) -> if (key == "confirm") {
+            val p = overlayId.removePrefix(CONFIRM_CLEAR)
+            when (val r = logout(p)) { is ActionResult.Toast -> if (r.text.startsWith("已退出")) ActionResult.Overlay(providerForm(p)) else r; else -> r }
+        } else ActionResult.Done
+        overlayId.startsWith(CONFIRM_LOGOUT) -> if (key == "confirm") {
+            when (val r = logout(overlayId.removePrefix(CONFIRM_LOGOUT))) { is ActionResult.Toast -> if (r.text.startsWith("已退出")) ActionResult.Overlay(logoutPicker()) else r; else -> r }
+        } else ActionResult.Done
         overlayId.startsWith("provider.form:") -> onProviderFormEvent(overlayId.removePrefix("provider.form:"), key, value)
         overlayId.startsWith("oauth:") -> onOAuthEvent(overlayId.removePrefix("oauth:"), key, value)
         overlayId == ID_CUSTOM || overlayId.startsWith("$ID_CUSTOM:") ->
@@ -359,7 +388,7 @@ class RealModelPanels(
 
     private suspend fun onProviderFormEvent(providerId: String, key: String, value: String?): ActionResult = when (key) {
         "oauth" -> ActionResult.Overlay(oauthFlow(providerId))
-        "clear" -> logout(providerId)
+        "clear" -> ActionResult.Overlay(clearConfirm(providerId, CONFIRM_CLEAR))
         "test" -> testProvider(providerId)
         "submit" -> {
             val p = provider(providerId)
@@ -376,13 +405,17 @@ class RealModelPanels(
 
     private suspend fun onOAuthEvent(providerId: String, key: String, value: String?): ActionResult = when {
         key == "refresh" -> ActionResult.Overlay(oauthPanel(providerId))
-        key == "code" || key == "submit" -> {
+        key == "code" || key == "submit" -> submitOAuth(providerId) {
             auth.submitCode(providerId, parseValues(value)["code"] ?: value.orEmpty())
-            ActionResult.Overlay(oauthPanel(providerId))
         }
-        key.startsWith("select:") -> {
+        key.startsWith("select:") -> submitOAuth(providerId) {
             auth.submitSelection(providerId, key.removePrefix("select:"))
-            ActionResult.Overlay(oauthPanel(providerId))
+        }
+        key == "retry" -> {
+            oauthJobs.remove(providerId)?.cancel()
+            oauthSubmitted.remove(providerId)
+            _oauth.update { it - providerId }
+            ActionResult.Overlay(oauthFlow(providerId))
         }
         key == "cancel" -> {
             oauthJobs.remove(providerId)?.cancel()
@@ -394,6 +427,19 @@ class RealModelPanels(
             if (ok) (pendingSelectedToast(providerId) ?: ActionResult.Done) else ActionResult.Overlay(oauthPanel(providerId))
         }
         else -> ActionResult.Toast("未知操作：$key")
+    }
+
+    /**
+     * 提交 OAuth 代码或选择：只在当前步骤确实在等输入时提交一次；随即返回「正在验证…」，
+     * 由渲染器的 refresh 拉到成功 / 失败 / 下一步。在途时重复点击不再提交。
+     */
+    private suspend fun submitOAuth(providerId: String, submit: suspend () -> Unit): ActionResult {
+        val step = _oauth.value[providerId]
+        val awaiting = step is OAuthStep.NeedCode || step is OAuthStep.Select || step is OAuthStep.OpenUrl
+        if (oauthSubmitted.containsKey(providerId) || !awaiting) return ActionResult.Overlay(oauthPanel(providerId))
+        if (oauthSubmitted.putIfAbsent(providerId, clock()) != null) return ActionResult.Overlay(oauthPanel(providerId))
+        submit()
+        return ActionResult.Overlay(oauthPanel(providerId))
     }
 
     /** OAuth 完成后自动选回已在 [credentialsReady] 里做；这里只把结果告诉形态。 */
@@ -411,7 +457,17 @@ class RealModelPanels(
         } else if (values.isNotEmpty() && pendingKeyOwner[draftKey] != null && pendingKeyOwner[draftKey] != owner) {
             // 名称或接口地址变了：之前填的 Key 不属于这个服务器，丢弃（不会把 A 的 Key 发给 B）。
             pendingKeys.remove(draftKey); pendingKeyOwner.remove(draftKey)
+            keyDropped += draftKey
         }
+        if (typedKey != null) keyDropped -= draftKey
+        val dropped = draftKey in keyDropped
+        return withKeyNotice(dropped, onCustomEventInner(providerId, key, values, draftKey))
+    }
+
+    private fun withKeyNotice(dropped: Boolean, r: ActionResult): ActionResult =
+        if (dropped && r is ActionResult.Toast) ActionResult.Toast(r.text + "\n" + KEY_DROPPED) else r
+
+    private suspend fun onCustomEventInner(providerId: String?, key: String, values: Map<String, String>, draftKey: String): ActionResult {
         if (values.isNotEmpty()) customDrafts[draftKey] = values - KEY_FIELD
         val id = providerId ?: values["id"].orEmpty().trim()
         val api = ProviderApi.fromWire(values["api"]) ?: ProviderApi.OPENAI_COMPLETIONS
@@ -463,15 +519,25 @@ class RealModelPanels(
                 }
             }
             "cancel" -> { forgetDraft(draftKey); ActionResult.Done }
-            "remove" -> when (val r = custom.remove(id)) {
-                is Outcome.Ok -> { forgetDraft(draftKey); ActionResult.Toast("已删除 $id") }
-                is Outcome.Err -> ActionResult.Toast("删除失败：${r.message}")
-            }
+            // 删除连同 Key 一起删：先确认（审查第 3 轮 Nit 1）。
+            "remove" -> if (id.isEmpty()) ActionResult.Toast("请填写名称") else ActionResult.Overlay(
+                OverlayModel.Confirm("$CONFIRM_REMOVE$id", "删除自定义服务商", "删除 $id 及其 API Key？此操作不能撤销。", "删除", dangerous = true),
+            )
             else -> ActionResult.Toast("未知操作：$key")
         }
     }
 
+    private fun clearConfirm(providerId: String, prefix: String): OverlayModel =
+        OverlayModel.Confirm("$prefix$providerId", "清除凭据", "清除 $providerId 已保存的凭据（Key 或账号登录）？", "清除", dangerous = true)
+
+    /** 确认后删除：成功即关闭面板（返回 Done），草稿与 Key 一并丢弃，表单不会再被「保存」重建。 */
+    private suspend fun removeCustom(id: String): ActionResult = when (val r = custom.remove(id)) {
+        is Outcome.Ok -> { forgetDraft(id); onCredentialsChanged(id); ActionResult.Done }
+        is Outcome.Err -> ActionResult.Toast("删除失败：${r.message}")
+    }
+
     private fun forgetDraft(draftKey: String) {
+        keyDropped.remove(draftKey)
         customDrafts.remove(draftKey)
         discoveredModels.remove(draftKey)
         pendingKeys.remove(draftKey)
@@ -557,6 +623,12 @@ class RealModelPanels(
         const val ID_CUSTOM = "provider.custom"
         const val KEY_FIELD = "apiKey"
         const val NEXT_TURN = "下一轮生效"
+        const val OAUTH_VERIFYING = "正在验证…"
+        const val OAUTH_VERIFY_TIMEOUT_MS = 60_000L
+        const val KEY_DROPPED = "接口地址或名称已变更，之前填的 Key 已清除，请重新填写"
+        const val CONFIRM_REMOVE = "confirm.remove:"
+        const val CONFIRM_CLEAR = "confirm.clear:"
+        const val CONFIRM_LOGOUT = "confirm.logout:"
 
         val TAB_LABELS = linkedMapOf(ModelPickerTab.ALL to "全部", ModelPickerTab.SCOPED to "常用", ModelPickerTab.RECENT to "最近")
 

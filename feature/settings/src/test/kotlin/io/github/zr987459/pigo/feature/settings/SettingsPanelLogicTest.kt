@@ -80,6 +80,32 @@ class SettingsPanelLogicTest {
         assertNull(SettingsPanelLogic.oauthUrl(start))
     }
 
+    /** 审查第 3 轮 Important：输入代码表单、选择列表、「正在验证…」都要持续刷新，关闭时取消登录。 */
+    @Test fun oauthFormAndSelectKeepPolling() {
+        val form = OverlayModel.Form("oauth:anthropic", "登录", submitLabel = "提交")
+        val sel = OverlayModel.SelectList("oauth:anthropic", "选择")
+        val verifying = OverlayModel.Text("oauth:anthropic", "登录", "正在验证…")
+        assertTrue(SettingsPanelLogic.needsOAuthPolling(form))
+        assertTrue(SettingsPanelLogic.needsOAuthPolling(sel))
+        assertTrue(SettingsPanelLogic.needsOAuthPolling(verifying))
+        assertFalse(SettingsPanelLogic.needsOAuthPolling(OverlayModel.Form("provider.form:deepseek", "DeepSeek")))
+        assertEquals("cancel", SettingsPanelLogic.dismissEvent(form))
+        assertEquals("cancel", SettingsPanelLogic.dismissEvent(sel))
+        assertTrue(SettingsPanelLogic.guardsSubmit(form))
+        assertFalse(SettingsPanelLogic.guardsSubmit(OverlayModel.Form("provider.form:deepseek", "DeepSeek")))
+        assertTrue(SettingsPanelLogic.oauthRetryable(OverlayModel.Text("oauth:anthropic", "登录", "登录失败：授权码无效")))
+        assertFalse(SettingsPanelLogic.oauthRetryable(verifying))
+    }
+
+    /** 审查第 3 轮 Nit 2：每模型思考档是多行输入，提示与解析一致（换行或逗号）。 */
+    @Test fun modelThinkingLevelsIsMultiline() {
+        val f = SettingsPanelLogic.advancedForm("modelThinkingLevels", emptyMap())!!.fields.single()
+        assertTrue(SettingsPanelLogic.multiline(f.type))
+        assertTrue(f.label.contains("每行一个") && f.label.contains("逗号"))
+        val ok = SettingsPanelLogic.parseAdvanced("modelThinkingLevels", mapOf("entries" to "a/x=high\nb/y=low, c/z=off"))
+        assertEquals(3, ((ok as io.github.zr987459.pigo.contract.Outcome.Ok).value as kotlinx.serialization.json.JsonObject).size)
+    }
+
     @Test fun formActionsComeFromPanel() {
         val f = OverlayModel.Form("provider.form:anthropic", "Anthropic", actions = listOf(KeyCap("", "测试", "test"), KeyCap("", "账号登录", "oauth"), KeyCap("", "清除", "clear")))
         assertEquals(listOf("test" to "测试", "oauth" to "账号登录", "clear" to "清除"), SettingsPanelLogic.formActions(f))

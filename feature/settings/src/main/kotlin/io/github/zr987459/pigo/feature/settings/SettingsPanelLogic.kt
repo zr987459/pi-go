@@ -60,7 +60,7 @@ object SettingsPanelLogic {
 
     /** 关闭面板时要发给面板的事件：OAuth 取消登录、自定义服务商丢弃草稿与 Key；其他面板不发。 */
     fun dismissEvent(model: OverlayModel): String? = when {
-        model.id.startsWith("oauth:") && model is OverlayModel.Text && !isOAuthFinal(model) -> "cancel"
+        model.id.startsWith("oauth:") && !isOAuthFinal(model) -> "cancel"
         model.id.startsWith("provider.custom") -> "cancel"
         else -> null
     }
@@ -68,8 +68,25 @@ object SettingsPanelLogic {
     /** OAuth 面板是否到了终点（成功 / 失败）；没到终点时本页每秒发一次 `refresh` 拉取最新进度。 */
     fun isOAuthFinal(model: OverlayModel.Text): Boolean = model.text.startsWith("已登录") || model.text.startsWith("登录失败")
 
+    /** 任何类型的 OAuth 面板：只有 Text 的成功 / 失败是终点；表单（输入代码）与选择列表都不是。 */
+    fun isOAuthFinal(model: OverlayModel): Boolean = model is OverlayModel.Text && isOAuthFinal(model)
+
+    /**
+     * 没到终点的 OAuth 面板一律持续刷新（审查第 3 轮 Important）：提交代码 / 选择后面板会变成「正在验证…」，
+     * 之后由 refresh 拉到成功、失败或下一步；表单刷新时返回相同的值，`remember(model)` 不会冲掉用户输入。
+     */
     fun needsOAuthPolling(model: OverlayModel?): Boolean =
-        model is OverlayModel.Text && model.id.startsWith("oauth:") && !isOAuthFinal(model)
+        model != null && model.id.startsWith("oauth:") && !isOAuthFinal(model)
+
+    /** OAuth 失败时显示「重试」（发 `retry`，重新开始登录）。 */
+    fun oauthRetryable(model: OverlayModel?): Boolean =
+        model is OverlayModel.Text && model.id.startsWith("oauth:") && model.text.startsWith("登录失败")
+
+    /** OAuth 的提交（输入代码 / 选择）点一次后在本面板禁用，直到面板换成下一步，防止重复提交同一个代码。 */
+    fun guardsSubmit(model: OverlayModel): Boolean = model.id.startsWith("oauth:")
+
+    /** 列表型字段（每行一个，也接受逗号分隔）用多行输入框。 */
+    fun multiline(type: PiSettingType): Boolean = type is PiSettingType.StrList
 
     private val URL = Regex("https?://\\S+")
 
@@ -112,7 +129,7 @@ object SettingsPanelLogic {
             OverlayModel.Form(
                 id = ADVANCED_PREFIX + settingKey,
                 title = "每模型思考档",
-                fields = listOf(FormField("entries", "模型=思考档（每行一个）", PiSettingType.StrList, help = "例如 anthropic/claude-sonnet-4-5=high；留空 = 全部清除")),
+                fields = listOf(FormField("entries", "模型=思考档（每行一个，也可用逗号分隔）", PiSettingType.StrList, help = "例如 anthropic/claude-sonnet-4-5=high；留空 = 全部清除")),
                 values = mapOf("entries" to cur?.entries?.joinToString("\n") { (k, v) -> "$k=${(v as? JsonPrimitive)?.content.orEmpty()}" }.orEmpty()),
                 submitLabel = "保存",
             )

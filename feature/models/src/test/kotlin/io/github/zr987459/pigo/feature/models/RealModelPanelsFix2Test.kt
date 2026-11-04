@@ -61,7 +61,9 @@ class RealModelPanelsFix2Test {
         val deepseek = panels.providerForm("deepseek") as OverlayModel.Form
         assertEquals(listOf("test", "clear"), deepseek.actions.map { it.actionId })
         // 「清除」真的清掉凭据
-        panels.onPanelEvent("provider.form:deepseek", "clear", null)
+        // 审查第 3 轮 Nit 1：先确认再清除
+        assertTrue(panels.onPanelEvent("provider.form:deepseek", "clear", null).overlay() is OverlayModel.Confirm)
+        panels.onPanelEvent("confirm.clear:deepseek", "confirm", null)
         assertEquals(AuthState.None, auth.state("deepseek"))
         // 「账号登录」进入 OAuth 面板
         assertTrue(panels.onPanelEvent("provider.form:anthropic", "oauth", "{}").overlay().id == "oauth:anthropic")
