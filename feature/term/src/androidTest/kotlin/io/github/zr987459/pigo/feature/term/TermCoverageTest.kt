@@ -305,14 +305,14 @@ class TermCoverageTest {
         val host = newFake()
         rule.setContent { Surface(host) }
         rule.waitForIdle()
-        val stream = host.startStream(StreamScript.counting(300, intervalMs = 5), userText = "从 1 数到 300")
+        val stream = host.startStream(StreamScript.counting(300, intervalMs = 5), userText = "数数")
         rule.waitUntil(60_000) { !stream.isActive }
         rule.waitForIdle()
         assertTrue("仍贴底：${host.scrollAnchor.value}", host.scrollAnchor.value?.followBottom == true)
-        rule.onNodeWithText("300", useUnmergedTree = true).assertIsDisplayed()
+        rule.onNodeWithText("300", substring = true, useUnmergedTree = true).assertIsDisplayed()
         repeat(2) { toggleTwice(host) }
         assertTrue(host.scrollAnchor.value?.followBottom == true)
-        rule.onNodeWithText("300", useUnmergedTree = true).assertIsDisplayed()
+        rule.onNodeWithText("300", substring = true, useUnmergedTree = true).assertIsDisplayed()
     }
 
     @Test
@@ -335,6 +335,8 @@ class TermCoverageTest {
     @Test
     fun headerListsLoadedResources() {
         setUp(TermEnv(contextFiles = listOf("/root/.pi/agent/AGENTS.md", "/root/proj/AGENTS.md")))
+        rule.onNodeWithTag("term:transcript").performTouchInput { swipeDown() } // 页眉在列表顶部
+        rule.waitForIdle()
         rule.onNodeWithTag("term:header:section:Context", useUnmergedTree = true).assertIsDisplayed()
         rule.onNodeWithText("/root/proj/AGENTS.md", substring = true, useUnmergedTree = true).assertIsDisplayed()
         // get_commands 里的提示模板（Fake 夹具 fix-tests）列在 [Prompts]
