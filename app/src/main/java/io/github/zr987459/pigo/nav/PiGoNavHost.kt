@@ -1,6 +1,5 @@
 package io.github.zr987459.pigo.nav
 
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -61,13 +60,7 @@ import io.github.zr987459.pigo.di.BindingContext
 import io.github.zr987459.pigo.di.BindingMode
 import io.github.zr987459.pigo.di.EngineBindings
 import io.github.zr987459.pigo.di.StoreBindings
-import io.github.zr987459.pigo.form.FormHost
-import io.github.zr987459.pigo.feature.chat.ui.calm.CalmSurface
 import io.github.zr987459.pigo.form.toggleForm
-import io.github.zr987459.pigo.form.TermBack
-import io.github.zr987459.pigo.feature.term.TermEnv
-import io.github.zr987459.pigo.feature.term.TermSurface
-import io.github.zr987459.pigo.feature.term.FileMatch as TermFileMatch
 import io.github.zr987459.pigo.feature.onboarding.OnboardingScreen
 import io.github.zr987459.pigo.feature.settings.SettingsFocus
 import io.github.zr987459.pigo.feature.settings.SettingsScreen
@@ -176,40 +169,16 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
                         }
                         graph.sessionHost.draft.value = ImageAttach.add(graph.sessionHost.draft.value, imgs)
                     }
-                    FormHost(
-                        graph.sessionHost,
-                        calm = {
-                            CalmSurface(
-                                graph.sessionHost,
-                                onOpenSettings = { navController.openSettings(SETTINGS_FOCUS_MODELS) },
-                                panelEvents = graph.modelPanelEvents,
-                                fileSearch = graph.fileSearch?.asLambda,
-                                onAttachImage = { pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-                                backHandler = { enabled, onBack -> BackHandler(enabled, onBack) },
-                            )
-                        },
-                        term = {
-                            // 终端形态（r3/term）：同一个 SessionHost（会话、引擎、草稿、overlay 栈共用），切换只改 form。
-                            val host = graph.sessionHost
-                            val overlays by host.overlay.items.collectAsState()
-                            val closable = TermBack.topClosable(overlays)
-                            // 返回键：先关最上层可关的面板（扩展对话框固定在顶，不拦截，与 UI 形态一致）；都没有时退到后台。
-                            BackHandler(enabled = closable != null) {
-                                closable?.let { m -> TermBack.close(host, m) { id, k -> scope.launch { runCatching { graph.modelPanelEvents.onEvent(id, k, null) } } } }
-                            }
-                            val search = graph.fileSearch
-                            val env = remember(graph) {
-                                TermEnv(
-                                    fileSearch = search?.let { fs -> val f: suspend (String) -> List<TermFileMatch> = { q -> fs.suggest(q).map { TermFileMatch(it.path, it.isDir, it.completion) } }; f },
-                                    panelSource = graph.panelSource,
-                                    onPanelEvent = { id, k, v -> graph.modelPanelEvents.onEvent(id, k, v) },
-                                    onAttachImage = { pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-                                )
-                            }
-                            val cwd = remember(currentSession) { io.github.zr987459.pigo.di.AppFileSearch.cwdOf(graph.engine)() ?: "~" }
-                            TermSurface(host, cwd = cwd, home = "/root", env = env)
-                        },
-                        // 各层都关着时按返回：退到后台，不结束 Activity、不打断生成（N4；终端形态同理）。
+                    val cwd = remember(currentSession) { io.github.zr987459.pigo.di.AppFileSearch.cwdOf(graph.engine)() ?: "~" }
+                    ChatPage(
+                        host = graph.sessionHost,
+                        panelEvents = graph.modelPanelEvents,
+                        panelSource = graph.panelSource,
+                        fileSearch = graph.fileSearch?.asLambda,
+                        cwd = cwd,
+                        home = graph.homeDir,
+                        onOpenSettings = { navController.openSettings(SETTINGS_FOCUS_MODELS) },
+                        onAttachImage = { pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                         onBackground = { activity?.moveTaskToBack(true) },
                     )
                 }

@@ -1,14 +1,17 @@
 package io.github.zr987459.pigo
 
 import androidx.activity.ComponentActivity
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.text.TextRange
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import io.github.zr987459.pigo.contract.ChatItem
-import io.github.zr987459.pigo.contract.ContentBlock
 import io.github.zr987459.pigo.contract.ExtUiRequest
 import io.github.zr987459.pigo.contract.fake.FakeSessionHost
 import io.github.zr987459.pigo.contract.fake.StreamScript
@@ -18,9 +21,7 @@ import io.github.zr987459.pigo.contract.session.OverlayModel
 import io.github.zr987459.pigo.contract.session.SelectGroup
 import io.github.zr987459.pigo.contract.session.SelectItem
 import io.github.zr987459.pigo.contract.session.UiForm
-import io.github.zr987459.pigo.feature.chat.ui.calm.CalmSurface
-import io.github.zr987459.pigo.feature.term.TermSurface
-import io.github.zr987459.pigo.form.FormHost
+import io.github.zr987459.pigo.nav.ChatPage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -33,10 +34,15 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * DESIGN-r3 §7.2 第 3 条（A 档，无 Key，CI 模拟器跑）：生成中经真实 UI 一键切换形态（UI 顶栏 ⇄、终端键条 ⇄UI），
- * 流式不中断、不重启、不发命令；草稿（文字、光标、图片、@ 引用）、扩展对话框、打开中的模型面板（搜索词）都保留。
- * 两层是真实的 CalmSurface 与 TermSurface，经 FormHost（Crossfade(form)）切换，共用同一个 SessionHost。
- * B 档（真引擎，需 pigoProvider / pigoKey）见 docs/testing/r3-device-checklist.md G 节。
+ * DESIGN-r3 §7.2 第 3 条（A 档，无 Key，CI 模拟器跑）。
+ *
+ * 装配：App 里的同一个 [ChatPage]（FormHost + CalmSurface + TermSurface，TermEnv 的返回键 / 附件 / 面板事件同 PiGoNavHost），
+ * 只把 AppGraph 的依赖换成 Fake（引擎 = FakeScriptedEngine，经 FakeSessionHost）。
+ *
+ * 流式：100 段、每段 100ms，共约 10 秒。段间隔取 100ms 是因为 Compose 测试的每次查找 / 点击都要等界面空闲，
+ * 500 段 × 20ms 下界面在流结束前没有空档（CI 79ffb91 实测 ComposeNotIdleException），无法在流中途经 UI 点击切换。
+ *
+ * 全部切换都经真实 UI：UI 形态顶栏的 ⇄ 与终端键条固定在最右的 ⇄UI（同一个测试标签 form:toggle），共 16 次。
  */
 @RunWith(AndroidJUnit4::class)
 class FormSwitchStreamingTest {
@@ -50,15 +56,32 @@ class FormSwitchStreamingTest {
 
     private fun exists(tag: String) = rule.onAllNodes(hasTestTag(tag), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
 
-    private fun assistantText(host: FakeSessionHost): String =
-        (host.chat.value.items.lastOrNull { it is ChatItem.Assistant } as? ChatItem.Assistant)
-            ?.blocks?.filterIsInstance<ContentBlock.Text>()?.joinToString("") { it.text }.orEmpty()
+    /** 屏幕上（当前形态）能看到的最大段号；-1 = 一段都没看到。读的是界面语义树里的文字，不是 host 状态。 */
+    private fun maxSegmentOnScreen(): Int {
+        val re = Regex("第(\\d+)段")
+        return rule.onAllNodes(hasText("段", substring = true), useUnmergedTree = true).fetchSemanticsNodes()
+            .flatMap { n -> n.config.getOrNull(SemanticsProperties.Text).orEmpty().map { it.text } }
+            .flatMap { t -> re.findAll(t).map { it.groupValues[1].toInt() } }
+            .maxOrNull() ?: -1
+    }
+
+    private fun clickToggle() {
+        // 不滚动：⇄UI 固定在键条可见位置（PR #26 审查 I1），UI 形态的 ⇄ 在顶栏
+        rule.onNodeWithTag("form:toggle", useUnmergedTree = true).performClick()
+        rule.waitForIdle()
+    }
 
     @Test
     fun switchingDuringStreamingKeepsEverything() {
         val host = FakeSessionHost(scope, initialForm = UiForm.CALM)
+        var attachOpened = 0
+        var background = 0
         rule.setContent {
-            FormHost(host, calm = { CalmSurface(host, dark = false) }, term = { TermSurface(host) })
+            ChatPage(
+                host = host, panelEvents = null, panelSource = null, fileSearch = null,
+                cwd = "/root/pi-cwd", home = "/root",
+                onOpenSettings = {}, onAttachImage = { attachOpened++ }, onBackground = { background++ },
+            )
         }
         rule.waitForIdle()
         val draft = DraftState(
@@ -69,28 +92,33 @@ class FormSwitchStreamingTest {
         rule.runOnIdle { host.draft.value = draft }
         host.clearCommands()
 
-        // 慢速流：120 段、每段 100ms（约 12 秒）。段间留空档，Compose 才能在每次切换后进入空闲（20ms 一段会让 waitForIdle 超时，CI 79ffb91 实测）
-        val script = StreamScript(List(120) { "第${it}段\n" }, intervalMs = 100)
-        val job = host.startStream(script, userText = "数到一百二")
-        rule.waitUntil(5_000) { assistantText(host).isNotEmpty() }
+        val script = StreamScript(List(100) { "第${it}段\n" }, intervalMs = 100)
+        val job = host.startStream(script, userText = "数到一百")
+        rule.waitUntil(5_000) { maxSegmentOnScreen() >= 0 }
 
-        // ① 经真实 UI 每 300ms 点一次 ⇄，共 10 次；屏幕背后的助手文本长度单调不减
-        var lastLen = 0
+        // ① 生成中经真实 UI 每 300ms 切一次，共 10 次：屏幕上的最大段号单调不减（列表贴底，流式不断）
+        var last = maxSegmentOnScreen()
         repeat(10) { i ->
-            // 终端的 ⇄UI 在可横向滚动的键条靠右（第 14 个键），窄屏上在视口外；performClick 点在视口外坐标会落空
-            // （CI 3c6aa27：expected CALM but was TERM）。先 performScrollTo 滚到可见再点，与 TermCoverageTest.tap() 一致。
-            rule.onNodeWithTag("form:toggle", useUnmergedTree = true).apply { runCatching { performScrollTo() } }.performClick()
-            rule.waitForIdle()
-            assertEquals(if (i % 2 == 0) UiForm.TERM else UiForm.CALM, host.form.value)
-            if (host.form.value == UiForm.TERM) assertTrue(exists("term:surface"))
-            val len = assistantText(host).length
-            assertTrue("切换后文本变短：$lastLen → $len", len >= lastLen)
-            lastLen = len
+            clickToggle()
+            val want = if (i % 2 == 0) UiForm.TERM else UiForm.CALM
+            assertEquals(want, host.form.value)
+            assertTrue(exists(if (want == UiForm.TERM) "term:surface" else "calm:composer"))
+            val now = maxSegmentOnScreen()
+            assertTrue("切换后屏幕上的段号倒退：$last → $now（第 ${i + 1} 次切换）", now >= last)
+            last = now
             Thread.sleep(300)
         }
         assertEquals(UiForm.CALM, host.form.value)
+        assertTrue("生成仍在进行", job.isActive)
 
-        // ② 生成中压入扩展 confirm 与打开中的模型面板（搜索词 son），再切换 6 次
+        // 发送键状态：生成中 + 输入框有草稿 = 「引导」；输入框草稿与光标原样
+        assertTrue(exists("send:steer"))
+        rule.onNodeWithTag("calm:input").assert(hasText("草稿abc"))
+        rule.onNodeWithTag("calm:input").assert(SemanticsMatcher.expectValue(SemanticsProperties.TextSelectionRange, TextRange(3)))
+        assertTrue(exists("calm:image:0"))
+        assertTrue(exists("calm:ref:a.kt"))
+
+        // ② 生成中压入扩展 confirm 与打开中的模型面板（搜索词 son），再经真实 UI 切 6 次
         rule.runOnIdle {
             host.overlay.push(
                 OverlayModel.SelectList(
@@ -100,18 +128,22 @@ class FormSwitchStreamingTest {
             )
             host.showExtDialog(ExtUiRequest(id = "req-1", method = "confirm", title = "确认", message = "继续吗？", timeoutMs = 60_000), System.currentTimeMillis())
         }
-        repeat(6) {
-            rule.runOnIdle { host.form.value = UiForm.TERM }
-            rule.waitForIdle()
-            rule.runOnIdle { host.form.value = UiForm.CALM }
-            rule.waitForIdle()
+        rule.waitForIdle()
+        repeat(6) { i ->
+            clickToggle()
+            assertEquals(if (i % 2 == 0) UiForm.TERM else UiForm.CALM, host.form.value)
+            if (host.form.value == UiForm.TERM) {
+                rule.onNodeWithTag("term:editor").assert(hasText("草稿abc", substring = true))
+                assertTrue(exists("overlay:ext:req-1"))
+            }
         }
+        assertEquals(UiForm.CALM, host.form.value)
 
-        // 草稿逐字段相等（文字、光标、图片、@ 引用），UI 上也看得到
+        // 草稿逐字段相等，屏幕上也是原样
         assertEquals(draft, host.draft.value)
-        assertTrue(exists("calm:image:0"))
-        assertTrue(exists("calm:ref:a.kt"))
-        // 模型面板与搜索词还在、扩展对话框还在；点「确定」后 Fake 收到同一 request id
+        rule.onNodeWithTag("calm:input").assert(hasText("草稿abc"))
+        rule.onNodeWithTag("calm:input").assert(SemanticsMatcher.expectValue(SemanticsProperties.TextSelectionRange, TextRange(3)))
+        // 模型面板搜索词还在、扩展对话框还在；点「确定」后 Fake 收到同一 request id
         assertEquals("son", (host.overlay.items.value.first { it.id == "model.select" } as OverlayModel.SelectList).query)
         rule.waitUntil(3_000) { exists("overlay:ext:req-1") }
         rule.onNodeWithTag("ext:ok", useUnmergedTree = true).performClick()
@@ -120,16 +152,23 @@ class FormSwitchStreamingTest {
         assertTrue(host.commands.value.none { it.args["cancelled"] == "true" })
         rule.runOnIdle { host.overlay.clear() }
 
-        // 流式完整（不丢不重）、引擎只启动一次、切换不发 abort / new_session / switch_session / restart
+        // 流式完整、引擎只启动一次、切换不发 abort / new_session / switch_session / restart；没有误触附件 / 退到后台
         rule.waitUntil(30_000) { job.isCompleted }
-        assertEquals(script.fullText, assistantText(host))
+        rule.waitForIdle()
+        val full = (host.chat.value.items.last { it is io.github.zr987459.pigo.contract.ChatItem.Assistant } as io.github.zr987459.pigo.contract.ChatItem.Assistant)
+            .blocks.filterIsInstance<io.github.zr987459.pigo.contract.ContentBlock.Text>().joinToString("") { it.text }
+        assertEquals(script.fullText, full)
         assertEquals(1, host.fakeEngine.startCount)
         assertEquals(0, host.fakeEngine.restartCount)
         assertTrue("切换形态不得发出命令：${host.commands.value}",
             host.commands.value.none { it.type in setOf("abort", "new_session", "switch_session", "restart") })
-        // 最终在终端形态也看得到同一份结尾（列表贴底）
-        rule.runOnIdle { host.form.value = UiForm.TERM }
-        rule.waitForIdle()
-        rule.waitUntil(3_000) { rule.onAllNodes(androidx.compose.ui.test.hasText("第119段", substring = true), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+        assertEquals(0, attachOpened)
+        assertEquals(0, background)
+        // 生成结束：发送键回到「发送」（有草稿可发）；屏幕贴底能看到最后一段——两种形态都看
+        assertTrue(exists("send:send"))
+        rule.waitUntil(3_000) { maxSegmentOnScreen() == 99 }
+        clickToggle()
+        assertEquals(UiForm.TERM, host.form.value)
+        rule.waitUntil(3_000) { maxSegmentOnScreen() == 99 }
     }
 }

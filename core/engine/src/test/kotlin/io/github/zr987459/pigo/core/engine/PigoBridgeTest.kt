@@ -152,10 +152,20 @@ class PigoBridgeTest {
 
     @Test
     fun normalizePath() {
-        assertEquals("/root/.pi/a.jsonl", PigoBridge.normalizePath("~/.pi/a.jsonl"))
-        assertEquals("/root/.pi/a.jsonl", PigoBridge.normalizePath("/root//.pi/./x/../a.jsonl/"))
-        assertEquals("/proj/s/a.jsonl", PigoBridge.normalizePath("s/a.jsonl", cwd = "/proj"))
-        assertEquals("/root", PigoBridge.normalizePath("~"))
-        assertEquals(null, PigoBridge.normalizePath("  "))
+        assertEquals("/root/.pi/a.jsonl", PigoBridge.normalizePath("~/.pi/a.jsonl", home = "/root"))
+        assertEquals("/root/.pi/a.jsonl", PigoBridge.normalizePath("/root//.pi/./x/../a.jsonl/", home = "/root"))
+        assertEquals("/proj/s/a.jsonl", PigoBridge.normalizePath("s/a.jsonl", cwd = "/proj", home = "/root"))
+        assertEquals("/root", PigoBridge.normalizePath("~", home = "/root"))
+        assertEquals(null, PigoBridge.normalizePath("  ", home = "/root"))
+    }
+
+    /** PR #24 审查积压 Nit：`~` 按运行环境的实际 HOME 展开（EngineConfig.extraEnv 覆盖 HOME 时跟着变），不再写死 /root。 */
+    @Test
+    fun normalizePathUsesRuntimeHome() {
+        val sandbox = EngineConfig(extraEnv = mapOf("HOME" to "/tmp/sbx"))
+        assertEquals("/tmp/sbx", sandbox.homeDir)
+        assertEquals("/tmp/sbx/.pi/a.jsonl", PigoBridge.normalizePath("~/.pi/a.jsonl", home = sandbox.homeDir))
+        assertEquals(EngineConfig.GUEST_HOME, EngineConfig().homeDir)
+        assertEquals("/root/x", PigoBridge.normalizePath("~/x", home = EngineConfig().homeDir))
     }
 }

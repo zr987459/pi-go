@@ -11,6 +11,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTouchInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.github.zr987459.pigo.attach.ImageAttach
@@ -51,6 +52,84 @@ class AppCoverageTest {
 
     private fun newHost() = FakeSessionHost(CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate), initialForm = UiForm.CALM)
 
+    /** App 里的同一份会话页装配（PiGoNavHost 用的 ChatPage），依赖换成 Fake（PR #26 审查 Nit 3：不用裸 TermSurface）。 */
+    @androidx.compose.runtime.Composable
+    private fun chatPage(
+        host: FakeSessionHost,
+        panelEvents: PanelEventSink? = null,
+        onAttachImage: () -> Unit = {},
+        onBackground: () -> Unit = {},
+    ) = io.github.zr987459.pigo.nav.ChatPage(
+        host = host, panelEvents = panelEvents, panelSource = null, fileSearch = null,
+        cwd = "/root/pi-cwd", home = "/root", onOpenSettings = {}, onAttachImage = onAttachImage, onBackground = onBackground,
+    )
+
+    /**
+     * Nit 1、3：终端形态返回键 = 与 Esc 同一条 TermPanelRouter.close：先关最上层可关面板（账号登录成功时发 done，结果提示照常显示），
+     * 扩展对话框固定在顶不被关、也不挡下面的面板；都没有时退到后台，不重启引擎。
+     */
+    @Test
+    fun termBackClosesPanelsViaRouterSkipsExtDialogThenBackground() {
+        val host = FakeSessionHost(CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate), initialForm = UiForm.TERM)
+        val events = mutableListOf<Pair<String, String>>()
+        val sink = object : PanelEventSink {
+            override fun owns(overlayId: String) = overlayId.startsWith("oauth:")
+            override suspend fun onEvent(overlayId: String, key: String, value: String?): ActionResult {
+                events += overlayId to key
+                return if (key == "done") ActionResult.Toast("已自动选回模型 sonnet") else ActionResult.Done
+            }
+        }
+        var background = 0
+        rule.setContent { chatPage(host, panelEvents = sink, onBackground = { background++ }) }
+        rule.waitForIdle()
+        rule.onNodeWithTag("term:surface").assertExists()
+        rule.runOnUiThread {
+            host.overlay.push(OverlayModel.Text("help.hotkeys", "快捷键", "Esc 中止"))
+            host.overlay.push(OverlayModel.Text("oauth:anthropic", "登录", "已登录", flow = io.github.zr987459.pigo.contract.session.FlowState.DONE))
+            host.showExtDialog(io.github.zr987459.pigo.contract.ExtUiRequest("req-9", "confirm", title = "确认", message = "继续？"))
+        }
+        rule.waitForIdle()
+        val startsBefore = host.fakeEngine.startCount
+
+        pressBack() // 关 oauth（扩展对话框在顶但不被关）
+        assertEquals(listOf("help.hotkeys", "ext:req-9"), host.overlay.items.value.map { it.id })
+        rule.waitUntil(3_000) { events == listOf("oauth:anthropic" to "done") }
+        rule.waitUntil(3_000) { rule.onAllNodes(androidx.compose.ui.test.hasText("已自动选回模型 sonnet", substring = true), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+
+        pressBack() // 关 help.hotkeys
+        assertEquals(listOf("ext:req-9"), host.overlay.items.value.map { it.id })
+        assertEquals(0, background)
+
+        pressBack() // 只剩扩展对话框：不拦截，退到后台
+        assertEquals(1, background)
+        assertEquals(listOf("ext:req-9"), host.overlay.items.value.map { it.id })
+        assertTrue(!rule.activity.isFinishing)
+        assertEquals(startsBefore, host.fakeEngine.startCount)
+        assertEquals(0, host.fakeEngine.restartCount)
+    }
+
+    /** Nit 3：终端键条 📎（attach.image）→ 装配层的系统照片选择器 → 选中的图片进共用草稿，切到 UI 形态也看得到。 */
+    @Test
+    fun termAttachKeyOpensPickerAndFillsSharedDraft() {
+        val host = FakeSessionHost(CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate), initialForm = UiForm.TERM)
+        var opened = 0
+        rule.setContent {
+            chatPage(host, onAttachImage = {
+                opened++
+                host.draft.value = ImageAttach.add(host.draft.value, listOf(DraftImage("content://media/picker/0/7", "image/png")))
+            })
+        }
+        rule.waitForIdle()
+        rule.onNodeWithTag("term:key:📎", useUnmergedTree = true).apply { runCatching { performScrollTo() } }.performClick()
+        rule.waitForIdle()
+        assertEquals(1, opened)
+        assertEquals(listOf("content://media/picker/0/7"), host.draft.value.images.map { it.uri })
+        rule.onNodeWithTag("form:toggle", useUnmergedTree = true).performClick()
+        rule.waitForIdle()
+        assertEquals(UiForm.CALM, host.form.value)
+        rule.onNodeWithTag("calm:image:0", useUnmergedTree = true).assertExists()
+    }
+
     private fun pressBack() {
         rule.runOnUiThread { rule.activity.onBackPressedDispatcher.onBackPressed() }
         rule.waitForIdle()
@@ -61,14 +140,7 @@ class AppCoverageTest {
     fun backClosesPanelThenSessionListThenGoesToBackground() {
         val host = newHost()
         var background = 0
-        rule.setContent {
-            FormHost(
-                host,
-                calm = { CalmSurface(host, backHandler = { enabled, onBack -> BackHandler(enabled, onBack) }) },
-                term = { TermSurface(host) },
-                onBackground = { background++ },
-            )
-        }
+        rule.setContent { chatPage(host, onBackground = { background++ }) }
         rule.onNodeWithTag("persist:session.resume").performClick()
         rule.waitForIdle()
         rule.onNodeWithTag("calm:drawer").assertIsDisplayed()

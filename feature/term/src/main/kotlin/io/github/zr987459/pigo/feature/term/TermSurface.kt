@@ -1,5 +1,7 @@
 package io.github.zr987459.pigo.feature.term
 
+import androidx.compose.ui.Alignment
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -24,6 +26,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import io.github.zr987459.pigo.contract.session.OverlayModel
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -114,6 +117,12 @@ fun TermSurface(
     piVersion: String = "1.5.0",
     userKeybindingsJson: String? = null,
     env: TermEnv = TermEnv(),
+    /**
+     * 系统返回键（r3/app PR 2，PR #26 审查 Nit 1）：装配层传入 `{ enabled, onBack -> BackHandler(enabled, onBack) }`。
+     * 有可关面板时（扩展对话框固定在顶、不被关）按返回 = 与 Esc 同一条 [TermPanelRouter.close]（done / cancel 结果照常落地、清面板提示）；
+     * 没有时不拦截，交给外层（FormHost 退到后台）。null = 不处理返回键。
+     */
+    backHandler: (@Composable (enabled: Boolean, onBack: () -> Unit) -> Unit)? = null,
 ) {
     val settings by host.settings.values.collectAsState()
     val themeName = (settings["theme"] as? JsonPrimitive)?.contentOrNull
@@ -122,7 +131,7 @@ fun TermSurface(
         (settings["enabledModels"] as? kotlinx.serialization.json.JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty()
     }
     CompositionLocalProvider(LocalPiTokens provides tokens) {
-        TermScreen(host, modifier, cwd, home, gitBranch, piVersion, userKeybindingsJson, settings.mapValues { (it.value as? JsonPrimitive)?.contentOrNull }, env, enabledModels)
+        TermScreen(host, modifier, cwd, home, gitBranch, piVersion, userKeybindingsJson, settings.mapValues { (it.value as? JsonPrimitive)?.contentOrNull }, env, enabledModels, backHandler)
     }
 }
 
@@ -175,6 +184,7 @@ private fun TermScreen(
     settings: Map<String, String?>,
     env: TermEnv,
     enabledModels: List<String>,
+    backHandler: (@Composable (enabled: Boolean, onBack: () -> Unit) -> Unit)?,
 ) {
     val tokens = LocalPiTokens.current
     val scope = rememberCoroutineScope()
@@ -226,6 +236,12 @@ private fun TermScreen(
     // 面板路由与结果落地（审查第 3 轮 Important 1、2）：见 TermPanelRouter
     val panels = remember(host, env, catalogIds) {
         TermPanelRouter(host, env, catalogIds, scope, runAction = { id, a -> run(id, a) }, toast = { toast = it })
+    }
+
+    if (backHandler != null) {
+        val stack by host.overlay.items.collectAsState()
+        val closable = stack.lastOrNull { it !is OverlayModel.ExtDialog }
+        backHandler(closable != null) { closable?.let { panels.close(it) } }
     }
 
     fun toggleForm() { host.form.value = if (host.form.value == UiForm.TERM) UiForm.CALM else UiForm.TERM }
@@ -605,7 +621,12 @@ private fun TermScreen(
 
         // ---- 触屏键条（接外接键盘时可收起） ----
         if (stripVisible) KeyStrip(TermInput.stripKeys(catalog), fontSp, tokens, ::onStripKey, onCollapse = { stripVisible = false })
-        else Text("⌨", modifier = Modifier.clickable { stripVisible = true }.padding(4.dp).testTag("term:strip:show"), color = tokens.fgOf("dim"))
+        else Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("⌨", modifier = Modifier.clickable { stripVisible = true }.padding(4.dp).testTag("term:strip:show"), color = tokens.fgOf("dim"))
+            Spacer(Modifier.weight(1f))
+            // 键条收起时形态切换键仍在（PR #26 审查 I1：一键即切不能藏起来）
+            FormKey(fontSp, tokens) { onStripKey(TermInput.KEY_FORM) }
+        }
 
         toast?.let { t ->
             LaunchedEffect(t) { delay(2500); toast = null }
@@ -772,21 +793,37 @@ private fun Editor(
 
 @Composable
 private fun KeyStrip(keys: List<TermInput.StripKey>, fontSp: Float, tokens: PiTokens, onKey: (String) -> Unit, onCollapse: () -> Unit) {
-    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).testTag("term:strip")) {
-        keys.forEach { k ->
-            // ↑↓、⇞⇟ 拆成两个键帽（Nit 2、3）：第一个沿用原测试标签（上 / 上一条），第二个加 `:down` / `:next`
-            val second = when (k.key) { "↑↓" -> "↓" to "↑↓:down"; "⇞⇟" -> "⇟" to "⇞⇟:next"; else -> null }
-            Text(
-                if (second != null) k.label.take(1) else k.label,
-                style = monoStyle(fontSp.sp, tokens).copy(color = tokens.fgOf(if (k.key == "⏎") "accent" else "muted")),
-                modifier = Modifier.clickable { onKey(k.key) }.padding(horizontal = 10.dp, vertical = 8.dp).testTag(if (k.key == TermInput.KEY_FORM) "form:toggle" else "term:key:${k.key}"),
-            )
-            if (second != null) Text(
-                second.first,
-                style = monoStyle(fontSp.sp, tokens).copy(color = tokens.fgOf("muted")),
-                modifier = Modifier.clickable { onKey(second.second) }.padding(horizontal = 10.dp, vertical = 8.dp).testTag("term:key:${second.second}"),
-            )
+    // ⇄UI（形态切换）固定在键条最右、不随横向滚动移出视口（PR #26 审查 I1）；其余键在左侧可横向滚动的区域里。
+    val formKey = keys.firstOrNull { it.key == TermInput.KEY_FORM }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()).testTag("term:strip")) {
+            keys.forEach { k ->
+                if (k.key == TermInput.KEY_FORM) return@forEach
+                // ↑↓、⇞⇟ 拆成两个键帽（Nit 2、3）：第一个沿用原测试标签（上 / 上一条），第二个加 `:down` / `:next`
+                val second = when (k.key) { "↑↓" -> "↓" to "↑↓:down"; "⇞⇟" -> "⇟" to "⇞⇟:next"; else -> null }
+                Text(
+                    if (second != null) k.label.take(1) else k.label,
+                    style = monoStyle(fontSp.sp, tokens).copy(color = tokens.fgOf(if (k.key == "⏎") "accent" else "muted")),
+                    modifier = Modifier.clickable { onKey(k.key) }.padding(horizontal = 10.dp, vertical = 8.dp).testTag("term:key:${k.key}"),
+                )
+                if (second != null) Text(
+                    second.first,
+                    style = monoStyle(fontSp.sp, tokens).copy(color = tokens.fgOf("muted")),
+                    modifier = Modifier.clickable { onKey(second.second) }.padding(horizontal = 10.dp, vertical = 8.dp).testTag("term:key:${second.second}"),
+                )
+            }
+            Text("▾", color = tokens.fgOf("dim"), modifier = Modifier.clickable(onClick = onCollapse).padding(horizontal = 10.dp, vertical = 8.dp).testTag("term:strip:hide"))
         }
-        Text("▾", color = tokens.fgOf("dim"), modifier = Modifier.clickable(onClick = onCollapse).padding(horizontal = 10.dp, vertical = 8.dp).testTag("term:strip:hide"))
+        if (formKey != null) FormKey(fontSp, tokens, formKey.label) { onKey(TermInput.KEY_FORM) }
     }
+}
+
+/** 固定可见的形态切换键（测试标签 form:toggle，与 UI 形态顶栏的 ⇄ 同名）。 */
+@Composable
+private fun FormKey(fontSp: Float, tokens: PiTokens, label: String = TermInput.KEY_FORM, onClick: () -> Unit) {
+    Text(
+        label,
+        style = monoStyle(fontSp.sp, tokens).copy(color = tokens.fgOf("muted")),
+        modifier = Modifier.clickable(onClick = onClick).padding(horizontal = 10.dp, vertical = 8.dp).testTag("form:toggle"),
+    )
 }

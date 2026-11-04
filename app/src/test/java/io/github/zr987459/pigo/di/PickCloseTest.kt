@@ -1,45 +1,69 @@
 package io.github.zr987459.pigo.di
 
 import io.github.zr987459.pigo.contract.actions.ActionResult
+import io.github.zr987459.pigo.contract.models.ModelPanels
+import io.github.zr987459.pigo.contract.fake.FakeScriptedEngine
 import io.github.zr987459.pigo.contract.session.OverlayModel
 import io.github.zr987459.pigo.contract.session.OverlayStack
 import io.github.zr987459.pigo.contract.session.SelectGroup
 import io.github.zr987459.pigo.contract.session.SelectItem
-import io.github.zr987459.pigo.form.TermBack
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Test
+import java.lang.reflect.Proxy
 
-/** 交接残留：/model 选中并切换成功后关闭选择面板（两形态共用）；终端返回键关面板但不关扩展对话框。 */
+/**
+ * /model 选完自动关（PR #26 审查 Nit 2）：判据是「本次事件期间 set_model 成功」（SetModelSignal），不看提示文案；
+ * 覆盖直接选中与「选未配置模型 → 填 Key → 自动选回」两条路径。
+ */
 class PickCloseTest {
     private fun picker() = OverlayModel.SelectList("model.select", "选择模型", listOf(SelectGroup(null, listOf(SelectItem("model:a/b", "b")))))
+    private fun form() = OverlayModel.Text("provider.form:a", "a", "")
 
     @Test
-    fun successfulPickClosesPicker() {
+    fun directPickClosesPickerWhateverTheToastSays() {
         val s = OverlayStack().apply { push(picker()) }
-        val r = PickClose.after(s, "model.select", "model:a/b", ActionResult.Toast("已切换到 b"))
-        assertEquals(ActionResult.Toast("已切换到 b"), r)
-        assertEquals(emptyList<String>(), s.items.value.map { it.id })
-        s.push(picker())
-        PickClose.after(s, "model.select", "select", ActionResult.Toast("已切换到 b，下一轮生效"))
+        val r = ActionResult.Toast("Switched to b")
+        assertEquals(r, PickClose.after(s, "model.select", r, switched = true))
         assertEquals(emptyList<String>(), s.items.value.map { it.id })
     }
 
     @Test
-    fun failuresKeyCapsAndOtherPanelsStayOpen() {
+    fun autoSelectBackAfterKeyClosesPickerAndForm() {
+        val s = OverlayStack().apply { push(picker()); push(form()) }
+        PickClose.after(s, "provider.form:a", ActionResult.Toast("已切换到 b"), switched = true)
+        assertEquals(emptyList<String>(), s.items.value.map { it.id })
+    }
+
+    @Test
+    fun noSwitchOrOverlayKeepsPanels() {
         val s = OverlayStack().apply { push(picker()) }
-        PickClose.after(s, "model.select", "model:a/b", ActionResult.Toast("切换失败：x"))
-        PickClose.after(s, "model.select", "star:a/b", ActionResult.Toast("已切换到 b"))
-        PickClose.after(s, "model.select", "model:a/b", ActionResult.Overlay(OverlayModel.Text("provider.form:a", "a", "")))
-        PickClose.after(s, "auth.logout", "model:a/b", ActionResult.Toast("已切换到 b"))
+        PickClose.after(s, "model.select", ActionResult.Toast("已切换到 b"), switched = false) // 文案像成功但没切换：不关
+        PickClose.after(s, "model.select", ActionResult.Overlay(form()), switched = true)
         assertEquals(listOf("model.select"), s.items.value.map { it.id })
+        // 选择面板不在栈里（例如在设置页保存 Key）：什么都不关
+        val s2 = OverlayStack().apply { push(form()) }
+        PickClose.after(s2, "provider.form:a", ActionResult.Toast("已保存"), switched = true)
+        assertEquals(listOf("provider.form:a"), s2.items.value.map { it.id })
     }
 
     @Test
-    fun termBackSkipsPinnedExtDialog() {
-        val ext = OverlayModel.ExtDialog("ext:1", "确认", io.github.zr987459.pigo.contract.ExtUiRequest("1", "confirm"), 0L)
-        assertEquals("model.select", TermBack.topClosable(listOf(picker(), ext))?.id)
-        assertNull(TermBack.topClosable(listOf(ext)))
-        assertNull(TermBack.topClosable(emptyList()))
+    fun signalCountsOnlySuccessfulSetModelAndEventsSeeIt() = runBlocking {
+        val engine = SetModelSignal(FakeScriptedEngine(CoroutineScope(Dispatchers.Unconfined)))
+        assertEquals(0, engine.count)
+        engine.setModel("a", "b")
+        assertEquals(1, engine.count)
+
+        // ModelPanelEvents 在事件前后比较计数：面板宿主里调了 set_model → switched = true
+        var seen: Boolean? = null
+        val panels = Proxy.newProxyInstance(ModelPanels::class.java.classLoader, arrayOf(ModelPanels::class.java)) { _, m, args ->
+            if (m.name == "onPanelEvent") { runBlocking { engine.setModel("a", "c") }; ActionResult.Toast("ok") } else throw UnsupportedOperationException(m.name)
+        } as ModelPanels
+        val events = ModelPanelEvents(panels, switchCount = { engine.count }) { _, _, r, sw -> seen = sw; r }
+        events.onEvent("provider.form:a", "submit", "{}")
+        assertEquals(true, seen)
+        assertEquals(2, engine.count)
     }
 }

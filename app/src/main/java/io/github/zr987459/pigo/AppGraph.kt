@@ -59,6 +59,9 @@ class AppGraph(context: Context) {
     val runtime: RuntimeManager by lazy { RuntimeBindings.runtime(BindingMode.runtime, ctx, log) }
 
     // 引擎（W2）
+    /** pi 进程实际的 HOME（终端形态把 cwd 显示成 `~/…` 用），真引擎取 EngineConfig.homeDir，Fake 用容器默认值。 */
+    val homeDir: String get() = (((engine as? io.github.zr987459.pigo.di.GatedEngineClient)?.inner ?: engine) as? io.github.zr987459.pigo.core.engine.PiEngine)?.config?.homeDir ?: io.github.zr987459.pigo.core.engine.EngineConfig.GUEST_HOME
+
     val engine: EngineClient by lazy { EngineBindings.engine(BindingMode.engine, ctx, runtime, launchEnv, log) }
 
     // pi 其余 RPC（W1，PR #13 已合入：PiEngine 本身，套同一个预热闸门）
@@ -94,13 +97,20 @@ class AppGraph(context: Context) {
     // 包一层来源记录（r3/term PanelSourceTracker）：交给 PiActionsImpl 的就是这一个，终端形态据此认出 ModelPanels 产出的面板。
     val panelSource: io.github.zr987459.pigo.feature.term.PanelSourceTracker by lazy {
         io.github.zr987459.pigo.feature.term.PanelSourceTracker(
-            RealModelPanels(models.catalog, models.auth, models.custom, engine, appScope, piSettings),
+            RealModelPanels(models.catalog, models.auth, models.custom, setModelSignal, appScope, piSettings),
         )
     }
     val modelPanels: ModelPanels get() = panelSource
 
     /** 两种形态里模型面板的点击、键帽、表单、确认框 → [ModelPanels.onPanelEvent]；选中模型成功后关掉选择面板（[PickClose]）。 */
-    val modelPanelEvents: PanelEventSink by lazy { ModelPanelEvents(modelPanels) { id, key, r -> io.github.zr987459.pigo.di.PickClose.after(sessionHost.overlay, id, key, r) } }
+    val modelPanelEvents: PanelEventSink by lazy {
+        ModelPanelEvents(modelPanels, switchCount = { setModelSignal.count }) { id, _, r, switched ->
+            io.github.zr987459.pigo.di.PickClose.after(sessionHost.overlay, id, r, switched)
+        }
+    }
+
+    /** 交给模型面板的引擎（同一个 [engine]，只多数 set_model 成功次数，PickClose 的结构化信号）。 */
+    val setModelSignal: io.github.zr987459.pigo.di.SetModelSignal by lazy { io.github.zr987459.pigo.di.SetModelSignal(engine) }
 
     /** 当前 pi 进程启动时注入的代理（设置 › 模型「立即重启 pi」比较用）；引擎每次启动时由导航层记下。 */
     val effectiveProxy = kotlinx.coroutines.flow.MutableStateFlow<io.github.zr987459.pigo.contract.NetworkSettings?>(null)

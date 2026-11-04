@@ -11,13 +11,15 @@ import io.github.zr987459.pigo.feature.chat.ui.calm.PanelEventSink
  */
 class ModelPanelEvents(
     private val panels: ModelPanels,
-    /** 结果落地前的装配层处理（[PickClose]：选中模型后关选择面板）；缺省原样返回。 */
-    private val after: suspend (overlayId: String, key: String, r: ActionResult) -> ActionResult = { _, _, r -> r },
+    /** set_model 成功次数（[SetModelSignal.count]）；事件前后不同 = 这次事件切换了模型。 */
+    private val switchCount: () -> Int = { 0 },
+    /** 结果落地前的装配层处理（[PickClose]：切换成功后关选择面板）；缺省原样返回。 */
+    private val after: suspend (overlayId: String, key: String, r: ActionResult, switched: Boolean) -> ActionResult = { _, _, r, _ -> r },
 ) : PanelEventSink {
     override fun owns(overlayId: String): Boolean = isModelPanel(overlayId)
 
     override suspend fun onEvent(overlayId: String, key: String, value: String?): ActionResult =
-        after(overlayId, key, panels.onPanelEvent(overlayId, key, value))
+        switchCount().let { before -> panels.onPanelEvent(overlayId, key, value).let { r -> after(overlayId, key, r, switchCount() != before) } }
 
     companion object {
         private val EXACT = setOf("model.select", "auth.login", "auth.logout", "provider.custom")
