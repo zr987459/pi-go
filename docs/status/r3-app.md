@@ -1,6 +1,8 @@
 # r3/app 状态
 
-> **2026-11-04 10:20 CST 第 3 步已开始**（新工作者）：merge main（含 #16/#17/#19/#20）→ 切真实实现 → calm 面板补 Form.actions/确认框/OAuth 重试 → 真实 SessionHostImpl 的切换测试 → CI 绿 → 开 PR 1。r3/term 未合入，终端继续占位。
+> **2026-11-04 10:56 CST 第 3 步完成，PR #21**（「r3/app：接线 UI 形态」）。b36b24e 的 CI 全绿：push 41762225237、PR 41763038142，都含模拟器 job。下一步是 PR 2（等 r3/term 合入），交接见 PR #21 描述「未完成 / 交接」和下文。
+>
+> 2026-11-04 10:20 CST 第 3 步已开始（新工作者）：merge main（含 #16/#17/#19/#20）→ 切真实实现 → calm 面板补 Form.actions/确认框/OAuth 重试 → 真实 SessionHostImpl 的切换测试 → CI 绿 → 开 PR 1。r3/term 未合入，终端继续占位。
 
 - 2026-11-04 08:11 CST 已开始（基于 main@de09f66）。
 - 2026-11-04 08:16 CST 第 1 步（删除准备）完成。
@@ -24,7 +26,9 @@
   - **面板事件路由缺口**：calm 把面板内点击当 `runAction(面板id, key)`，而 ModelPanels 面板 id 与动作 id 重名（model.select / auth.login / auth.logout / provider.custom），会被 PiActionsImpl 当成「再开一次面板」。修法：calm 新增 `PanelEventSink`（owns(id) + onEvent），CalmSurface 可选参数；app 用 RealModelPanels 实现；Form.actions 按钮、表单提交（JSON）、确认框、OAuth 失败「重试」、OAuth 进度轮询、关闭时 cancel、secret 字段遮挡且不写进 values。
   - 10:50 本地已写（未推，正在编译）：feature/chat/ui/calm/CalmPanels.kt（PanelEventSink + CalmPanelLogic）、CalmSheet/CalmSurface 改动；app/di/AppSessionOps.kt、ModelPanelEvents.kt、SessionBindings.real(Deps)、AppGraph(piSettings/modelPanels/modelPanelEvents/sessionOps/sessionHost)、BindingMode.session=REAL、app/build.gradle.kts 加 :core:session、PiGoNavHost 去旧抽屉与 ChatPage。本地副本 /workspace/work/pigo/r3a/wk（换人后此目录不可见，以分支为准）。
   - 推送 e032b12：上述代码全部提交（本地 :feature:chat/:app compileDebugKotlin 通过）。正在本地跑 CalmPanelLogicTest、RealHostFormSwitchTest、FormToggleNoRpcTest，然后看 CI。
-  - **下一步**：CI 绿 → 开 PR 1「r3/app：接线 UI 形态」，PR 描述写验收证据与越界改动（ui/calm 4 个文件、app/build.gradle.kts）。
+  - 10:50 已开 **PR #21**；本地 CalmPanelLogicTest 6/6、RealHostFormSwitchTest 3/3、FormToggleNoRpcTest 通过。CI：push 41762225237、PR 41763038142（b36b24e）进行中。
+  - 10:56 CI 全绿 → 完成。PR 2 交接见 PR #21 描述「未完成 / 交接」。
+  - （原计划）CI 绿 → 开 PR 1「r3/app：接线 UI 形态」，PR 描述写验收证据与越界改动（ui/calm 4 个文件、app/build.gradle.kts）。
   - 导航：Chat 路由 = FormHost(calm=CalmSurface)，去掉旧 ModalNavigationDrawer/PiGoDrawer/ChatPage（含 CommandPalette、SkillsScreen 引用）；设置路由 = SettingsScreen(panels, piSettings)。
 
 ## 计划
