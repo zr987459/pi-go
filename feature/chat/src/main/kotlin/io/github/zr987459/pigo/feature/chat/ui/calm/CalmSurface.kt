@@ -112,6 +112,7 @@ private fun CalmSurfaceBody(
     val c = Calm.colors
     val scope = rememberCoroutineScope()
     val view = remember { CalmViewState() }
+    val sendGate = remember { PanelSendGate() }
     val chat by host.chat.collectAsState()
     val overlays by host.overlay.items.collectAsState()
     val engineStatus by host.engine.status.collectAsState()
@@ -179,40 +180,6 @@ private fun CalmSurfaceBody(
             CalmComposer(host = host, chat = chat, view = view, onAction = run, fileSearch = fileSearch)
         }
 
-        // 面板（overlay 栈顶，两种形态共用同一模型，§5.4）
-        val top = overlays.lastOrNull()
-        fun dismissTop(t: io.github.zr987459.pigo.contract.session.OverlayModel) {
-            val sink = panelEvents?.takeIf { it.owns(t.id) }
-            if (sink != null) CalmPanelLogic.dismissEvent(t)?.let { k -> scope.launch { sink.onEvent(t.id, k, null) } }
-            host.overlay.remove(t.id)
-        }
-        // 返回键（PR #21 审查 Important 3）：编辑器 → 面板 → 会话列表 → 搜索；都关着不拦截。
-        val backStep = CalmBack.step(view.editorExpanded, top, view.drawerOpen, view.searchOpen)
-        backHandler?.invoke(backStep != CalmBack.Step.NONE) {
-            when (CalmBack.step(view.editorExpanded, host.overlay.top, view.drawerOpen, view.searchOpen)) {
-                CalmBack.Step.EDITOR -> view.editorExpanded = false
-                CalmBack.Step.OVERLAY -> host.overlay.top?.let { dismissTop(it) }
-                CalmBack.Step.DRAWER -> view.drawerOpen = false
-                CalmBack.Step.SEARCH -> { view.searchOpen = false; view.searchQuery = "" }
-                CalmBack.Step.NONE -> Unit
-            }
-        }
-        if (top != null) {
-            val sink = panelEvents?.takeIf { it.owns(top.id) }
-            val panel: ((String, String?) -> Unit)? = sink?.let { s ->
-                { key, value ->
-                    scope.launch {
-                        val r = s.onEvent(top.id, key, value)
-                        CalmPanelLogic.apply(host.overlay, top.id, r)?.let { view.toast = it }
-                    }
-                }
-            }
-            CalmSheet(
-                host = host, model = top, onAction = run, panel = panel,
-                onDismiss = { dismissTop(top) },
-            )
-        }
-
         // ☰ 会话列表
         AnimatedVisibility(view.drawerOpen, enter = fadeIn(tween(180)), exit = fadeOut(tween(180))) {
             Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.32f)).testTag("calm:drawerScrim").clickable(
@@ -233,6 +200,44 @@ private fun CalmSurfaceBody(
             )
         }
 
+        if (view.editorExpanded) {
+            ExpandedEditor(host = host, onClose = { view.editorExpanded = false })
+        }
+
+        // 面板（overlay 栈顶，两种形态共用同一模型，§5.4）。画在会话列表、展开编辑器之上（第 2 轮 Nit 2）：
+        // 从会话列表或编辑器里弹出的面板 / 扩展对话框必须在用户眼前；返回键顺序（CalmBack）与这个画法一致。
+        val top = overlays.lastOrNull()
+        fun dismissTop(t: io.github.zr987459.pigo.contract.session.OverlayModel) {
+            val sink = panelEvents?.takeIf { it.owns(t.id) }
+            if (sink != null) CalmPanelLogic.dismissEvent(t)?.let { k -> scope.launch { sink.onEvent(t.id, k, null) } }
+            host.overlay.remove(t.id)
+        }
+        // 返回键（PR #21 审查第 1 轮 Important 3、第 2 轮 Nit 2）：按画面层级自上而下——面板 → 展开编辑器 → 会话列表 → 搜索；都关着不拦截。
+        val backStep = CalmBack.step(view.editorExpanded, top, view.drawerOpen, view.searchOpen)
+        backHandler?.invoke(backStep != CalmBack.Step.NONE) {
+            when (CalmBack.step(view.editorExpanded, host.overlay.top, view.drawerOpen, view.searchOpen)) {
+                CalmBack.Step.EDITOR -> view.editorExpanded = false
+                CalmBack.Step.OVERLAY -> host.overlay.top?.let { dismissTop(it) }
+                CalmBack.Step.DRAWER -> view.drawerOpen = false
+                CalmBack.Step.SEARCH -> { view.searchOpen = false; view.searchQuery = "" }
+                CalmBack.Step.NONE -> Unit
+            }
+        }
+        if (top != null) {
+            val sink = panelEvents?.takeIf { it.owns(top.id) }
+            val panel: ((String, String?) -> Unit)? = sink?.let { s ->
+                { key, value ->
+                    scope.launch {
+                        CalmPanelLogic.dispatch(host.overlay, sendGate, s, top.id, key, value)?.let { view.toast = it }
+                    }
+                }
+            }
+            CalmSheet(
+                host = host, model = top, onAction = run, panel = panel,
+                onDismiss = { dismissTop(top) },
+            )
+        }
+
         view.toast?.let { t ->
             Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 120.dp)) {
                 Text(
@@ -242,9 +247,6 @@ private fun CalmSurfaceBody(
                     modifier = Modifier.background(c.text.copy(alpha = 0.88f), RoundedCornerShape(12.dp)).padding(horizontal = 16.dp, vertical = 10.dp).testTag("calm:toast"),
                 )
             }
-        }
-        if (view.editorExpanded) {
-            ExpandedEditor(host = host, onClose = { view.editorExpanded = false })
         }
     }
 }

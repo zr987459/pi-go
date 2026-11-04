@@ -371,7 +371,7 @@ private fun FormView(host: SessionHost, model: OverlayModel.Form, onAction: (Str
         }
     }
     // 表单自带的操作（测试、账号登录、清除…）：键帽约定，宿主按栈顶面板转成面板事件（value = 表单值）。
-    // 模型面板（panel != null）由下方 formActions 行经面板事件发出（带密文字段），这里不重复画。
+    // 面板事件模式（装配层 PanelEventSink）下由下面的 extra 按钮发出（带密文字段），这里不重复画（merge main@584a056 适配）。
     if (panel == null && model.actions.isNotEmpty()) KeyCapRow(model.actions.map { it.label to it.actionId }, onAction)
     Spacer(Modifier.size(12.dp))
     val extra = if (panel != null) CalmPanelLogic.formActions(model) else emptyList()
@@ -441,6 +441,8 @@ private fun InlineField(value: String, kb: KeyboardType, enabled: Boolean, onCha
 @Composable
 private fun ConfirmView(host: SessionHost, model: OverlayModel.Confirm, onAction: (String, String?) -> Unit, panel: ((String, String?) -> Unit)? = null) {
     val c = Calm.colors
+    // 点「确定」后立即禁用，等面板方处理完由 CalmPanelLogic.apply 关掉（第 2 轮 Nit 1：连点只发一次）。
+    var sent by remember(model.id) { mutableStateOf(false) }
     Text(model.message, style = Calm.type.body, color = c.text)
     Spacer(Modifier.size(16.dp))
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -449,7 +451,10 @@ private fun ConfirmView(host: SessionHost, model: OverlayModel.Confirm, onAction
             model.confirmLabel, style = Calm.type.body, color = c.background,
             modifier = Modifier.weight(1f).background(if (model.dangerous) c.error else c.accent, RoundedCornerShape(12.dp))
                 // 面板确认框不先自己关：由 CalmPanelLogic.apply 关确认框，Done 时连同派生它的面板一起关（PR #21 审查 Nit 1）。
-                .clickable { if (panel != null) panel("confirm", null) else { host.overlay.remove(model.id); onAction(model.id, "confirm") } }.padding(12.dp).testTag("confirm:ok"),
+                .clickable(enabled = !sent) {
+                    sent = true
+                    if (panel != null) panel("confirm", null) else { host.overlay.remove(model.id); onAction(model.id, "confirm") }
+                }.padding(12.dp).testTag("confirm:ok"),
         )
     }
 }

@@ -6,6 +6,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import io.github.zr987459.pigo.attach.ImageAttach
 import io.github.zr987459.pigo.settings.ModelsPageExtras
+import io.github.zr987459.pigo.settings.ProxyLogic
 import io.github.zr987459.pigo.contract.session.DraftImage
 import androidx.compose.runtime.key
 import androidx.compose.runtime.snapshotFlow
@@ -350,6 +351,13 @@ private fun SettingsPage(graph: AppGraph, focus: String?, onBack: () -> Unit) {
                     }
                 },
                 aboutText = aboutText(remember(app) { runCatching { app.packageManager.getPackageInfo(app.packageName, 0).versionName }.getOrNull() }),
+                // 复用已有的重启引擎动作（与凭据变化后 onCredentialsChanged 相同的 engine.restart），PR #21 审查第 2 轮 Nit 4。
+                onRestartEngine = {
+                    when (val r = graph.engine.restart("网络代理已更新")) {
+                        is Outcome.Ok -> ProxyLogic.restartMessage(true)
+                        is Outcome.Err -> ProxyLogic.restartMessage(false, r.message)
+                    }
+                },
             )
         },
     )

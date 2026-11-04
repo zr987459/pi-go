@@ -122,3 +122,12 @@
 - 已读完第 2 轮审查（comment 6622891610）；main 无新提交（r3/app 领先 26，落后 0），不需要 merge。
 - 方案已定：I1 needsOAuthPolling 对所有未到终点的 `oauth:` 面板（Text/Form/SelectList）轮询，keepTyped 兼顾 SelectList 的 query/selectedKey；Nit1 确认框按 id 定位（不依赖栈顶）+ PanelSendGate 防连点；Nit2 面板改画在抽屉/展开编辑器之上，CalmBack 按画面层级（面板→编辑器→会话列表→搜索，ExtDialog 在顶不拦截）；Nit3 菜单改「图片」；Nit4 oauthUrls 在新流程/重试/取消/结束时清理，代理保存后给「立即重启 pi」（engine.restart）。
 - 下一步：写代码与测试，本地 JDK17 跑 JVM 单测，一次性推送。
+
+### 13:30 CST 进度（第 2 轮修复）
+- 代码已改完（本地，未推送）：CalmPanels（needsOAuthPolling 含 Form/Select、keepTyped 兼顾 Select、apply 按 id 找确认框、PanelSendGate + dispatch 防连点）、CalmSheet（确认键点后禁用）、CalmSurface（面板改画在抽屉/编辑器之上，事件走 dispatch）、CalmBack（按画面层级）、CalmComposer（「图片」）、RealModelPanels（oauthUrls 清理）、ModelsPageExtras + PiGoNavHost（「立即重启 pi」= engine.restart）。
+- 测试：新 CalmAppFix2Test；CalmAppFix1Test/CalmPkceLoginTest/ProxyLogicTest 更新与新增；AppCoverageTest 新增 3 个仪器测试。
+- 下一步：本地跑 :feature:chat/:feature:models/:app 单测 + 编译 androidTest，通过后一次推送，盯 CI。
+
+### 13:45 CST 进度（第 2 轮修复）
+- 本地（aarch64 沙箱，aapt2 经 qemu-x86_64-static 运行）：:feature:chat、:feature:models、:app testDebugUnitTest 全绿；:app:compileDebugAndroidTestKotlin 通过。
+- 推送代码提交；下一步：盯 CI（build、realpi、两个模拟器 job），然后更新 PR #21 描述。

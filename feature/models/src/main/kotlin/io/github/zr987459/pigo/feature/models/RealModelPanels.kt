@@ -219,10 +219,16 @@ class RealModelPanels(
 
     override suspend fun oauthFlow(providerId: String): OverlayModel {
         if (oauthJobs[providerId]?.isActive != true) {
+            // 新的登录流：上一次的授权链接已失效，不能再出现在新流程的表单里（PR #21 审查第 2 轮 Nit 4）。
+            oauthUrls.remove(providerId)
             _oauth.update { it + (providerId to OAuthStep.Starting) }
             oauthJobs[providerId] = scope.launch {
                 auth.login(providerId).collect { step ->
-                    if (step is OAuthStep.OpenUrl) oauthUrls[providerId] = step.url
+                    when (step) {
+                        is OAuthStep.OpenUrl -> oauthUrls[providerId] = step.url
+                        is OAuthStep.Done, is OAuthStep.Failed -> oauthUrls.remove(providerId) // 流程结束
+                        else -> Unit
+                    }
                     _oauth.update { it + (providerId to step) }
                     oauthSubmitted.remove(providerId)
                     if (step is OAuthStep.Done) credentialsReady(providerId)
@@ -422,11 +428,13 @@ class RealModelPanels(
         key == "retry" -> {
             oauthJobs.remove(providerId)?.cancel()
             oauthSubmitted.remove(providerId)
+            oauthUrls.remove(providerId)
             _oauth.update { it - providerId }
             ActionResult.Overlay(oauthFlow(providerId))
         }
         key == "cancel" -> {
             oauthJobs.remove(providerId)?.cancel()
+            oauthUrls.remove(providerId)
             _oauth.update { it - providerId }
             ActionResult.Done
         }

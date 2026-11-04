@@ -17,13 +17,14 @@ class CalmAppFix1Test {
     private fun needCode(help: String? = "授权链接：https://claude.ai/oauth/authorize?code=true&x=1") =
         OverlayModel.Form("oauth:anthropic", "登录 anthropic", listOf(FormField("code", "粘贴授权码", PiSettingType.Str, help = help)), submitLabel = "提交")
 
-    /** Important 4：NeedCode 表单不轮询；即使面板方连续两次 refresh 返回不带值的新表单，用户输入的授权码仍在。 */
+    /** Important 4：即使面板方连续两次 refresh 返回不带值的新表单，用户输入的授权码仍在。 */
     @Test
     fun typedCodeSurvivesTwoRefreshes() {
         val s = OverlayStack()
         s.push(needCode())
-        assertFalse("等用户输入的 NeedCode 表单不轮询", CalmPanelLogic.needsOAuthPolling(s.top))
-        assertFalse(CalmPanelLogic.needsOAuthPolling(OverlayModel.SelectList("oauth:x", "选择")))
+        // 第 2 轮 Important 1：NeedCode 表单与 Select 列表也照常轮询（浏览器回调可能自己完成登录），靠 keepTyped 保留输入。
+        assertTrue(CalmPanelLogic.needsOAuthPolling(s.top))
+        assertTrue(CalmPanelLogic.needsOAuthPolling(OverlayModel.SelectList("oauth:x", "选择")))
         assertTrue(CalmPanelLogic.needsOAuthPolling(OverlayModel.Text("oauth:x", "登录", "正在开始登录…")))
         // FormView.set() 写进 top.values
         s.replaceTop(needCode().copy(values = mapOf("code" to "abc#def")))
@@ -68,11 +69,12 @@ class CalmAppFix1Test {
         assertEquals(listOf("provider.form:deepseek"), s.items.value.map { it.id })
     }
 
-    /** Important 3：返回键依次关 编辑器 → 面板 → 会话列表 → 搜索；都关着交给外层（退到后台）；扩展对话框不替用户作答。 */
+    /** Important 3：返回键逐层关（第 2 轮 Nit 2 起按画面层级：面板在最上）；都关着交给外层（退到后台）；扩展对话框不替用户作答。 */
     @Test
     fun backOrder() {
         val panel = OverlayModel.SelectList("model.select", "模型")
-        assertEquals(CalmBack.Step.EDITOR, CalmBack.step(true, panel, true, true))
+        assertEquals(CalmBack.Step.OVERLAY, CalmBack.step(true, panel, true, true))
+        assertEquals(CalmBack.Step.EDITOR, CalmBack.step(true, null, true, true))
         assertEquals(CalmBack.Step.OVERLAY, CalmBack.step(false, panel, true, true))
         assertEquals(CalmBack.Step.DRAWER, CalmBack.step(false, null, true, true))
         assertEquals(CalmBack.Step.SEARCH, CalmBack.step(false, null, false, true))

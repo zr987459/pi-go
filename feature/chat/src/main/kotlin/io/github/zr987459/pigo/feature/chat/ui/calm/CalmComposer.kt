@@ -284,6 +284,12 @@ private fun AtPanel(host: SessionHost, draft: DraftState, fileSearch: (suspend (
 
 private const val AT_SEARCH_DEBOUNCE_MS = 120L
 
+/**
+ * 「＋」菜单里附件项的文案，与能力一致（PR #21 审查第 2 轮 Nit 3）：装配层目前只接了系统照片选择器（只能选图片）。
+ * 文件附件、相机、剪贴板图片留给 PR 2。
+ */
+internal const val PLUS_ATTACH_LABEL = "图片"
+
 @Composable
 private fun PlusMenu(host: SessionHost, onAction: (String, String?) -> Unit) {
     val c = Calm.colors
@@ -293,7 +299,7 @@ private fun PlusMenu(host: SessionHost, onAction: (String, String?) -> Unit) {
             Icon(CalmIcons.Plus, contentDescription = "添加", tint = c.text, modifier = Modifier.size(20.dp))
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            DropdownMenuItem(text = { Text("图片 / 文件附件") }, onClick = { open = false; onAction("attach.image", null) }, modifier = Modifier.testTag("plus:attach"))
+            DropdownMenuItem(text = { Text(PLUS_ATTACH_LABEL) }, onClick = { open = false; onAction("attach.image", null) }, modifier = Modifier.testTag("plus:attach"))
             DropdownMenuItem(text = { Text("引用文件 @") }, onClick = {
                 open = false
                 val d = host.draft.value

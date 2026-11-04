@@ -35,12 +35,18 @@ fun ModelsPageExtras(
     settings: AppSettingsStore,
     onRepairRuntime: (suspend () -> String)?,
     aboutText: String,
+    /**
+     * 「立即重启 pi」（PR #21 审查第 2 轮 Nit 4）：代理以环境变量注入 pi，保存后要重启 pi 才生效。
+     * 装配层传 `engine.restart(…)`，返回给用户看的结果；为 null 时只提示用 ⌘ ›「停止引擎」。
+     */
+    onRestartEngine: (suspend () -> String)? = null,
 ) {
     val scope = rememberCoroutineScope()
     val net by settings.network.collectAsState()
     var editing by remember { mutableStateOf(false) }
     var about by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
+    var restartOffered by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxWidth().padding(top = 16.dp)) {
         Text("其他", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.outline, modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp))
@@ -53,6 +59,13 @@ fun ModelsPageExtras(
         }
         ExtraRow("关于", "pi-go 版本、许可", "settings:about") { about = true }
         message?.let { Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp).testTag("settings:extraMessage")) }
+        if (restartOffered && onRestartEngine != null) {
+            ExtraRow("立即重启 pi", "让代理设置生效；正在生成的回复会中断", "settings:restartPi") {
+                restartOffered = false
+                message = "正在重启 pi…"
+                scope.launch { message = runCatching { onRestartEngine() }.getOrElse { "重启失败：${it.message}" } }
+            }
+        }
     }
 
     if (editing) {
@@ -63,7 +76,8 @@ fun ModelsPageExtras(
             scope.launch {
                 try {
                     settings.setNetwork(v)
-                    message = ProxyLogic.savedMessage(v)
+                    message = ProxyLogic.savedMessage(v, canRestart = onRestartEngine != null)
+                    restartOffered = onRestartEngine != null
                     editing = false
                 } catch (e: IllegalArgumentException) {
                     error = e.message ?: "代理地址无效"
@@ -75,7 +89,7 @@ fun ModelsPageExtras(
             title = { Text("网络代理") },
             text = {
                 Column {
-                    Text("国外服务商在国内通常需要代理。只支持 http/https，pi 和登录都会走它，重启 pi 后生效。", style = MaterialTheme.typography.bodySmall)
+                    Text("国外服务商在国内通常需要代理。只支持 http/https，pi 和登录都会走它，重启 pi 后生效（保存后可在本页「立即重启 pi」）。", style = MaterialTheme.typography.bodySmall)
                     OutlinedTextField(proxy, { proxy = it; error = null }, label = { Text("代理地址") }, placeholder = { Text("http://127.0.0.1:7890") }, singleLine = true,
                         isError = error != null, modifier = Modifier.fillMaxWidth().padding(top = 8.dp).testTag("proxy:url"))
                     OutlinedTextField(noProxy, { noProxy = it }, label = { Text("不走代理的地址") }, singleLine = true, modifier = Modifier.fillMaxWidth().padding(top = 4.dp).testTag("proxy:noProxy"))
@@ -122,5 +136,12 @@ object ProxyLogic {
     /** 「关闭代理」：只清代理地址，保留例外列表。 */
     fun off(n: NetworkSettings): NetworkSettings = n.copy(proxyUrl = null)
 
-    fun savedMessage(n: NetworkSettings): String = if (n.proxyUrl == null) "已关闭代理，重启 pi 后生效" else "代理已保存，重启 pi 后生效"
+    /** 保存后的提示：有重启入口时指向本页「立即重启 pi」，没有时指向已有的 ⌘ ›「停止引擎」。 */
+    fun savedMessage(n: NetworkSettings, canRestart: Boolean = true): String {
+        val head = if (n.proxyUrl == null) "已关闭代理" else "代理已保存"
+        return head + if (canRestart) "，点下方「立即重启 pi」生效" else "，在 ⌘ ›「停止引擎」后重新进入生效"
+    }
+
+    /** 「立即重启 pi」的结果提示。 */
+    fun restartMessage(ok: Boolean, error: String? = null): String = if (ok) "pi 已重启，代理设置已生效" else "重启失败：${error.orEmpty()}"
 }
