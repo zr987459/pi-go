@@ -1,6 +1,6 @@
 # r3/calm（工作流 ④ UI 形态）状态
 
-**状态：进行中，PR #17 已开（r3/calm → main）**（最近更新 2026-11-04 08:10 CST）
+**状态：完成，PR #17**（r3/calm → main，2026-11-04 08:25 CST）
 
 ## 已完成
 - `core/ui/.../calm/CalmTheme.kt`：§4.2 配色（浅/深）、字体（系统 Sans 16sp/1.55、JetBrains Mono 14sp）、圆角与动效常量。
@@ -14,10 +14,14 @@
 - `docs/notices/r3-calm.md`。
 - onboarding 换 CalmTheme 极简视觉：纯色背景（去渐变 / 玻璃 / 光晕）、CalmIcons 替换 dsh 字形、事实行改圆点、进度环纯色；testTag 不变。
 
-## 下一步（接手者照做）
-1. 看 CI（/actions/runs?branch=r3/calm）：run 41743112979（87626d9）build 全绿；模拟器 UiCoverageTest 5 例中 3 例过，2 例失败（tree.label 夹具消息不在屏上、离开时 followBottom），已在 97f543e 修，等新 run 确认。
-2. main 已普通合并进本分支（87626d9）；PR #17 已开，CI 绿后更新 PR 描述里的 CI 一节，状态改「完成，PR #17」。
-3. 未做：feature/sessions 旧页面删除（待 r3/app 改接 CalmSessionList）、慢帧测试、截图产物。
+## CI
+- run 41744770297（PR，dc03f36）全绿：build（assembleDebug、全部模块单测 644 例 0 失败 / 24 跳过（他线）、全部仪器测试编译）＋ 模拟器 UiCoverageTest 5/5 通过。
+
+## 遗留（后续接手）
+1. dsh 文件与 `dsh_icons.ttf`、旧聊天界面（ChatScreen 等）物理删除：等 r3/app、r3/models、feature/sessions 去掉引用（已 `@Deprecated`）。
+2. `feature/sessions` 旧页面：新会话列表在 `feature/chat/ui/calm/CalmSessionList.kt`，r3/app 改接后删除旧页面。
+3. 1000 条 delta 慢帧测试、截图测试产物（仓库未配 Paparazzi/Roborazzi，CI 无截图上传）。
+4. 扩展 widget 区：契约无 setWidget 状态流。
 
 ## 约定
 - 只用 Git Data API 提交（git clone 经中转 403）。
