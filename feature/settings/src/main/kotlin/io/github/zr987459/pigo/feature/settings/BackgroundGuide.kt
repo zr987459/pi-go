@@ -217,7 +217,7 @@ fun BackgroundGuideDialog(onDismiss: () -> Unit) {
     BackgroundGuidePage(onClose = close) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             PlainFilledButton("设置好了", close, Modifier.fillMaxWidth())
-            PlainOutlinedButton("以后再说（可在设置里找到）", close, Modifier.fillMaxWidth())
+            PlainOutlinedButton("以后再说", close, Modifier.fillMaxWidth())
         }
     }
 }
