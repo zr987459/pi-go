@@ -99,6 +99,7 @@ import kotlinx.coroutines.launch
  * @param onModelClick 顶栏「选择模型▾」；为 null 时用内置的模型/思考级别下拉。
  * @param onAttachClick 输入框「+」；为 null 时提示「暂不支持添加附件」。
  */
+@Deprecated("r3: r3/calm 删除（DESIGN-r3 X13，改用 ui/calm/CalmSurface；待 r3/app 去掉引用后删文件）")
 @Composable
 fun ChatScreen(
     controller: ChatController,
@@ -224,7 +225,6 @@ fun ChatScreen(
                 ChatEmptyState(
                     status = state.engineStatus,
                     onStartEngine = controller::restartEngine,
-                    onSuggestion = { controller.setDraftFromSuggestion(it) },
                     modifier = Modifier.fillMaxSize().padding(top = headerHeight, bottom = with(density) { bottomPx.toDp() }),
                 )
             }
@@ -334,7 +334,6 @@ fun ChatScreen(
 }
 
 /** 建议胶囊只往输入框里填文字（和用户自己打字一样），不新增发送逻辑；已有草稿时追加到末尾，不覆盖。 */
-private fun ChatController.setDraftFromSuggestion(prompt: String) = setDraft(SuggestionText.merge(state.value.composer.draft, prompt))
 
 /** dsh-Go `greetingFor`：5–11 早上好、11–13 中午好、13–18 下午好、18–23 晚上好、其余 夜深了。 */
 fun greetingFor(time: LocalTime): String = when (time.hour) {
@@ -345,24 +344,14 @@ fun greetingFor(time: LocalTime): String = when (time.hour) {
     else -> "夜深了"
 }
 
-/** dsh-Go 的四个默认建议（文案照抄 app_zh.arb，把「DSH」换成 pi 的语境）。 */
-internal val DefaultSuggestions: List<Triple<Glyph, String, String>>
-    get() = listOf(
-        Triple(AppIcons.folderOpen, "看看工作区有什么", "看看工作区里现在有哪些文件和项目，简单介绍一下。"),
-        Triple(AppIcons.code, "写个词频统计脚本", "写一个 Python 脚本：统计一个文本文件里出现最多的 20 个词，并运行一次给我看结果。"),
-        Triple(AppIcons.terminal, "新建 Node.js 项目", "在工作区新建一个 Node.js 项目，配好 TypeScript 和一个最小的单元测试。"),
-        Triple(AppIcons.tip, "rebase 还是 merge", "用一个具体例子解释 git rebase 和 git merge 的区别，各自什么时候用。"),
-    )
-
 /**
- * 空会话（dsh-Go `ChatEmptyState`）：问候 + 引擎状态 + 一个主色胶囊（引擎没在运行时「启动引擎」）或建议胶囊。
+ * 空会话（dsh-Go `ChatEmptyState`）：问候 + 引擎状态 + 引擎没在运行时的「启动引擎」胶囊（建议胶囊已按 DESIGN-r3 X9 删除）。
  * 「启动引擎」接现有的 [ChatController.restartEngine]（引擎的 restart 在停止状态下就是启动）。
  */
 @Composable
 fun ChatEmptyState(
     status: EngineStatus,
     onStartEngine: () -> Unit,
-    onSuggestion: (String) -> Unit,
     modifier: Modifier = Modifier,
     now: LocalTime = LocalTime.now(),
 ) {
@@ -408,20 +397,6 @@ fun ChatEmptyState(
                 Spacer(Modifier.height(12.dp))
                 FadeSlideIn(2) {
                     PrimaryPillButton(pill, onStartEngine, Modifier.testTag("chat:startEngine"))
-                }
-            }
-            if (connected) {
-                Spacer(Modifier.height(32.dp))
-                val list = DefaultSuggestions
-                list.chunked(2).forEachIndexed { r, pair ->
-                    if (r > 0) Spacer(Modifier.height(8.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        pair.forEachIndexed { c, (icon, label, prompt) ->
-                            FadeSlideIn(3 + r * 2 + c, Modifier.weight(1f)) {
-                                QuietChip(label, Modifier.fillMaxWidth(), icon = icon, onClick = { onSuggestion(prompt) })
-                            }
-                        }
-                    }
                 }
             }
         }

@@ -16,6 +16,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /** 一层玻璃面的样式（dsh-Go `GlassStyle`）：填充、发丝描边、阴影。Compose 版不做背景模糊。 */
+@Deprecated("r3: r3/calm 删除（DESIGN-r3 X8，改用 core/ui/calm 的 CalmTheme / CalmIcons）")
 @Immutable
 data class GlassStyle(
     val fill: Color,
@@ -28,6 +29,7 @@ data class GlassStyle(
  * M3 ColorScheme 装不下的 dsh-Go 颜色（dsh-Go `DshSurfaces` + 代码井 + 状态色）。
  * 通过 [DshTheme.colors] 读取。
  */
+@Deprecated("r3: r3/calm 删除（DESIGN-r3 X8，改用 core/ui/calm 的 CalmTheme / CalmIcons）")
 @Immutable
 data class DshColors(
     val isDark: Boolean,
@@ -114,6 +116,7 @@ data class DshColors(
 internal val LocalDshColors = staticCompositionLocalOf { DshColors.Light }
 
 /** 主题扩展入口：`DshTheme.colors.chrome.fill`、`DshTheme.colors.userBubble` 等。 */
+@Deprecated("r3: r3/calm 删除（DESIGN-r3 X8，改用 core/ui/calm 的 CalmTheme / CalmIcons）")
 object DshTheme {
     val colors: DshColors
         @Composable @ReadOnlyComposable get() = LocalDshColors.current
