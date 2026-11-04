@@ -30,3 +30,9 @@
 
 ## 2026-11-04 15:45 CST
 - 普通 merge origin/main（750e5d8，PR #25）→ 758d6ad，无冲突。PickClose 直接选中改用 Toast.failed；自动选回仍用 SetModelSignal（failed 区分不了已保存 / 已切换）。本地 app、term、models、settings、session 单测与 androidTest 编译通过。
+
+## 2026-11-04 16:00 CST（第 2 轮 PASS 后的 4 条 Nit）
+- FormSwitchStreamingTest：500 段 × 20ms，宿主经 SessionBindings.host(Mode.FAKE)；出段由 StreamScript.gate 控制（点击时暂停、第 400 段后等 16 次切换完才放行）；段号 / 全文 / 搜索词从屏幕节点读。
+- 后台 OAuth 完成后自动选回：SetModelSignal.onSwitched → PickClose.afterBackgroundSwitch 关选择面板、表单与登录面板；PickCloseOAuthTest。
+- 320dp / 360dp 窄屏用例 narrowScreensKeepToggleVisibleAndClickable。
+- 状态：本地单测与 androidTest 编译通过；等 CI（含模拟器）。

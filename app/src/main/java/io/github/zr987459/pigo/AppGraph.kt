@@ -37,6 +37,7 @@ import io.github.zr987459.pigo.feature.commands.CommandsGraph
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 /**
  * 手写依赖图（DESIGN.md §2.3）：持有单例，从四个 `di/XxxBindings.kt` 取实现，
@@ -110,7 +111,12 @@ class AppGraph(context: Context) {
     }
 
     /** 交给模型面板的引擎（同一个 [engine]，只多数 set_model 成功次数，PickClose 的结构化信号）。 */
-    val setModelSignal: io.github.zr987459.pigo.di.SetModelSignal by lazy { io.github.zr987459.pigo.di.SetModelSignal(engine) }
+    val setModelSignal: io.github.zr987459.pigo.di.SetModelSignal by lazy {
+        io.github.zr987459.pigo.di.SetModelSignal(engine).also { sig ->
+            // 后台 OAuth 完成后的自动选回（不经面板事件）：排到主线程下一轮，晚于同一帧里面板事件结果的落栈。
+            sig.onSwitched = { p -> appScope.launch(kotlinx.coroutines.Dispatchers.Main) { io.github.zr987459.pigo.di.PickClose.afterBackgroundSwitch(sessionHost.overlay, p) } }
+        }
+    }
 
     /** 当前 pi 进程启动时注入的代理（设置 › 模型「立即重启 pi」比较用）；引擎每次启动时由导航层记下。 */
     val effectiveProxy = kotlinx.coroutines.flow.MutableStateFlow<io.github.zr987459.pigo.contract.NetworkSettings?>(null)
