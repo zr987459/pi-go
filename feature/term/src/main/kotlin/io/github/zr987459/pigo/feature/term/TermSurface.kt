@@ -81,6 +81,7 @@ import io.github.zr987459.pigo.feature.term.ui.spansToAnnotated
 import io.github.zr987459.pigo.feature.term.ui.overlayEnter
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonPrimitive
@@ -318,7 +319,8 @@ private fun TermScreen(
         else listState.scrollToItem(idx + headerCount, anchor.offsetPx)
     }
     LaunchedEffect(listState) {
-        snapshotFlow { listState.isScrollInProgress }.collect { scrolling ->
+        // 只看「滚动结束」这一跳（drop 掉初始值），程序触发的 scrollToItem 不经过 isScrollInProgress
+        snapshotFlow { listState.isScrollInProgress }.drop(1).collect { scrolling ->
             if (!scrolling) follow = !listState.canScrollForward
         }
     }
