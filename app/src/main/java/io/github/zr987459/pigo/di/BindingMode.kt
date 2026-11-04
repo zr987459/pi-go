@@ -25,11 +25,8 @@ object BindingMode {
     val workspace: Mode = Mode.REAL
     /** W4 会话索引、草稿、自动命名、技能与模板（feature/commands，已在 main）。 */
     val commands: Mode = Mode.REAL
-    /**
-     * r3 的 SessionHost（两种形态共用）。r3/session（PR #20）合入 main 前只有 `FakeSessionHost`：
-     * 此时它只承载 `form`（形态切换与偏好），UI 形态仍画现有聊天页（真实引擎）。合入后切 REAL。
-     */
-    val session: Mode = Mode.FAKE
+    /** r3 的 SessionHost（两种形态共用）：r3/session（PR #20）已合入，REAL = `SessionHostImpl`（同一个 PiEngine）。 */
+    val session: Mode = Mode.REAL
 }
 
 enum class Mode { FAKE, REAL }

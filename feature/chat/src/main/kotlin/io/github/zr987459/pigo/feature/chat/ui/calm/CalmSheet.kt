@@ -57,6 +57,10 @@ import io.github.zr987459.pigo.contract.Outcome
 import io.github.zr987459.pigo.contract.SlashCommand
 import io.github.zr987459.pigo.contract.actions.PiActionSpec
 import io.github.zr987459.pigo.contract.actions.UiEntry
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import io.github.zr987459.pigo.contract.session.FormField
 import io.github.zr987459.pigo.contract.session.OverlayModel
 import io.github.zr987459.pigo.contract.session.SessionHost
@@ -80,8 +84,21 @@ import kotlinx.coroutines.launch
  * - Tree 点节点 → `runAction("session.tree", <节点 id>)`；长按 → `runAction("tree.label", <节点 id>)`。
  */
 @Composable
-internal fun CalmSheet(host: SessionHost, model: OverlayModel, onAction: (String, String?) -> Unit, onDismiss: () -> Unit) {
+internal fun CalmSheet(
+    host: SessionHost,
+    model: OverlayModel,
+    onAction: (String, String?) -> Unit,
+    onDismiss: () -> Unit,
+    /** 面板事件（[PanelEventSink.owns] 为 true 的面板）：面板内的点击、键帽、表单、确认框都走它（r3/app 第 3 步）。 */
+    panel: ((String, String?) -> Unit)? = null,
+) {
     val c = Calm.colors
+    if (panel != null) {
+        val polling = CalmPanelLogic.needsOAuthPolling(model)
+        LaunchedEffect(model.id, polling) {
+            while (polling) { delay(1_000); panel("refresh", null) }
+        }
+    }
     val full = model.id == COMMANDS_OVERLAY_ID || model is OverlayModel.Tree || model is OverlayModel.FullOutput
     Box(Modifier.fillMaxSize()) {
         Box(
@@ -107,12 +124,15 @@ internal fun CalmSheet(host: SessionHost, model: OverlayModel, onAction: (String
             Spacer(Modifier.size(8.dp))
             when (model) {
                 is OverlayModel.SelectList ->
-                    if (model.id == COMMANDS_OVERLAY_ID) CommandCenter(host, model, onAction) else SelectListView(host, model, onAction)
-                is OverlayModel.Form -> FormView(host, model, onAction)
-                is OverlayModel.Text -> SelectionContainer {
-                    Text(model.text, style = Calm.type.label, color = c.text, modifier = Modifier.verticalScroll(rememberScrollState()).testTag("overlayText:${model.id}"))
+                    if (model.id == COMMANDS_OVERLAY_ID) CommandCenter(host, model, onAction) else SelectListView(host, model, onAction, panel)
+                is OverlayModel.Form -> FormView(host, model, onAction, panel)
+                is OverlayModel.Text -> {
+                    SelectionContainer {
+                        Text(model.text, style = Calm.type.label, color = c.text, modifier = Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()).testTag("overlayText:${model.id}"))
+                    }
+                    if (panel != null) PanelTextButtons(model, panel)
                 }
-                is OverlayModel.Confirm -> ConfirmView(host, model, onAction)
+                is OverlayModel.Confirm -> ConfirmView(host, model, onAction, panel)
                 is OverlayModel.Tree -> TreeView(host, model, onAction)
                 is OverlayModel.ExtDialog -> ExtDialogView(host, model)
                 is OverlayModel.FullOutput -> SelectionContainer {
@@ -202,13 +222,18 @@ private fun CommandRow(spec: PiActionSpec, onClick: () -> Unit) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ColumnScope.SelectListView(host: SessionHost, model: OverlayModel.SelectList, onAction: (String, String?) -> Unit) {
+private fun ColumnScope.SelectListView(host: SessionHost, model: OverlayModel.SelectList, onAction: (String, String?) -> Unit, panel: ((String, String?) -> Unit)? = null) {
     val c = Calm.colors
     fun update(f: (OverlayModel.SelectList) -> OverlayModel.SelectList) {
         val top = host.overlay.top
         if (top is OverlayModel.SelectList && top.id == model.id) host.overlay.replaceTop(f(top))
     }
-    SearchField(model.query, "搜索", "overlay:${model.id}:search") { q -> update { it.copy(query = q) } }
+    // 模型面板与服务商列表由面板方检索（含拼音首字母），本地不再二次过滤。
+    val serverQuery = panel != null && model.id in SERVER_QUERY_PANELS
+    SearchField(model.query, "搜索", "overlay:${model.id}:search") { q ->
+        update { it.copy(query = q) }
+        if (serverQuery) panel?.invoke("query", q)
+    }
     if (model.tabs.isNotEmpty()) {
         Row(Modifier.padding(top = 8.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             for (t in model.tabs) {
@@ -216,14 +241,14 @@ private fun ColumnScope.SelectListView(host: SessionHost, model: OverlayModel.Se
                 Text(
                     t, style = Calm.type.label, color = if (sel) c.background else c.text,
                     modifier = Modifier.background(if (sel) c.accent else c.surface, RoundedCornerShape(12.dp)).border(1.dp, c.stroke, RoundedCornerShape(12.dp))
-                        .clickable { update { it.copy(tab = t, scrollIndex = 0) } }.padding(horizontal = 12.dp, vertical = 6.dp).testTag("tab:$t"),
+                        .clickable { update { it.copy(tab = t, scrollIndex = 0) }; panel?.invoke("tab:$t", model.query) }.padding(horizontal = 12.dp, vertical = 6.dp).testTag("tab:$t"),
                 )
             }
         }
     }
     val list = rememberLazyListState(initialFirstVisibleItemIndex = model.scrollIndex)
     DisposableEffect(Unit) { onDispose { update { it.copy(scrollIndex = list.firstVisibleItemIndex) } } }
-    val q = model.query.trim()
+    val q = if (serverQuery) "" else model.query.trim()
     LazyColumn(state = list, modifier = Modifier.weight(1f, fill = false).fillMaxWidth().padding(top = 8.dp)) {
         for ((gi, g) in model.groups.withIndex()) {
             val visible = g.items.filter { q.isEmpty() || CommandSearch.score(CommandSearch.Entry(it.key, it.label, listOf(it.key)), q) > 0 }
@@ -233,7 +258,7 @@ private fun ColumnScope.SelectListView(host: SessionHost, model: OverlayModel.Se
                 Row(
                     Modifier.fillMaxWidth().clickable(enabled = item.enabled) {
                         update { m -> m.copy(selectedKey = item.key) }
-                        onAction(model.id, item.key)
+                        if (panel != null) panel(item.key, null) else onAction(model.id, item.key)
                     }.padding(vertical = 10.dp).testTag("item:${item.key}"),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -242,9 +267,9 @@ private fun ColumnScope.SelectListView(host: SessionHost, model: OverlayModel.Se
                         item.detail?.let { d -> Text(d, style = Calm.type.caption, color = c.secondary, maxLines = 1) }
                     }
                     if (item.key == model.selectedKey) Text("✓", style = Calm.type.label, color = c.accent)
-                    item.toggled?.let { on -> Switch(checked = on, onCheckedChange = { _ -> onAction(model.id, item.key) }, colors = SwitchDefaults.colors(checkedTrackColor = c.accent)) }
+                    item.toggled?.let { on -> Switch(checked = on, onCheckedChange = { _ -> if (panel != null) panel(item.key, null) else onAction(model.id, item.key) }, colors = SwitchDefaults.colors(checkedTrackColor = c.accent)) }
                     item.starred?.let { s ->
-                        IconButton(onClick = { onAction(model.id, "star:${item.key}") }, modifier = Modifier.size(32.dp)) {
+                        IconButton(onClick = { if (panel != null) panel("star:" + item.key.removePrefix("model:"), null) else onAction(model.id, "star:${item.key}") }, modifier = Modifier.size(32.dp)) {
                             Icon(if (s) CalmIcons.StarFilled else CalmIcons.Star, contentDescription = "常用", tint = if (s) c.accent else c.secondary, modifier = Modifier.size(18.dp))
                         }
                     }
@@ -252,7 +277,35 @@ private fun ColumnScope.SelectListView(host: SessionHost, model: OverlayModel.Se
             }
         }
     }
-    if (model.keyCaps.isNotEmpty()) KeyCapRow(model.keyCaps.map { it.label to it.actionId }, onAction)
+    if (model.keyCaps.isNotEmpty()) {
+        if (panel != null) KeyCapRow(model.keyCaps.map { it.label to it.actionId }) { id, _ -> panel(id, CalmPanelLogic.keyCapValue(model)) }
+        else KeyCapRow(model.keyCaps.map { it.label to it.actionId }, onAction)
+    }
+}
+
+/** 由面板方检索的列表面板（搜索词作为 `query` 事件回传）。 */
+private val SERVER_QUERY_PANELS = setOf("model.select", "auth.login")
+
+/** OAuth 面板的按钮：授权链接「打开链接」、失败后「重试」。 */
+@Composable
+private fun PanelTextButtons(model: OverlayModel.Text, panel: (String, String?) -> Unit) {
+    val c = Calm.colors
+    val uri = LocalUriHandler.current
+    val url = CalmPanelLogic.oauthUrl(model)
+    val retry = CalmPanelLogic.oauthRetryable(model)
+    if (url == null && !retry) return
+    Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (url != null && !retry) Text(
+            "打开链接", style = Calm.type.label, color = c.accent,
+            modifier = Modifier.border(1.dp, c.stroke, RoundedCornerShape(12.dp)).clickable { runCatching { uri.openUri(url) } }
+                .padding(horizontal = 12.dp, vertical = 8.dp).testTag("panel:openUrl"),
+        )
+        if (retry) Text(
+            "重试", style = Calm.type.label, color = c.background,
+            modifier = Modifier.background(c.accent, RoundedCornerShape(12.dp)).clickable { panel("retry", null) }
+                .padding(horizontal = 16.dp, vertical = 8.dp).testTag("panel:retry"),
+        )
+    }
 }
 
 @Composable
@@ -270,21 +323,38 @@ private fun KeyCapRow(caps: List<Pair<String, String>>, onAction: (String, Strin
 
 /** pi 设置等表单：按 schema 生成控件（开关、枚举、数字、字符串、字符串列表），不提供自由 JSON 编辑（§6.5）。 */
 @Composable
-private fun FormView(host: SessionHost, model: OverlayModel.Form, onAction: (String, String?) -> Unit) {
+private fun FormView(host: SessionHost, model: OverlayModel.Form, onAction: (String, String?) -> Unit, panel: ((String, String?) -> Unit)? = null) {
     val c = Calm.colors
+    // 密文字段（API Key 等）只在本地内存：遮挡显示，不写进 overlay 栈里的 values（FormField.secret 契约）。
+    val secrets = remember(model.id) { mutableStateMapOf<String, String>() }
     fun set(k: String, v: String) {
         val top = host.overlay.top
         if (top is OverlayModel.Form && top.id == model.id) host.overlay.replaceTop(top.copy(values = top.values + (k to v)))
     }
     Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
-        for (f in model.fields) FieldRow(f, model.values[f.key].orEmpty()) { set(f.key, it) }
+        for (f in model.fields) {
+            if (f.secret) FieldRow(f, secrets[f.key].orEmpty()) { secrets[f.key] = it }
+            else FieldRow(f, model.values[f.key].orEmpty()) { set(f.key, it) }
+        }
     }
     Spacer(Modifier.size(12.dp))
+    val extra = if (panel != null) CalmPanelLogic.formActions(model) else emptyList()
+    if (extra.isNotEmpty()) {
+        Row(Modifier.fillMaxWidth().padding(bottom = 8.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            for ((id, label) in extra) Text(
+                label, style = Calm.type.label, color = c.accent,
+                modifier = Modifier.border(1.dp, c.stroke, RoundedCornerShape(12.dp))
+                    .clickable { panel?.invoke(id, CalmPanelLogic.formJson(model.values, secrets)) }
+                    .padding(horizontal = 12.dp, vertical = 8.dp).testTag("form:action:$id"),
+            )
+        }
+    }
     Text(
         model.submitLabel ?: "保存",
         style = Calm.type.body, color = c.background,
         modifier = Modifier.fillMaxWidth().background(c.accent, RoundedCornerShape(12.dp)).clickable {
-            onAction(model.id, model.values.entries.joinToString("\n") { "${it.key}=${it.value}" })
+            if (panel != null) panel("submit", CalmPanelLogic.formJson(model.values, secrets))
+            else onAction(model.id, (model.values + secrets).entries.joinToString("\n") { "${it.key}=${it.value}" })
         }.padding(vertical = 12.dp).testTag("form:submit"),
     )
 }
@@ -316,7 +386,7 @@ private fun FieldRow(f: FormField, value: String, onChange: (String) -> Unit) {
             is PiSettingType.Number -> InlineField(value, if (t.integer) KeyboardType.Number else KeyboardType.Decimal, f.enabled, onChange = { s ->
                 if (s.isEmpty() || s.toDoubleOrNull() != null || s == "-") onChange(s)
             })
-            PiSettingType.Str -> InlineField(value, KeyboardType.Text, f.enabled, onChange)
+            PiSettingType.Str -> InlineField(value, if (f.secret) KeyboardType.Password else KeyboardType.Text, f.enabled, onChange, secret = f.secret)
             PiSettingType.StrList -> InlineField(value, KeyboardType.Text, f.enabled, onChange, hint = "多个值用逗号分隔")
             PiSettingType.Bool -> Unit
         }
@@ -324,16 +394,16 @@ private fun FieldRow(f: FormField, value: String, onChange: (String) -> Unit) {
 }
 
 @Composable
-private fun InlineField(value: String, kb: KeyboardType, enabled: Boolean, onChange: (String) -> Unit, hint: String? = null) {
+private fun InlineField(value: String, kb: KeyboardType, enabled: Boolean, onChange: (String) -> Unit, hint: String? = null, secret: Boolean = false) {
     val c = Calm.colors
     Box(Modifier.fillMaxWidth().padding(top = 6.dp).background(c.surface, RoundedCornerShape(12.dp)).border(1.dp, c.stroke, RoundedCornerShape(12.dp)).padding(horizontal = 12.dp, vertical = 10.dp)) {
         if (value.isEmpty() && hint != null) Text(hint, style = Calm.type.label, color = c.secondary)
-        BasicTextField(value, onChange, enabled = enabled, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = kb), textStyle = Calm.type.code.copy(color = c.text), cursorBrush = SolidColor(c.accent), modifier = Modifier.fillMaxWidth())
+        BasicTextField(value, onChange, enabled = enabled, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = kb), textStyle = Calm.type.code.copy(color = c.text), cursorBrush = SolidColor(c.accent), visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None, modifier = Modifier.fillMaxWidth())
     }
 }
 
 @Composable
-private fun ConfirmView(host: SessionHost, model: OverlayModel.Confirm, onAction: (String, String?) -> Unit) {
+private fun ConfirmView(host: SessionHost, model: OverlayModel.Confirm, onAction: (String, String?) -> Unit, panel: ((String, String?) -> Unit)? = null) {
     val c = Calm.colors
     Text(model.message, style = Calm.type.body, color = c.text)
     Spacer(Modifier.size(16.dp))
@@ -342,7 +412,7 @@ private fun ConfirmView(host: SessionHost, model: OverlayModel.Confirm, onAction
         Text(
             model.confirmLabel, style = Calm.type.body, color = c.background,
             modifier = Modifier.weight(1f).background(if (model.dangerous) c.error else c.accent, RoundedCornerShape(12.dp))
-                .clickable { host.overlay.remove(model.id); onAction(model.id, "confirm") }.padding(12.dp).testTag("confirm:ok"),
+                .clickable { host.overlay.remove(model.id); if (panel != null) panel("confirm", null) else onAction(model.id, "confirm") }.padding(12.dp).testTag("confirm:ok"),
         )
     }
 }

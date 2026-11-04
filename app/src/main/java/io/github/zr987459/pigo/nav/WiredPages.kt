@@ -58,7 +58,6 @@ import io.github.zr987459.pigo.core.ui.AppShape
 import io.github.zr987459.pigo.core.ui.GlassSurface
 import io.github.zr987459.pigo.core.ui.GlassTier
 import io.github.zr987459.pigo.feature.commands.skills.SkillsController
-import io.github.zr987459.pigo.feature.commands.ui.SkillsContent
 import io.github.zr987459.pigo.feature.models.CustomProviderScreen
 import io.github.zr987459.pigo.feature.settings.session.SessionDefaultsController
 import io.github.zr987459.pigo.feature.settings.session.SessionDefaultsScreen
@@ -269,27 +268,6 @@ internal fun SessionTreePage(graph: AppGraph, onForked: () -> Unit, onError: (St
                     }
                 }
             },
-        )
-    }
-}
-
-@Composable
-internal fun SkillsPage(graph: AppGraph, onBack: () -> Unit) {
-    val manager = graph.commands.skills
-    SubPage("技能与模板", "skills", onBack) {
-        if (manager == null) {
-            Text("技能与模板需要运行环境（当前为演示模式）", Modifier.padding(16.dp))
-            return@SubPage
-        }
-        val controller = remember(graph) { SkillsController(graph.extras, manager, graph.appScope) }
-        LaunchedEffect(controller) { controller.load() }
-        val state by controller.state.collectAsState()
-        SkillsContent(
-            state,
-            onView = controller::view,
-            onCloseView = controller::closeView,
-            onToggle = controller::setEnabled,
-            onCreate = { n, d, b -> controller.createTemplate(n, d, b) },
         )
     }
 }

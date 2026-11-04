@@ -74,6 +74,8 @@ dependencies {
     implementation(project(":feature:files"))
     implementation(project(":feature:commands"))
     implementation(project(":feature:usage"))
+    // r3/app 第 3 步：SessionHostImpl / PiActionsImpl / PiSettingsImpl / SessionCatalogImpl（r3/session）。范围外最小改动（build 文件归 r3/core），PR 描述已列。
+    implementation(project(":core:session"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)

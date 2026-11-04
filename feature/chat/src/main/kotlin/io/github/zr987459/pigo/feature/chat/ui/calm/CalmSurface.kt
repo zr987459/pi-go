@@ -69,9 +69,11 @@ fun CalmSurface(
     modifier: Modifier = Modifier,
     onOpenSettings: () -> Unit = {},
     dark: Boolean? = null,
+    /** 模型配置面板的事件接收方（装配层注入 RealModelPanels；为 null 时面板内点击照旧走 runAction）。 */
+    panelEvents: PanelEventSink? = null,
 ) {
-    if (dark == null) CalmTheme { CalmSurfaceBody(host, modifier, onOpenSettings) }
-    else CalmTheme(dark = dark) { CalmSurfaceBody(host, modifier, onOpenSettings) }
+    if (dark == null) CalmTheme { CalmSurfaceBody(host, modifier, onOpenSettings, panelEvents) }
+    else CalmTheme(dark = dark) { CalmSurfaceBody(host, modifier, onOpenSettings, panelEvents) }
 }
 
 /** 视图状态：只影响本形态怎么画，不是业务状态。 */
@@ -88,7 +90,7 @@ internal class CalmViewState {
 }
 
 @Composable
-private fun CalmSurfaceBody(host: SessionHost, modifier: Modifier, onOpenSettings: () -> Unit) {
+private fun CalmSurfaceBody(host: SessionHost, modifier: Modifier, onOpenSettings: () -> Unit, panelEvents: PanelEventSink? = null) {
     val c = Calm.colors
     val scope = rememberCoroutineScope()
     val view = remember { CalmViewState() }
@@ -97,6 +99,8 @@ private fun CalmSurfaceBody(host: SessionHost, modifier: Modifier, onOpenSetting
     val engineStatus by host.engine.status.collectAsState()
     val ephemeral by host.ephemeral.collectAsState()
     val clipboard = LocalClipboardManager.current
+    // `/copy`、分享链接等：共享层经 SessionHost.clipboardRequests 请求写剪贴板，本形态真正写入。
+    LaunchedEffect(host) { host.clipboardRequests.collect { t -> clipboard.setText(AnnotatedString(t)) } }
 
     val run: (String, String?) -> Unit = { id, args ->
         scope.launch {
@@ -112,10 +116,6 @@ private fun CalmSurfaceBody(host: SessionHost, modifier: Modifier, onOpenSetting
                     view.historyCursor = k; host.draft.value = host.draft.value.withText(t)
                 }
                 "transcript.jump" -> view.jumpTick++
-                "copy.last" -> chat.items.lastOrNull { it is ChatItem.Assistant }?.let { a ->
-                    val text = (a as ChatItem.Assistant).blocks.filterIsInstance<ContentBlock.Text>().joinToString("\n") { it.text }
-                    if (text.isNotEmpty()) clipboard.setText(AnnotatedString(text))
-                }
             }
         }
     }
@@ -163,7 +163,22 @@ private fun CalmSurfaceBody(host: SessionHost, modifier: Modifier, onOpenSetting
         // 面板（overlay 栈顶，两种形态共用同一模型，§5.4）
         val top = overlays.lastOrNull()
         if (top != null) {
-            CalmSheet(host = host, model = top, onAction = run, onDismiss = { host.overlay.pop() })
+            val sink = panelEvents?.takeIf { it.owns(top.id) }
+            val panel: ((String, String?) -> Unit)? = sink?.let { s ->
+                { key, value ->
+                    scope.launch {
+                        val r = s.onEvent(top.id, key, value)
+                        CalmPanelLogic.apply(host.overlay, top.id, r)?.let { view.toast = it }
+                    }
+                }
+            }
+            CalmSheet(
+                host = host, model = top, onAction = run, panel = panel,
+                onDismiss = {
+                    if (sink != null) CalmPanelLogic.dismissEvent(top)?.let { k -> scope.launch { sink.onEvent(top.id, k, null) } }
+                    host.overlay.pop()
+                },
+            )
         }
 
         // ☰ 会话列表

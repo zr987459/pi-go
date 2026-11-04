@@ -21,6 +21,13 @@ import io.github.zr987459.pigo.di.StoreBindings
 import io.github.zr987459.pigo.di.WorkspaceBindings
 import io.github.zr987459.pigo.di.SessionBindings
 import io.github.zr987459.pigo.contract.session.SessionHost
+import io.github.zr987459.pigo.contract.models.ModelPanels
+import io.github.zr987459.pigo.contract.settings.PiSettings
+import io.github.zr987459.pigo.core.session.SessionOps
+import io.github.zr987459.pigo.di.AppSessionOps
+import io.github.zr987459.pigo.di.ModelPanelEvents
+import io.github.zr987459.pigo.feature.chat.ui.calm.PanelEventSink
+import io.github.zr987459.pigo.feature.models.RealModelPanels
 import io.github.zr987459.pigo.form.FormPersistence
 import io.github.zr987459.pigo.form.FormPrefStore
 import io.github.zr987459.pigo.form.SharedPrefsFormStore
@@ -79,8 +86,31 @@ class AppGraph(context: Context) {
     // r3：两种形态共用的会话宿主（DESIGN-r3 §5.1）。形态偏好存 App 设置，启动时读回、变化时写回。
     val formPrefs: FormPrefStore by lazy { SharedPrefsFormStore(ctx.appContext) }
 
+    // r3：pi 的 settings.json（设置 › 模型 的默认模型 / 常用模型 / 思考档，与 /settings 共用）。
+    val piSettings: PiSettings by lazy { SessionBindings.piSettings(runtime) }
+
+    // r3：模型配置面板（r3/models）。/model、/login、设置 › 模型 共用同一个实例。
+    val modelPanels: ModelPanels by lazy {
+        RealModelPanels(models.catalog, models.auth, models.custom, engine, appScope, piSettings)
+    }
+
+    /** UI 形态里模型面板的点击、键帽、表单、确认框 → [ModelPanels.onPanelEvent]。 */
+    val modelPanelEvents: PanelEventSink by lazy { ModelPanelEvents(modelPanels) }
+
+    val sessionOps: SessionOps by lazy { AppSessionOps(engine, runtime, ctx.appContext.cacheDir) }
+
     val sessionHost: SessionHost by lazy {
-        SessionBindings.host(BindingMode.session, ctx, FormPersistence.initial(formPrefs))
-            .also { FormPersistence.bind(it.form, formPrefs, appScope) }
+        SessionBindings.host(BindingMode.session, ctx, FormPersistence.initial(formPrefs)) {
+            SessionBindings.Deps(
+                engine = engine,
+                extras = extras,
+                controller = chatDeps.controller,
+                settings = piSettings,
+                repo = sessions,
+                panels = modelPanels,
+                ops = sessionOps,
+                imageLoader = SessionBindings.imageLoader(ctx.appContext),
+            )
+        }.also { FormPersistence.bind(it.form, formPrefs, appScope) }
     }
 }
