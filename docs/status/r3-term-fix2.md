@@ -17,4 +17,6 @@
   - ↑↓：HistoryNav（开始翻时保存草稿、编辑即退出浏览、↓ 越过最新一条恢复草稿），TermSurface 接入；测试 HistoryNavTest（3 条）。
 - [x] 10:18 推送 Nit 1–3 与契约新项（5990613）：@ 补全结果绑定查询词、防抖期间 Enter/Tab 等当前词的结果；autocompleteMaxVisible 照用户值；面板键帽一律发面板事件并带高亮项（动作表键帽也带高亮项）；不在动作表里的面板（provider.form:*、确认框、oauth:*…）的选中、提交、确认走面板事件，表单值为 JSON；Form.actions、确认框、OAuth 刷新与重试；/tree 外接 Enter 选中节点，FullOutput 外接 Enter 关闭；密文字段遮挡。JVM 测试 TermPanelRoutingTest（5 条）。
 - [x] 10:25 androidTest 新增 5 个：historyNeverOverwritesEditedDraft、formActionsConfirmAndOAuthRetryEmitPanelEvents、panelKeyCapWithCatalogIdStillEmitsPanelEvent、treeAndFullOutputHandleExternalEnter、atEnterDuringDebounceUsesCurrentQuery。
-- [ ] 下一步：看 CI（build 与模拟器），红了就修；模拟器连续绿 2 次（re-run）；更新 PR 描述（含「交接 r3/app」：bashRunning）
+- [x] 10:35 CI @1dddfd8：push run 41760116933 全绿（build 加模拟器 16 个用例，含 slowFrames）。PR run 41760122889 的模拟器红：everyActionHasATermEntry 报 `ext.commands: 没有收到动作`。原因是 PR run 测的是「合入 main 后」，而 main 已合入 r3/session PR#20，新增动作 ext.commands，终端入口为键条「/」。
+- [x] 10:40 再 merge main（aa8cb68，含 r3/session）。「/」键在草稿为空时打开 ext.commands 面板，草稿非空时插入「/」。面板路由收窄为只路由 ModelPanels 产出的面板（`overlay:*`、`explain:*` 是 SessionHost 的面板，照旧 runAction，与 CalmSheet 一致），单测已补。
+- [ ] 下一步：看 CI；模拟器连续绿 2 次（re-run）；更新 PR 描述（含「交接 r3/app」一节：bashRunning）

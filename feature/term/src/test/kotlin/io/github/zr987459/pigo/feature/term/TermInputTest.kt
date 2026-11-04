@@ -173,6 +173,8 @@ class TermPanelRoutingTest {
         org.junit.Assert.assertTrue(TermInput.routesToPanel("provider.form:anthropic", ids))
         org.junit.Assert.assertTrue(TermInput.routesToPanel("oauth:github-copilot", ids))
         org.junit.Assert.assertFalse(TermInput.routesToPanel("session.tree", ids))
+        org.junit.Assert.assertFalse("SessionHost 的面板照旧 runAction", TermInput.routesToPanel("overlay:session.cwd.confirm:/x", ids))
+        org.junit.Assert.assertTrue(TermInput.routesToPanel("confirm.clear:anthropic", ids))
     }
 
     @org.junit.Test

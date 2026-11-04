@@ -122,8 +122,13 @@ object TermInput {
         return AtQuery(i, e, text.substring(i + 1, c))
     }
 
-    /** 面板事件是否交给面板宿主：不在动作表里的面板（ModelPanels 的表单、确认框、账号登录…）走 `onPanelEvent`。 */
-    fun routesToPanel(overlayId: String, catalogIds: Set<String>): Boolean = overlayId !in catalogIds
+    /**
+     * 面板事件是否交给面板宿主：ModelPanels 产出的面板（`provider.form:*`、`provider.custom*`、`oauth:*`、`confirm.*:`…，
+     * 不在动作表里）走 `onPanelEvent`。动作表里的面板和 SessionHost 自己的面板（`overlay:*`、`explain:*`）照旧
+     * `runAction(面板 id, 值)`，与 UI 形态 CalmSheet 的约定一致。
+     */
+    fun routesToPanel(overlayId: String, catalogIds: Set<String>): Boolean =
+        overlayId !in catalogIds && !overlayId.startsWith("overlay:") && !overlayId.startsWith("explain:")
 
     /** 表单值 → JSON 对象（面板事件 value，与 UI 形态的设置页一致）。 */
     fun formJson(values: Map<String, String>): String =

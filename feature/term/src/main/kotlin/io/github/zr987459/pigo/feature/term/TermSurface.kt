@@ -346,7 +346,14 @@ private fun TermScreen(
                     TermInput.slashCandidates(q, catalog, commands).firstOrNull()?.let { setDraftText("/${it.name} ") }
                 }
             }
-            TermInput.KEY_SLASH, TermInput.KEY_AT, TermInput.KEY_BANG -> {
+            // 「/」键：草稿为空时打开扩展命令面板（动作表 ext.commands 的终端入口是键条「/」，r3/session）；
+            // 草稿非空时照常在光标处插入「/」。内置斜杠命令仍可直接在编辑器里输入「/」补全。
+            TermInput.KEY_SLASH -> if (host.draft.value.text.isEmpty() && catalog.any { it.id == "ext.commands" }) run("ext.commands") else {
+                val d = host.draft.value
+                val at = d.safeSelectionStart
+                setDraftText(d.text.substring(0, at) + key + d.text.substring(d.safeSelectionEnd), at + 1)
+            }
+            TermInput.KEY_AT, TermInput.KEY_BANG -> {
                 val d = host.draft.value
                 val at = d.safeSelectionStart
                 setDraftText(d.text.substring(0, at) + key + d.text.substring(d.safeSelectionEnd), at + 1)
