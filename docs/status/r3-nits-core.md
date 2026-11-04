@@ -1,10 +1,17 @@
 # r3/nits-core：积压 Nit（core/engine + core/session）
 
-状态：进行中（13:10）。A1–A3、B、C1–C4、D 代码与测试均已写，本地跑单测中；下一步：本地全绿 → 开 PR → CI（真 pi 重跑 ≥3 次）。
+状态：进行中（13:20），PR #24。代码与测试已全部推送（c327509），本地单测全绿；等 Android CI（含模拟器）与真 pi 重跑结果。
 
-计划：
-- A1 桥接命令按请求 id 对应，超时后迟到回复丢弃并记日志；A2 tree-nav 迟到成功仍回填原文/刷新状态；A3 switch 对账路径规范化后比较。
-- B 查 RealPiBridgeIntegrationTest.treeNavChangesLeafKeepsSessionFile 偶发超时根因并修，CI 重跑 ≥3 次。
-- C1 landModelPanel 先弹栈提交：成功关表单、失败才压回；C2 切换中树换实例也能关当次的树（按 id/来源）；C3 停止失败只提示一次；C4 旧路径带图消息退回草稿保留图片。
-- D 核实 CI testDebugUnitTest 是否覆盖 core/contract、core/protocol 纯 JVM 单测，缺则最小补。
-- 每条加测试，开 PR 到 main。
+## 已做
+- A1 桥接回复按请求序号认领：命令带 `--req=<序号>`，扩展在回复里带回；reload/switch 的完成信号（新实例 ready）经 globalThis 带回序号。无人认领的回复丢弃并记日志（`桥接回复无人认领…`）。
+- A2 tree-nav 迟到成功：重建时间线 + 原文按 `set_editor_text` 交回聊天层（草稿为空才写入，否则询问）。
+- A3 switch 对账：`PigoBridge.normalizePath` 规范化后比较；发给 pi 的路径也规范化。
+- B realpi `turn()` 根因：等瞬时的 `running=true`，`#text` 回合太快被两次轮询漏掉 → 改等「助手消息数增加且不在生成」。
+- C1 弹栈提交：ModelPanels 表单只在失败提示时压回（`SessionHostImpl.isFailureToast`）。
+- C2 树按「打开序号」关闭（`panelOpenSeq` / `Result.closeOpened`），期间筛选/折叠不影响，重开过不关。
+- C3 停止失败：端口已发 notices，`abort` 动作返回 Done，只提示一次。
+- C4 旧入口带图消息退回：图片回到控制器附件（范围外最小改动：feature/chat/ChatControllerPort.kt）。
+- D 核实：core/contract、core/protocol 的 build.gradle.kts 已自带 `testDebugUnitTest → test`，CI 已覆盖，无需改动。
+
+## 下一步
+- 等 CI；真 pi 集成测试在 c327509 共跑 ≥3 次；全绿后更新 PR 描述证据并把状态改为「完成，PR #24」。
