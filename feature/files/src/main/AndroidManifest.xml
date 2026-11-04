@@ -20,28 +20,5 @@
             android:excludeFromRecents="true"
             android:noHistory="false"
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
-
-        <!-- §2.7 系统分享菜单「发给 pi」：接收文本、图片、文件。 -->
-        <activity
-            android:name="io.github.zr987459.pigo.feature.files.share.ShareTargetActivity"
-            android:exported="true"
-            android:excludeFromRecents="true"
-            android:label="发给 pi"
-            android:theme="@android:style/Theme.Translucent.NoTitleBar">
-            <intent-filter>
-                <action android:name="android.intent.action.SEND" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="text/*" />
-                <data android:mimeType="image/*" />
-                <data android:mimeType="application/*" />
-                <data android:mimeType="audio/*" />
-                <data android:mimeType="video/*" />
-            </intent-filter>
-            <intent-filter>
-                <action android:name="android.intent.action.SEND_MULTIPLE" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="*/*" />
-            </intent-filter>
-        </activity>
     </application>
 </manifest>

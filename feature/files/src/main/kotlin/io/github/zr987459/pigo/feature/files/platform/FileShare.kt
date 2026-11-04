@@ -14,11 +14,14 @@ import java.io.File
  *
  * 可分享的只有两类目录（`res/xml/pigo_files_paths.xml`）：应用缓存的 `pigo-share/`、`pigo-camera/`。
  * rootfs 里的文件先复制到 `pigo-share/` 再分享，避免把整个 rootfs 暴露给 FileProvider。
- * 副本 1 小时后由 [io.github.zr987459.pigo.feature.files.share.ShareCache.cleanStale] 清理。
+ * 副本 1 小时后由 [cleanStale] 清理（r3：系统分享入口已删，DESIGN-r3 X10；清理逻辑从原 ShareCache 并入这里）。
  */
 object FileShare {
     const val SHARE_DIR = "pigo-share"
     const val CAMERA_DIR = "pigo-camera"
+
+    /** 分享出去的副本与拍照文件：保留 1 小时（接收方读取需要时间）。 */
+    const val OUTGOING_TTL_MS = 60L * 60 * 1000
 
     fun authority(ctx: Context) = ctx.packageName + ".pigo.files"
 
@@ -26,7 +29,7 @@ object FileShare {
 
     /** 复制到分享目录（同名覆盖），返回副本。大文件在调用方的 IO 线程上执行。 */
     fun stage(ctx: Context, src: File, name: String = src.name): File {
-        io.github.zr987459.pigo.feature.files.share.ShareCache.cleanStale(ctx)
+        cleanStale(ctx)
         val dir = File(ctx.cacheDir, SHARE_DIR).apply { mkdirs() }
         val dst = File(dir, name)
         if (src.canonicalPath != dst.canonicalPath) src.copyTo(dst, overwrite = true)
@@ -77,4 +80,27 @@ object FileShare {
             n to s
         } ?: (uri.lastPathSegment to null)
     }.getOrDefault(uri.lastPathSegment to null)
+
+    /**
+     * 删除过期副本；在拍照、暂存分享副本前调用。旧版系统分享入口留下的 `pigo-share/inbox/` 一并清掉
+     * （只是应用缓存里的临时副本，不是用户数据，DESIGN-r3 §8.2 第 7 条）。
+     */
+    fun cleanStale(ctx: Context, now: Long = System.currentTimeMillis()) {
+        runCatching {
+            val share = File(ctx.cacheDir, SHARE_DIR)
+            deleteOlder(share, now - OUTGOING_TTL_MS)
+            deleteOlder(File(ctx.cacheDir, CAMERA_DIR), now - OUTGOING_TTL_MS)
+        }
+    }
+
+    /** 删掉 [dir] 下修改时间早于 [cutoff] 的文件与目录。 */
+    internal fun deleteOlder(dir: File, cutoff: Long) {
+        dir.listFiles()?.forEach { f ->
+            if (f.isDirectory) { if (f.name == LEGACY_INBOX || f.lastModified() < cutoff) f.deleteRecursively() }
+            else if (f.lastModified() < cutoff) f.delete()
+        }
+    }
+
+    /** 旧版系统分享入口的收件目录（已删除的功能）。 */
+    private const val LEGACY_INBOX = "inbox"
 }

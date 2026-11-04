@@ -22,7 +22,7 @@ import io.github.zr987459.pigo.feature.files.FilesRuntime
  */
 object WorkspaceBindings {
     class Workspace(val fs: WorkspaceFs, val attachments: AttachmentProcessor, val exporter: SessionExporter) {
-        /** feature/files 的依赖；同时登记给系统分享入口（FilesRuntime）。 */
+        /** feature/files 的依赖；同时登记到 FilesRuntime（不经导航的入口用）。 */
         val deps: FilesDeps by lazy { FilesDeps(fs, attachments, exporter).also { FilesRuntime.install(it) } }
     }
 

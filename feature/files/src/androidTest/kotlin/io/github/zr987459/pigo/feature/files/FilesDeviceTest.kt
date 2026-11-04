@@ -2,7 +2,6 @@ package io.github.zr987459.pigo.feature.files
 
 import android.app.Activity
 import android.content.ContentValues
-import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -21,7 +20,6 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeUp
 import androidx.metrics.performance.JankStats
-import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.github.zr987459.pigo.contract.Attachment
@@ -35,10 +33,6 @@ import io.github.zr987459.pigo.contract.fake.FakeWorkspaceFs
 import io.github.zr987459.pigo.feature.files.browser.FilesController
 import io.github.zr987459.pigo.feature.files.output.OutputViewerScreen
 import io.github.zr987459.pigo.feature.files.platform.FileShare
-import io.github.zr987459.pigo.feature.files.share.ShareDelivery
-import io.github.zr987459.pigo.feature.files.share.ShareInbox
-import io.github.zr987459.pigo.feature.files.share.ShareTargetActivity
-import io.github.zr987459.pigo.feature.files.share.ShareUriPolicy
 import io.github.zr987459.pigo.feature.files.ui.FilesBrowserScreen
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -63,7 +57,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * 模块边界：feature/files 不依赖 core/workspace（构建文件不归 W3 改），所以这里的附件处理器是
  * [BitmapProcessor]（真实 Android BitmapFactory 解码 + 重编码），不是 FakeAttachmentProcessor 的原字节直转；
  * 真实 `WorkspaceAttachments + AndroidImageCodec` 与真实 `RootfsWorkspace` 经 content:// 导入见 core/workspace 的 WorkspaceDeviceTest。
- * 三者串起来的端到端（Share → 真实处理器 → 真实工作区）在 W5 接线后由 app 的仪器测试覆盖。
+ * 系统分享入口（ShareTargetActivity）已按 DESIGN-r3 X10 删除，其用例一并移除。
  */
 @RunWith(AndroidJUnit4::class)
 class FilesDeviceTest {
@@ -94,77 +88,11 @@ class FilesDeviceTest {
     fun setUp() {
         processor = BitmapProcessor()
         FilesRuntime.install(FilesDeps(FakeWorkspaceFs(), processor, FakeSessionExporter()))
-        ShareInbox.consume()
     }
 
     @After
     fun tearDown() {
         inserted.forEach { runCatching { ctx.contentResolver.delete(it, null, null) } }
-        ShareInbox.consume()
-    }
-
-    /** 其他应用（MediaStore，authority `media`）提供的图片。API 29+ 插入自己的媒体不需要存储权限。 */
-    private fun mediaStorePng(w: Int, h: Int): Uri {
-        assumeTrue("MediaStore 免权限插入需要 API 29+", Build.VERSION.SDK_INT >= 29)
-        val values = ContentValues().apply {
-            put(MediaStore.Images.Media.DISPLAY_NAME, "pigo-share-test-${System.nanoTime()}.png")
-            put(MediaStore.Images.Media.MIME_TYPE, "image/png")
-            put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/pigo-test")
-        }
-        val uri = ctx.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)!!
-        inserted += uri
-        ctx.contentResolver.openOutputStream(uri)!!.use { Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).compress(Bitmap.CompressFormat.PNG, 100, it) }
-        return uri
-    }
-
-    private fun shareIntent(vararg uris: Uri, text: String? = null) = Intent(ctx, ShareTargetActivity::class.java).apply {
-        if (uris.size == 1) { action = Intent.ACTION_SEND; putExtra(Intent.EXTRA_STREAM, uris[0]) }
-        else { action = Intent.ACTION_SEND_MULTIPLE; putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris.toList())) }
-        type = "image/png"
-        text?.let { putExtra(Intent.EXTRA_TEXT, it) }
-        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    }
-
-    private fun awaitDelivery(timeoutMs: Long = 10_000): ShareDelivery {
-        val end = System.currentTimeMillis() + timeoutMs
-        while (System.currentTimeMillis() < end) {
-            ShareInbox.delivery.value?.let { return it }
-            Thread.sleep(50)
-        }
-        throw AssertionError("ShareTargetActivity 在 ${timeoutMs}ms 内没有交付")
-    }
-
-    /** 验收：经真正的 ShareTargetActivity（ActivityScenario 启动）收到图片后产出一个 ImageInput。 */
-    @Test
-    fun shareTargetActivityTurnsImageIntoImageInput() {
-        val uri = mediaStorePng(2000, 1000)
-        ActivityScenario.launch<ShareTargetActivity>(shareIntent(uri, text = "看看这张图")).use {
-            val d = awaitDelivery()
-            assertEquals("看看这张图", d.text)
-            assertTrue(d.errors.toString(), d.errors.isEmpty())
-            val img = (d.attachments.single() as Attachment.Image).image
-            assertEquals("image/jpeg", img.mimeType)
-            assertEquals(1568, img.widthPx)
-            assertEquals(784, img.heightPx)
-            assertEquals(1, processor.images.get())
-        }
-    }
-
-    /** 审查第 1 轮：file:// 与本 App 自己 provider 的 Uri 被拒绝，处理器一次都不调用（防借权读取 auth.json 等私有文件）。 */
-    @Test
-    fun shareTargetRejectsFileAndOwnProviderUris() {
-        val secret = File(ctx.filesDir, "secret-auth.json").apply { writeText("{\"key\":\"sk-should-not-leak\"}") }
-        val own = FileShare.uriFor(ctx, File(ctx.cacheDir, FileShare.SHARE_DIR).apply { mkdirs() }.resolve("x.png").apply { writeBytes(ByteArray(10)) })
-        val fileUri = Uri.fromFile(secret)
-        assertTrue(!ShareUriPolicy.isAllowed(ctx, fileUri) && !ShareUriPolicy.isAllowed(ctx, own))
-        ActivityScenario.launch<ShareTargetActivity>(shareIntent(fileUri, own, text = "附带文字")).use {
-            val d = awaitDelivery()
-            assertEquals("附带文字", d.text)
-            assertTrue(d.attachments.isEmpty())
-            assertTrue(d.errors.toString(), d.errors.any { it.contains("已拒绝不安全的来源") })
-            assertEquals(0, processor.images.get())
-        }
-        secret.delete()
     }
 
     /** 其他应用（MediaStore Downloads，authority `media`）提供的文本文件，等同 SAF 选择器返回的外部 content:// Uri。 */

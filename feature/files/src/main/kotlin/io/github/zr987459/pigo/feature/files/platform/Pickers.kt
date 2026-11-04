@@ -31,7 +31,7 @@ object Pickers {
 
     /** 拍照：照片写到应用缓存（经 FileProvider 交给相机），返回该 Uri；取消返回空。 */
     suspend fun takePhoto(ctx: Context): List<Uri> {
-        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { io.github.zr987459.pigo.feature.files.share.ShareCache.cleanStale(ctx) }
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { FileShare.cleanStale(ctx) }
         val dir = File(ctx.cacheDir, FileShare.CAMERA_DIR).apply { mkdirs() }
         val f = File(dir, "IMG_${System.currentTimeMillis()}.jpg")
         val uri = FileShare.uriFor(ctx, f)
