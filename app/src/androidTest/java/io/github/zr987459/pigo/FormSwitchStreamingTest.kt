@@ -95,13 +95,16 @@ class FormSwitchStreamingTest {
                 try {
                     base.evaluate()
                 } catch (e: IllegalArgumentException) {
-                    throw AssertionError("完整堆栈：\n" + e.stackTraceToString().take(8000), e)
+                    throw AssertionError(oneLine(e), e)
                 } catch (e: IllegalStateException) {
-                    throw AssertionError("完整堆栈：\n" + e.stackTraceToString().take(8000), e)
+                    throw AssertionError(oneLine(e), e)
                 }
             }
         }
     }
+
+    /** Gradle 控制台只打印失败信息的第一行：把堆栈压成一行（⏎ 分隔）。 */
+    private fun oneLine(e: Throwable) = "完整堆栈：" + e.stackTraceToString().lines().map { it.trim() }.filter { it.isNotEmpty() }.take(80).joinToString(" ⏎ ")
 
     @get:Rule(order = 1)
     val rule = createAndroidComposeRule<MainWindowTestActivity>()
