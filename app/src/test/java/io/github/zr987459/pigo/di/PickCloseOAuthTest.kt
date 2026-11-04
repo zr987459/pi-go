@@ -47,7 +47,11 @@ class PickCloseOAuthTest {
         assertEquals(0, signal.count)
         assertTrue(s.items.value.any { it.id == "model.select" })
         // 开始登录：登录面板压栈，设备码流程在后台走到 Done → 自动选回
-        s.push(panels.oauthFlow("github-copilot"))
+        // 假设备码流程没有任何等待，可能在 oauthFlow 返回前就到 Done（Dispatchers.Default 上的竞态，CI 偶发超时）：
+        // 先把登录面板占位压栈，再用 oauthFlow 的结果替换栈顶，后台完成落在哪一刻都确定。
+        s.push(io.github.zr987459.pigo.contract.session.OverlayModel.Text("oauth:github-copilot", "登录 github-copilot", ""))
+        val login = panels.oauthFlow("github-copilot")
+        if (s.items.value.lastOrNull()?.id == "oauth:github-copilot") s.replaceTop(login)
         withTimeout(5_000) { while (signal.count == 0) delay(10) }
         withTimeout(5_000) { while (s.items.value.any { it.id == "model.select" }) delay(10) }
         val ids = s.items.value.map { it.id }
