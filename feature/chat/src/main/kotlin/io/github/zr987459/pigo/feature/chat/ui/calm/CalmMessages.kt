@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+
 package io.github.zr987459.pigo.feature.chat.ui.calm
 
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -40,6 +42,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
@@ -117,6 +120,15 @@ internal fun CalmMessages(
     LaunchedEffect(rows.size, lastSize, follow) {
         if (follow && rows.isNotEmpty()) list.scrollToItem(rows.lastIndex, Int.MAX_VALUE / 2)
     }
+    // 视口变高 / 变矮（软键盘弹出收起、imePadding、旋转）时仍贴底：原来只在内容变化时滚，
+    // 流式暂停或已结束时弹出键盘，最后几行就被挤到视口下面，切换形态时又按「不在底部」写回锚点，终端从顶部开始显示。
+    // 视口高度由 onSizeChanged 写入状态、在效应里滚动：不能在 snapshotFlow 收集里直接 scrollToItem——
+    // 布局阶段（SubcomposeLayout 放置时）发出的快照通知可能同步恢复收集协程，scrollToItem 的强制重测就会嵌套在测量里
+    // （performMeasureAndLayout called during measure layout）。
+    var viewportH by remember { mutableStateOf(0) }
+    LaunchedEffect(viewportH) {
+        if (viewportH > 0 && follow && rows.isNotEmpty() && !dragging) list.requestScrollToItem(rows.lastIndex, Int.MAX_VALUE / 2)
+    }
     // 新的本地结果块（「说明」条目、/session、/hotkeys 等）是用户刚触发的动作结果：滚到它并恢复贴底跟随。
     // 否则先用过「跳到上一条提示」或手动上滑（follow = false）后，结果追加在视口外，用户看不到任何反应。
     // 初值取进入时的条数，所以切换形态回来不会强行滚动，阅读位置照常恢复（§5.3）。
@@ -136,10 +148,12 @@ internal fun CalmMessages(
     }
     DisposableEffect(Unit) {
         onDispose {
+            // 贴底与否以 follow 为准（只由用户拖动 / 滚动停下的位置改写）；不再与 atBottom 相与：
+            // 视口刚变化、贴底滚动还没跟上的那一帧离开，会把「贴底」误记成「停在中间」。
             val i = list.firstVisibleItemIndex
             val key = rows.getOrNull(i)?.key
             host.scrollAnchor.value = if (key == null) ScrollAnchor("", 0, followBottom = true)
-            else ScrollAnchor(key, list.firstVisibleItemScrollOffset, followBottom = follow && atBottom)
+            else ScrollAnchor(key, list.firstVisibleItemScrollOffset, followBottom = follow)
         }
     }
 
@@ -149,7 +163,7 @@ internal fun CalmMessages(
     }
     LazyColumn(
         state = list,
-        modifier = modifier.fillMaxWidth().testTag("calm:messages"),
+        modifier = modifier.fillMaxWidth().testTag("calm:messages").onSizeChanged { viewportH = it.height },
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
