@@ -42,6 +42,11 @@ sealed interface OverlayModel {
         override val id: String,
         override val title: String,
         val text: String,
+        /**
+         * 有进度的流程面板（如账号登录 `oauth:*`）的结构化状态；null = 普通文字面板。
+         * 渲染器据此决定「重试」键帽、关闭时发 `cancel` 还是 `done`，不靠匹配文案（PR #18 审查第 3 轮 Nit 1）。
+         */
+        val flow: FlowState? = null,
     ) : OverlayModel
 
     data class Confirm(
@@ -83,6 +88,9 @@ sealed interface OverlayModel {
         val path: String,
     ) : OverlayModel
 }
+
+/** [OverlayModel.Text.flow]：进行中 / 失败（可重试）/ 完成。 */
+enum class FlowState { RUNNING, FAILED, DONE }
 
 data class SelectGroup(val title: String?, val items: List<SelectItem>)
 

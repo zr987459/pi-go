@@ -1,0 +1,351 @@
+[
+ {
+  "name": "user",
+  "type": "user",
+  "text": "帮我看看 src/a.kt 里的登录逻辑，为什么 token 会过期？\n第二行 with **bold** and `code`",
+  "width": 80,
+  "lines": [
+   "",
+   " 帮我看看 src/a.kt 里的登录逻辑，为什么 token 会过期？",
+   " 第二行 with bold and code",
+   ""
+  ]
+ },
+ {
+  "name": "userLong",
+  "type": "user",
+  "text": "Please refactor the authentication module so that refresh tokens are rotated on every use and old ones are revoked immediately.",
+  "width": 80,
+  "lines": [
+   "",
+   " Please refactor the authentication module so that refresh tokens are rotated",
+   " on every use and old ones are revoked immediately.",
+   ""
+  ]
+ },
+ {
+  "name": "assistantMd",
+  "type": "assistant",
+  "blocks": [
+   {
+    "type": "thinking",
+    "text": "Let me think about the token expiry.\nCheck refresh logic."
+   },
+   {
+    "type": "text",
+    "text": "# 标题一\n\n这是一段比较长的中文说明文字，用来测试自动换行是否按照东亚宽度计算列宽，以及英文 words mixed in between 是否正常折行。\n\n## Steps\n\n1. First item\n2. 第二项 `inline code`\n- bullet a\n- bullet b with [link](https://pi.dev)\n\n> quoted text here\n\n```kotlin\nfun main() {\n    println(\"hi\")\n}\n```\n\n---\n\nDone."
+   }
+  ],
+  "stopReason": "stop",
+  "width": 80,
+  "lines": [
+   "",
+   " Let me think about the token expiry.",
+   " Check refresh logic.",
+   "",
+   " 标题一",
+   "",
+   " 这是一段比较长的中文说明文字，用来测试自动换行是否按照东亚宽度计算列宽，以及英",
+   " 文 words mixed in between 是否正常折行。",
+   "",
+   " Steps",
+   "",
+   " 1. First item",
+   " 2. 第二项 inline code",
+   " - bullet a",
+   " - bullet b with link (https://pi.dev)",
+   "",
+   " │ quoted text here",
+   "",
+   " ```kotlin",
+   "   fun main() {",
+   "       println(\"hi\")",
+   "   }",
+   " ```",
+   "",
+   " ──────────────────────────────────────────────────────────────────────────────",
+   "",
+   " Done."
+  ]
+ },
+ {
+  "name": "assistantHidden",
+  "type": "assistant",
+  "hideThinking": true,
+  "blocks": [
+   {
+    "type": "thinking",
+    "text": "secret"
+   },
+   {
+    "type": "text",
+    "text": "Short answer."
+   }
+  ],
+  "stopReason": "stop",
+  "width": 80,
+  "lines": [
+   "",
+   " Thinking...",
+   "",
+   " Short answer."
+  ]
+ },
+ {
+  "name": "assistantError",
+  "type": "assistant",
+  "blocks": [],
+  "stopReason": "error",
+  "errorMessage": "401 Incorrect API key",
+  "width": 80,
+  "lines": [
+   "",
+   " Error: 401 Incorrect API key"
+  ]
+ },
+ {
+  "name": "assistantAborted",
+  "type": "assistant",
+  "blocks": [
+   {
+    "type": "text",
+    "text": "Partial"
+   }
+  ],
+  "stopReason": "aborted",
+  "width": 80,
+  "lines": [
+   "",
+   " Partial",
+   "",
+   " Operation aborted"
+  ]
+ },
+ {
+  "name": "assistantPlain",
+  "type": "assistant",
+  "blocks": [
+   {
+    "type": "text",
+    "text": "Here is a paragraph that is long enough to wrap around the eighty column limit of the terminal, so we can compare word wrapping.\n\nSecond paragraph with *italic* and **bold**."
+   }
+  ],
+  "stopReason": "stop",
+  "width": 80,
+  "lines": [
+   "",
+   " Here is a paragraph that is long enough to wrap around the eighty column limit",
+   " of the terminal, so we can compare word wrapping.",
+   "",
+   " Second paragraph with italic and bold."
+  ]
+ },
+ {
+  "name": "readPending",
+  "type": "tool",
+  "tool": "read",
+  "args": {
+   "path": "src/a.kt"
+  },
+  "width": 80,
+  "lines": [
+   "",
+   "",
+   " read src/a.kt",
+   ""
+  ]
+ },
+ {
+  "name": "readOk",
+  "type": "tool",
+  "tool": "read",
+  "args": {
+   "path": "/root/proj/src/a.kt",
+   "offset": 1,
+   "limit": 80
+  },
+  "result": "LONG30",
+  "width": 80,
+  "lines": [
+   "",
+   "",
+   " read /root/proj/src/a.kt:1-80",
+   ""
+  ]
+ },
+ {
+  "name": "readExpanded",
+  "type": "tool",
+  "tool": "read",
+  "args": {
+   "path": "src/a.kt"
+  },
+  "result": "LONG30",
+  "expanded": true,
+  "width": 80,
+  "lines": [
+   "",
+   "",
+   " read src/a.kt",
+   "",
+   " line 1",
+   " line 2",
+   " line 3",
+   " line 4",
+   " line 5",
+   " line 6",
+   " line 7",
+   " line 8",
+   " line 9",
+   " line 10",
+   " line 11",
+   " line 12",
+   " line 13",
+   " line 14",
+   " line 15",
+   " line 16",
+   " line 17",
+   " line 18",
+   " line 19",
+   " line 20",
+   " line 21",
+   " line 22",
+   " line 23",
+   " line 24",
+   " line 25",
+   " line 26",
+   " line 27",
+   " line 28",
+   " line 29",
+   " line 30",
+   ""
+  ]
+ },
+ {
+  "name": "bashOk",
+  "type": "tool",
+  "tool": "bash",
+  "args": {
+   "command": "ls -la"
+  },
+  "result": "total 8\nfile1\nfile2",
+  "width": 80,
+  "lines": [
+   "",
+   "",
+   " $ ls -la",
+   "",
+   " total 8",
+   " file1",
+   " file2",
+   "",
+   " Took 0.0s",
+   ""
+  ]
+ },
+ {
+  "name": "bashErr",
+  "type": "tool",
+  "tool": "bash",
+  "args": {
+   "command": "false"
+  },
+  "result": "exit code 1",
+  "isError": true,
+  "width": 80,
+  "lines": [
+   "",
+   "",
+   " $ false",
+   "",
+   " exit code 1",
+   "",
+   " Took 0.0s",
+   ""
+  ]
+ },
+ {
+  "name": "bashLong",
+  "type": "tool",
+  "tool": "bash",
+  "args": {
+   "command": "seq 30"
+  },
+  "result": "LONG30",
+  "width": 80,
+  "lines": [
+   "",
+   "",
+   " $ seq 30",
+   "",
+   " ... (25 earlier lines, ctrl+o to expand)",
+   " line 26",
+   " line 27",
+   " line 28",
+   " line 29",
+   " line 30",
+   "",
+   " Took 0.0s",
+   ""
+  ]
+ },
+ {
+  "name": "write",
+  "type": "tool",
+  "tool": "write",
+  "args": {
+   "path": "b.txt",
+   "content": "hello\nworld"
+  },
+  "result": "Wrote 11 bytes",
+  "width": 80,
+  "lines": [
+   "",
+   "",
+   " write b.txt",
+   "",
+   " hello",
+   " world",
+   ""
+  ]
+ },
+ {
+  "name": "grep",
+  "type": "tool",
+  "tool": "grep",
+  "args": {
+   "pattern": "token",
+   "path": "src"
+  },
+  "result": "src/a.kt:3: val token = x\nsrc/b.kt:9: token()",
+  "width": 80,
+  "lines": [
+   "",
+   "",
+   " grep /token/ in src",
+   "",
+   " src/a.kt:3: val token = x",
+   " src/b.kt:9: token()",
+   ""
+  ]
+ },
+ {
+  "name": "ls",
+  "type": "tool",
+  "tool": "ls",
+  "args": {
+   "path": "."
+  },
+  "result": "a.kt\nb.kt",
+  "width": 80,
+  "lines": [
+   "",
+   "",
+   " ls .",
+   "",
+   " a.kt",
+   " b.kt",
+   ""
+  ]
+ }
+]
