@@ -20,6 +20,9 @@ import kotlinx.serialization.json.intOrNull
 object SettingsPanelLogic {
     const val MODEL_OVERLAY = "model.select"
 
+    /** 确认框被关掉且整个面板随之关闭时发的事件（与 RealModelPanels.DISMISS 同值；本模块不依赖 feature/models）。 */
+    const val CONFIRM_DISMISS = "dismiss"
+
     /** 从「默认模型」「常用模型」行打开模型面板时的选取模式：点一行就写默认值 / 切换常用，**不切当前会话的模型**。 */
     enum class PickMode { DEFAULT, SCOPED }
 
@@ -59,13 +62,15 @@ object SettingsPanelLogic {
     fun closesPanel(result: ActionResult): Boolean = result == ActionResult.Done
 
     /**
-     * 关闭面板时要发给面板的事件：OAuth 取消登录、自定义服务商丢弃草稿与 Key；ModelPanels 的确认框（删除 / 清除 / 退出登录）
-     * 关闭 = 取消，由面板方清理它所属表单的已填 Key 与待定状态（PR #19 定向复核 Nit 3）；其他面板不发。
+     * 关闭面板时要发给面板的事件：OAuth 取消登录、自定义服务商丢弃草稿与 Key；其他面板不发。
+     * ModelPanels 的确认框（删除 / 清除 / 退出登录）在本页是**替换**表单显示的，点「关闭」= 关掉整个面板，所以发 `dismiss`
+     * （不是 `cancel`）：面板方据此清理它所属表单的已填 Key 与待定状态（PR #19 定向复核 Nit 3）。`cancel` 只关确认框、不动表单，
+     * 是终端 / UI 形态表单还开着时用的（PR #25 审查第 1 轮 Important 1）。
      */
     fun dismissEvent(model: OverlayModel): String? = when {
         model.id.startsWith("oauth:") && !isOAuthFinal(model) -> "cancel"
         model.id.startsWith("provider.custom") -> "cancel"
-        model is OverlayModel.Confirm && model.id.startsWith("confirm.") -> "cancel"
+        model is OverlayModel.Confirm && model.id.startsWith("confirm.") -> CONFIRM_DISMISS
         else -> null
     }
 

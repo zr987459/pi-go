@@ -142,8 +142,8 @@ class RealModelPanelsFix3Test {
         val c = panels.onPanelEvent("provider.custom:my", "remove", """{"id":"my","baseUrl":"http://a/v1"}""").overlay()
         assertTrue(c is OverlayModel.Confirm && c.dangerous)
         assertTrue("未确认前不删除", store.list().any { it.id == "my" })
-        // 取消（关闭确认框）不删；回到清理后的表单（PR #19 定向复核 Nit 3：关闭 = 取消并清理）
-        assertEquals("provider.custom:my", panels.onPanelEvent(c.id, "cancel", null).overlay().id)
+        // 取消（关闭确认框）不删，只关确认框（Done），表单不动（PR #25 审查第 1 轮 Nit 2：改回正确预期）
+        assertEquals(ActionResult.Done, panels.onPanelEvent(c.id, "cancel", null))
         assertTrue(store.list().any { it.id == "my" })
         // 确认：删除并关闭面板（Done），不再留着可「保存」重建的表单
         assertEquals(ActionResult.Done, panels.onPanelEvent(c.id, "confirm", null))

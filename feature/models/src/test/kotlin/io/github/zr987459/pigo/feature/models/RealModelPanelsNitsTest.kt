@@ -65,33 +65,74 @@ class RealModelPanelsNitsTest {
         assertTrue(r.failed)
     }
 
-    // ---- Nit 3（复核编号）：确认框「关闭 / 取消」= 取消并清理已填 Key 与待定状态
+    // ---- PR #25 审查第 1 轮 Important 1：确认框「取消」只关确认框（Done），仍开着的表单原样保留；
+    //      只有宿主关掉整个面板（dismiss，设置页）时才清理已填 Key 与待定状态（PR #19 定向复核 Nit 3）
 
-    @Test fun cancelRemoveConfirmDropsTypedKeyAndDraft() = runBlocking {
+    @Test fun cancelRemoveConfirmKeepsTypedKeyAndEdits() = runBlocking {
         panels.onPanelEvent(RealModelPanels.ID_CUSTOM, "submit", """{"id":"my","baseUrl":"http://a/v1","models":"m1"}""")
         val formId = "${RealModelPanels.ID_CUSTOM}:my"
-        // 编辑：填了新 Key（未保存）后点「删除」
-        val c = panels.onPanelEvent(formId, "remove", """{"id":"my","baseUrl":"http://a/v1","apiKey":"sk-NEW1"}""").overlay()
+        // 编辑：改了接口地址、填了新 Key（未保存）后点「删除」
+        val c = panels.onPanelEvent(formId, "remove", """{"id":"my","baseUrl":"http://b/v1","apiKey":"sk-NEW1"}""").overlay()
         assertTrue(c is OverlayModel.Confirm)
-        assertTrue(keyHelp(panels.customProviderForm("my"))!!.startsWith("已填写"))
-        // 关闭确认框：不删除，但已填未存的 Key 被清掉；返回清理后的表单
-        val back = panels.onPanelEvent(c.id, "cancel", null).overlay()
-        assertEquals(formId, back.id)
+        assertEquals("确认框 id 用表单自己的服务商 id", "${RealModelPanels.CONFIRM_REMOVE}my", c.id)
+        // 取消：只关确认框，返回 Done；不删除，表单里的修改与已填 Key 都还在
+        assertEquals(ActionResult.Done, panels.onPanelEvent(c.id, "cancel", null))
         assertTrue(store.list().any { it.id == "my" })
-        assertFalse("关闭确认框后不应再显示「已填写」", keyHelp(back)!!.startsWith("已填写"))
-        // 再保存不会把被放弃的 Key 写进去
+        val form = panels.customProviderForm("my") as OverlayModel.Form
+        assertEquals("未保存的修改保留", "http://b/v1", form.values["baseUrl"])
+        assertTrue("已填 Key 保留", keyHelp(form)!!.startsWith("已填写"))
+        // 接着保存：用的是刚才填的 Key
+        assertEquals("已保存 my", panels.onPanelEvent(formId, "submit", """{"id":"my","baseUrl":"http://b/v1","models":"m1"}""").toast().text)
+        assertTrue("取消后已填 Key 仍随保存写入", store.discover("http://b/v1", ProviderApi.OPENAI_COMPLETIONS, null, "my") is Outcome.Ok)
+    }
+
+    @Test fun dismissRemoveConfirmDropsTypedKeyAndDraft() = runBlocking {
+        panels.onPanelEvent(RealModelPanels.ID_CUSTOM, "submit", """{"id":"my","baseUrl":"http://a/v1","models":"m1"}""")
+        val formId = "${RealModelPanels.ID_CUSTOM}:my"
+        val c = panels.onPanelEvent(formId, "remove", """{"id":"my","baseUrl":"http://a/v1","apiKey":"sk-NEW1"}""").overlay()
+        // 设置页关掉整个面板：dismiss → 清理草稿与已填 Key，返回 Done
+        assertEquals(ActionResult.Done, panels.onPanelEvent(c.id, RealModelPanels.DISMISS, null))
+        assertTrue(store.list().any { it.id == "my" })
+        assertFalse("关闭整个面板后不应再显示「已填写」", keyHelp(panels.customProviderForm("my"))!!.startsWith("已填写"))
         panels.onPanelEvent(formId, "submit", """{"id":"my","baseUrl":"http://a/v1","models":"m1"}""")
         assertTrue("没有 Key 被写入", store.discover("http://a/v1", ProviderApi.OPENAI_COMPLETIONS, null, "my") is Outcome.Err)
     }
 
-    @Test fun cancelClearConfirmDropsPendingModel() = runBlocking {
+    @Test fun cancelClearConfirmKeepsPendingModel() = runBlocking {
         val form = panels.onPanelEvent(RealModelPanels.ID_MODEL, "model:qwen-token-plan-cn/qwen3-coder-plus").overlay()
-        assertEquals(ModelRef("qwen-token-plan-cn", "qwen3-coder-plus"), panels.pending.value)
+        val ref = ModelRef("qwen-token-plan-cn", "qwen3-coder-plus")
+        assertEquals(ref, panels.pending.value)
         val c = panels.onPanelEvent(form.id, "clear", null).overlay()
         assertTrue(c is OverlayModel.Confirm)
-        val back = panels.onPanelEvent(c.id, "cancel", null).overlay()
-        assertEquals(form.id, back.id)
-        assertNull("关闭确认框后待选模型不再自动选回", panels.pending.value)
+        assertEquals("取消只关确认框", ActionResult.Done, panels.onPanelEvent(c.id, "cancel", null))
+        assertEquals("待选模型保留，保存凭据后仍会自动选回", ref, panels.pending.value)
+    }
+
+    @Test fun dismissClearConfirmDropsPendingModel() = runBlocking {
+        val form = panels.onPanelEvent(RealModelPanels.ID_MODEL, "model:qwen-token-plan-cn/qwen3-coder-plus").overlay()
+        val c = panels.onPanelEvent(form.id, "clear", null).overlay()
+        assertEquals(ActionResult.Done, panels.onPanelEvent(c.id, RealModelPanels.DISMISS, null))
+        assertNull("关掉整个面板后待选模型不再自动选回", panels.pending.value)
+    }
+
+    // ---- PR #25 审查第 1 轮 Nit 1：新建（未保存）服务商不按填的名称造删除确认框
+
+    @Test fun newUnsavedProviderHasNoRemoveConfirm() = runBlocking {
+        panels.onPanelEvent(RealModelPanels.ID_PROVIDERS, "custom", null)
+        val fresh = panels.customProviderForm(null) as OverlayModel.Form
+        assertFalse("新建表单没有「删除」", fresh.actions.any { it.actionId == "remove" })
+        // 即使收到 remove 事件，也不产生 confirm.remove:<名称>（不会再压一层不存在服务商的表单）
+        val r = panels.onPanelEvent(RealModelPanels.ID_CUSTOM, "remove", """{"id":"typed","baseUrl":"http://a/v1","apiKey":"sk-T"}""")
+        assertTrue(r is ActionResult.Toast && r.failed)
+        assertTrue(keyHelp(panels.customProviderForm(null))!!.startsWith("已填写"))
+        // 新建草稿照常由关闭表单（cancel）清理：草稿 key 与表单一致
+        assertEquals(ActionResult.Done, panels.onPanelEvent(RealModelPanels.ID_CUSTOM, "cancel", null))
+        assertFalse(keyHelp(panels.customProviderForm(null))!!.startsWith("已填写"))
+        // 编辑已保存的服务商才有「删除」，确认框 id 与草稿 key 一致
+        panels.onPanelEvent(RealModelPanels.ID_CUSTOM, "submit", """{"id":"saved","baseUrl":"http://a/v1","models":"m1"}""")
+        assertTrue((panels.customProviderForm("saved") as OverlayModel.Form).actions.any { it.actionId == "remove" })
+        val c = panels.onPanelEvent("${RealModelPanels.ID_CUSTOM}:saved", "remove", """{"id":"saved","baseUrl":"http://a/v1"}""").overlay()
+        assertEquals("${RealModelPanels.CONFIRM_REMOVE}saved", c.id)
     }
 
     // ---- Nit 2（复核编号）：OAuth 失败面板同时满足两种形态画「重试」的契约

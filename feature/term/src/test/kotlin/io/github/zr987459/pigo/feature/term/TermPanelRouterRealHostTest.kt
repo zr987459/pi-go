@@ -66,7 +66,10 @@ class TermPanelRouterRealHostTest {
         override suspend fun providerForm(providerId: String) = OverlayModel.Form(
             "provider.form:$providerId", providerId, listOf(FormField("apiKey", "API Key", PiSettingType.Str, secret = true)),
         )
-        override suspend fun customProviderForm(providerId: String?) = OverlayModel.Form("provider.custom", "自定义服务商", listOf(FormField("id", "名称", PiSettingType.Str)))
+        override suspend fun customProviderForm(providerId: String?) = OverlayModel.Form(
+            providerId?.let { "provider.custom:$it" } ?: "provider.custom", "自定义服务商",
+            listOf(FormField("id", "名称", PiSettingType.Str), FormField("baseUrl", "接口地址", PiSettingType.Str), FormField("apiKey", "API Key", PiSettingType.Str, secret = true)),
+        )
         override suspend fun oauthFlow(providerId: String) = OverlayModel.Text("oauth:$providerId", "登录 $providerId", "…", flow = oauthStep)
         override suspend fun logoutPicker() = OverlayModel.SelectList("auth.logout", "退出登录", listOf(SelectGroup(null, listOf(SelectItem("provider:deepseek", "DeepSeek")))))
 
@@ -83,6 +86,10 @@ class TermPanelRouterRealHostTest {
                     if (value?.contains("sk-good") == true) ActionResult.Done else ActionResult.Toast("保存失败：Key 无效", failed = true)
                 overlayId.startsWith("oauth:") && key == "done" -> ActionResult.Toast("已登录，已自动选回模型")
                 overlayId.startsWith("oauth:") -> ActionResult.Done
+                // 与 RealModelPanels 的约定一致（PR #25 审查第 1 轮 Important 1）：已保存服务商的「删除」先确认；确认框「取消」只返回 Done
+                overlayId.startsWith("provider.custom:") && key == "remove" ->
+                    ActionResult.Overlay(OverlayModel.Confirm("confirm.remove:" + overlayId.removePrefix("provider.custom:"), "删除", "确定删除？", "删除", dangerous = true))
+                overlayId.startsWith("confirm.") && key != "confirm" -> ActionResult.Done
                 else -> ActionResult.Toast("未知：$overlayId/$key")
             }
         }
@@ -115,7 +122,7 @@ class TermPanelRouterRealHostTest {
         override val notices = MutableSharedFlow<String>()
     }
 
-    private class Ctx(val host: SessionHostImpl, val engine: FakeScriptedEngine, val panels: Panels, val router: TermPanelRouter, val ran: MutableList<Pair<String, String?>>, val toasts: MutableList<String>)
+    private class Ctx(val host: SessionHostImpl, val engine: FakeScriptedEngine, val panels: Panels, val router: TermPanelRouter, val ran: MutableList<Pair<String, String?>>, val toasts: MutableList<String>, val tracker: PanelSourceTracker)
 
     private fun TestScope.ctx(scope: CoroutineScope): Ctx {
         val engine = FakeScriptedEngine(scope).also { it.start() }
@@ -133,7 +140,7 @@ class TermPanelRouterRealHostTest {
             toast = { toasts += it },
         )
         testScheduler.runCurrent()
-        return Ctx(host, engine, panels, router, ran, toasts)
+        return Ctx(host, engine, panels, router, ran, toasts, tracker)
     }
 
     @Test
@@ -231,5 +238,29 @@ class TermPanelRouterRealHostTest {
         c.router.pick(own, "high")
         assertEquals("overlay:thinking" to "high", c.ran.last())
         assertTrue(c.panels.events.isEmpty())
+    }
+
+    /**
+     * PR #25 审查第 1 轮 Important 1：终端里编辑自定义服务商（改了地址、填了 Key）→ 点「删除」→ 在确认框里「取消」：
+     * 只关确认框，栈里的表单原样保留（不被换成恢复成保存值的新表单，也不多压一层）。
+     */
+    @Test
+    fun cancelInRemoveConfirmKeepsOpenFormUntouched() = runTest(UnconfinedTestDispatcher()) {
+        val c = ctx(backgroundScope)
+        val form = (c.tracker.customProviderForm("my") as OverlayModel.Form)
+            .copy(values = mapOf("id" to "my", "baseUrl" to "http://b/v1", "apiKey" to "sk-typed"))
+        c.host.overlay.push(form)
+        assertTrue(c.router.toPanel(form))
+        c.router.panelEvent(form.id, "remove", TermInput.formJson(form.values))
+        testScheduler.runCurrent()
+        val confirm = c.host.overlay.top as OverlayModel.Confirm
+        assertEquals("confirm.remove:my", confirm.id)
+
+        c.router.confirm(confirm, yes = false)
+        testScheduler.runCurrent()
+        assertEquals(Triple("confirm.remove:my", "cancel", null), c.panels.events.last())
+        assertEquals("只剩原表单，没有多压一层", listOf("provider.custom:my"), c.host.overlay.items.value.map { it.id })
+        assertEquals("未保存的修改与已填 Key 原样保留", form, c.host.overlay.top)
+        assertTrue(c.toasts.isEmpty())
     }
 }

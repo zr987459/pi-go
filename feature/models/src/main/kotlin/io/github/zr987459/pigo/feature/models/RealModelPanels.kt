@@ -56,6 +56,9 @@ import kotlinx.serialization.json.jsonPrimitive
  * - `oauth:<id>`：`refresh`、`code`（value = 授权码 / 回调 URL）、`select:<选项>`、`cancel`。
  * - `provider.custom[:<id>]`：`discover` / `test` / `submit`（value = 表单值 JSON）、`remove`。
  * - [ID_LOGOUT]：`provider:<id>`。
+ * - 确认框 `confirm.remove:<id>` / `confirm.clear:<id>` / `confirm.logout:<id>`：`confirm`（执行）、`cancel`（只关确认框：返回 Done，
+ *   **不动**仍开着的表单——未保存的修改、已填 Key、待选模型都保留）、`dismiss`（宿主关掉了**整个面板**，例如设置页确认框被
+ *   替换显示时点「关闭」：清理该服务商表单的残留草稿 / Key / 待选模型，返回 Done）。
  *
  * 生成中也可切模型：`set_model` 立即发出，返回提示「下一轮生效」（§6.4）。
  */
@@ -320,20 +323,24 @@ class RealModelPanels(
             value?.takeIf { it.isNotBlank() }?.let { onProvidersEvent(it, null) } ?: fail("先选中一个服务商")
         overlayId == ID_PROVIDERS -> onProvidersEvent(key, value)
         overlayId == ID_LOGOUT && key.startsWith("provider:") -> ActionResult.Overlay(clearConfirm(key.removePrefix("provider:"), CONFIRM_LOGOUT))
-        // 确认框的「关闭 / 取消」等同取消整个表单：清掉已填未存的 Key、草稿和该服务商的待选模型（PR #19 定向复核 Nit 3），
-        // 并回到清理后的表单（设置页关闭时不接这个结果；UI / 终端形态用它刷新栈里的表单，不再显示「已填写」）。
-        overlayId.startsWith(CONFIRM_REMOVE) -> if (key == "confirm") removeCustom(overlayId.removePrefix(CONFIRM_REMOVE)) else {
+        // 确认框「取消」只关确认框（返回 Done），仍开着的表单原样保留：未保存的修改、已填 Key、待选模型都不动（PR #25 审查第 1 轮 Important 1）。
+        // 只有宿主关掉**整个面板**时发 `dismiss`，才清理该表单的残留（PR #19 定向复核 Nit 3：设置页关闭确认框 = 关闭整个面板）。
+        // 删除确认框只给已保存的服务商（id = 表单的 draftKey，见 onCustomEventInner 的 remove），dismiss 清的就是那份草稿。
+        overlayId.startsWith(CONFIRM_REMOVE) -> {
             val id = overlayId.removePrefix(CONFIRM_REMOVE)
-            cancelForm(id, draftKey = id)
-            ActionResult.Overlay(customProviderForm(id))
+            when (key) {
+                "confirm" -> removeCustom(id)
+                DISMISS -> { cancelForm(id, draftKey = id); ActionResult.Done }
+                else -> ActionResult.Done
+            }
         }
-        overlayId.startsWith(CONFIRM_CLEAR) -> if (key == "confirm") {
+        overlayId.startsWith(CONFIRM_CLEAR) -> {
             val p = overlayId.removePrefix(CONFIRM_CLEAR)
-            when (val r = logout(p)) { is ActionResult.Toast -> if (!r.failed) ActionResult.Overlay(providerForm(p)) else r; else -> r }
-        } else {
-            val p = overlayId.removePrefix(CONFIRM_CLEAR)
-            cancelForm(p, draftKey = null)
-            ActionResult.Overlay(providerForm(p))
+            when (key) {
+                "confirm" -> when (val r = logout(p)) { is ActionResult.Toast -> if (!r.failed) ActionResult.Overlay(providerForm(p)) else r; else -> r }
+                DISMISS -> { cancelForm(p, draftKey = null); ActionResult.Done }
+                else -> ActionResult.Done
+            }
         }
         overlayId.startsWith(CONFIRM_LOGOUT) -> if (key == "confirm") {
             when (val r = logout(overlayId.removePrefix(CONFIRM_LOGOUT))) { is ActionResult.Toast -> if (!r.failed) ActionResult.Overlay(logoutPicker()) else r; else -> r }
@@ -546,9 +553,11 @@ class RealModelPanels(
                 }
             }
             "cancel" -> { forgetDraft(draftKey); ActionResult.Done }
-            // 删除连同 Key 一起删：先确认（审查第 3 轮 Nit 1）。
-            "remove" -> if (id.isEmpty()) fail("请填写名称") else ActionResult.Overlay(
-                OverlayModel.Confirm("$CONFIRM_REMOVE$id", "删除自定义服务商", "删除 $id 及其 API Key？此操作不能撤销。", "删除", dangerous = true),
+            // 删除连同 Key 一起删：先确认（审查第 3 轮 Nit 1）。只有已保存的服务商（编辑表单）能删：新建表单没有「删除」，
+            // 也不按用户填的名称造确认框——否则确认框 id 与草稿 key（""）对不上，终端还会多压一层不存在服务商的表单（PR #25 审查第 1 轮 Nit 1）。
+            // 确认框 id 用表单自己的 providerId（= draftKey），不用表单里填的名称。
+            "remove" -> if (providerId == null) fail("还没保存，无需删除；直接关闭即可丢弃") else ActionResult.Overlay(
+                OverlayModel.Confirm("$CONFIRM_REMOVE$providerId", "删除自定义服务商", "删除 $providerId 及其 API Key？此操作不能撤销。", "删除", dangerous = true),
             )
             else -> fail("未知操作：$key")
         }
@@ -662,6 +671,8 @@ class RealModelPanels(
         const val CONFIRM_REMOVE = "confirm.remove:"
         const val CONFIRM_CLEAR = "confirm.clear:"
         const val CONFIRM_LOGOUT = "confirm.logout:"
+        /** 确认框事件：宿主关掉了整个面板（不是只关确认框），面板方清理该表单的残留草稿 / Key / 待选模型。 */
+        const val DISMISS = "dismiss"
 
         val TAB_LABELS = linkedMapOf(ModelPickerTab.ALL to "全部", ModelPickerTab.SCOPED to "常用", ModelPickerTab.RECENT to "最近")
 
