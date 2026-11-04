@@ -353,7 +353,8 @@ fun overlayEnter(
         }
         is OverlayModel.Form -> submitForm(host, model, toPanel, onRun, onPanelEvent)
         is OverlayModel.Confirm -> confirmAnswer(host, model, true, toPanel, onRun, onPanelEvent)
-        is OverlayModel.Text -> host.overlay.pop()
+        // 账号登录失败时 Enter = 重试（与键帽「enter 重试」一致）；其他文字面板 Enter 关闭
+        is OverlayModel.Text -> if (TermInput.oauthCaps(model).any { it.second == "retry" }) onPanelEvent(model.id, "retry", null, false) else host.overlay.pop()
         // /tree：Enter 选中高亮节点（pi 树选择器同样）；没有高亮项时消费掉 Enter，不往草稿插换行（审查第 2 轮 Nit 3）
         is OverlayModel.Tree -> model.selectedId?.let { pick(it) }
         // 完整输出：Enter 关闭

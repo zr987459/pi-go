@@ -264,6 +264,14 @@ private fun TermScreen(
     val atMatches = TermInput.atMatchesFor(atQuery, atResult.first, atResult.second)
     /** 正在防抖 / 搜索中：有 @ 查询词、有候选源，但结果还不是这个词的。 */
     val atPending = atQuery != null && env.fileSearch != null && atResult.first != atQuery
+    fun pickAt(m: FileMatch) {
+        val d = host.draft.value
+        val q = TermInput.atQuery(d.text, d.safeSelectionStart) ?: return
+        // 文件补全后加空格（pi 同样）；目录保留结尾 `/` 继续往下找
+        val ins = m.completion + if (m.isDir) "" else " "
+        setDraftText(d.text.substring(0, q.start) + ins + d.text.substring(q.end), q.start + ins.length)
+    }
+
     /** Enter / Tab 碰上防抖中的 @ 查询：等这个词的结果；有候选就插入第一个，没有就执行 [orElse]（Enter = 发送，Tab = 不动）。 */
     fun pickAtWhenReady(orElse: () -> Unit) {
         val fs = env.fileSearch ?: return orElse()
@@ -273,14 +281,6 @@ private fun TermScreen(
             val still = TermInput.atQuery(host.draft.value.text, host.draft.value.safeSelectionStart)
             if (still == q && m.isNotEmpty()) pickAt(m.first()) else if (still == q) orElse()
         }
-    }
-
-    fun pickAt(m: FileMatch) {
-        val d = host.draft.value
-        val q = TermInput.atQuery(d.text, d.safeSelectionStart) ?: return
-        // 文件补全后加空格（pi 同样）；目录保留结尾 `/` 继续往下找
-        val ins = m.completion + if (m.isDir) "" else " "
-        setDraftText(d.text.substring(0, q.start) + ins + d.text.substring(q.end), q.start + ins.length)
     }
 
     fun submit(followUp: Boolean = false) {
