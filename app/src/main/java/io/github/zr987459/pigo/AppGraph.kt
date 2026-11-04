@@ -98,10 +98,25 @@ class AppGraph(context: Context) {
     // 包一层来源记录（r3/term PanelSourceTracker）：交给 PiActionsImpl 的就是这一个，终端形态据此认出 ModelPanels 产出的面板。
     val panelSource: io.github.zr987459.pigo.feature.term.PanelSourceTracker by lazy {
         io.github.zr987459.pigo.feature.term.PanelSourceTracker(
-            RealModelPanels(models.catalog, models.auth, models.custom, setModelSignal, appScope, piSettings),
+            RealModelPanels(
+                models.catalog, models.auth, models.custom, setModelSignal, appScope, piSettings,
+                // r4 根因修复：Key 只在 pi 启动时经环境变量注入、models.json 只在启动时读；保存 Key / 自定义端点后
+                // 必须重启 pi（续接当前会话）才用得上。原来这里没接，保存后 pi 进程里根本没有这个 Key。
+                onCredentialsChanged = { p -> engine.restart("$p 的凭据已更新"); Unit },
+            ),
         )
     }
     val modelPanels: ModelPanels get() = panelSource
+
+    /** 设置 › 模型 的极简配置（r4/model-config）：选服务商 → 填 Key → 选模型 → 测试 → 保存并使用。 */
+    val quickModelSetup: io.github.zr987459.pigo.core.store.QuickModelSetup by lazy {
+        io.github.zr987459.pigo.core.store.QuickModelSetup(
+            config = io.github.zr987459.pigo.di.StoreBindings.piConfig(ctx, secrets),
+            catalogModels = { p -> (models.catalog.entries(p) as? io.github.zr987459.pigo.contract.Outcome.Ok)?.value?.map { it.model.id }.orEmpty() },
+            restartEngine = { reason -> engine.restart(reason) },
+            setModel = { p, m -> engine.setModel(p, m) },
+        )
+    }
 
     /** 两种形态里模型面板的点击、键帽、表单、确认框 → [ModelPanels.onPanelEvent]；选中模型成功后关掉选择面板（[PickClose]）。 */
     val modelPanelEvents: PanelEventSink by lazy {

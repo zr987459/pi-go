@@ -66,6 +66,7 @@ import io.github.zr987459.pigo.feature.settings.SettingsFocus
 import io.github.zr987459.pigo.feature.settings.SettingsScreen
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -193,8 +194,48 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
     }
 }
 
+/**
+ * 设置 › 模型（r4/model-config）：先是极简配置页（选服务商 → 填 Key → 选模型 → 测试 → 保存并使用）；
+ * 「高级设置」进入原来的完整页面（全部服务商、账号登录、自定义端点细节、代理、运行环境）。
+ */
 @Composable
 private fun SettingsPage(graph: AppGraph, focus: String?, onBack: () -> Unit) {
+    var advanced by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+    if (advanced) {
+        androidx.activity.compose.BackHandler { advanced = false }
+        AdvancedSettingsPage(graph, focus, onBack = { advanced = false })
+        return
+    }
+    val setup = graph.quickModelSetup
+    val scope = rememberCoroutineScope()
+    val current = remember(graph) {
+        graph.engine.chat.map { c -> c.model?.let { "${it.provider}/${it.id}" } }
+            .stateIn(scope, kotlinx.coroutines.flow.SharingStarted.Eagerly, graph.engine.chat.value.model?.let { "${it.provider}/${it.id}" })
+    }
+    val actions = remember(graph, current) {
+        io.github.zr987459.pigo.feature.settings.QuickSetupActions(
+            presets = io.github.zr987459.pigo.core.store.QuickModelSetup.PRESETS.map {
+                io.github.zr987459.pigo.feature.settings.QuickPreset(
+                    id = it.id, label = it.label, needsBaseUrl = it.id == io.github.zr987459.pigo.core.store.QuickModelSetup.CUSTOM,
+                    keyUrl = it.keyUrl, hint = it.hint, listWithoutKey = it.builtIn,
+                )
+            },
+            currentModel = current,
+            loadModels = { id, key, url -> setup.models(id, key, url) },
+            test = { id, key, model, url -> setup.test(id, key, model, url).let { io.github.zr987459.pigo.feature.settings.QuickCheck(it.verdict == io.github.zr987459.pigo.core.store.QuickModelSetup.Verdict.OK, it.message) } },
+            save = { id, key, model, models, url ->
+                when (val r = setup.save(id, key, model, models, url)) {
+                    is Outcome.Ok -> Outcome.Ok(r.value.message)
+                    is Outcome.Err -> r
+                }
+            },
+        )
+    }
+    io.github.zr987459.pigo.feature.settings.QuickModelSetupPage(actions, onBack = onBack, onAdvanced = { advanced = true })
+}
+
+@Composable
+private fun AdvancedSettingsPage(graph: AppGraph, focus: String?, onBack: () -> Unit) {
     val runtimeStatus by graph.runtime.status.collectAsState()
     val scope = rememberCoroutineScope()
     val app = LocalContext.current.applicationContext
