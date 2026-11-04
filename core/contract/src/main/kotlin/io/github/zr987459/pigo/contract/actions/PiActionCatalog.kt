@@ -693,7 +693,7 @@ object PiActionCatalog {
             slash = listOf(),
             featureRefs = listOf("§3 扩展命令"),
             ui = UiEntry.Command,
-            term = TermEntry.Slash,
+            term = TermEntry.KeyStrip("/"),
         ),
         spec(
             id = "help.powershell",
