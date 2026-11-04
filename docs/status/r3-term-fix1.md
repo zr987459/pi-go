@@ -23,3 +23,6 @@
 ## 09:10 CST
 - 6a9a43a：并入调度者裁定（面板键帽→面板事件，TermEnv.onPanelEvent，测试 panelKeyCapsEmitPanelEvents）。
 - CI run 41751100860：build 绿；模拟器 job 剩 2 个失败（escPicksActionByState 的 bash 分支、externalKeyboardMatchesPi），修复中。
+
+## 09:25 CST（进行中）
+- 3e8489f：run 41752332211 build 绿；模拟器剩 2 个失败：externalKeyboardMatchesPi（Ctrl+L，清面板后编辑器失焦，已补重新聚焦）、slowFramesUnder5PercentWith1000Deltas（CI 模拟器慢帧 17.49%，184/1052，未解决）。
