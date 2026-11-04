@@ -106,3 +106,7 @@
 - 普通 merge（两父提交，不 rebase、不 force）。冲突只有 `RealModelPanels.kt` 的 oauthPanel：以 main 为准（Text 带 `flow = FlowState.*`），保留本轮 NeedCode 授权链接。
 - CalmPanelLogic.isOAuthFinal 同时认 main 新增的 `FlowState.DONE/FAILED`。
 - 下一步：等 CI；之后可能再 merge PR #23（r3/session-overlay）。
+
+## merge main@584a056（2026-11-04 12:35 CST，进行中）
+- 已开始：把 main@584a056（PR#23 r3/session-overlay）普通 merge 进 r3/app@7f9bceb，不 rebase、不 force。
+- 计划：①merge 并列冲突文件；②core/session 路由/栈逻辑以 main 为准，app/calm 适配新接口，保留 PR#21 全部审查修复；③本地 assembleDebug testDebugUnitTest；④推送盯 CI（含模拟器）；⑤更新 PR 描述。
