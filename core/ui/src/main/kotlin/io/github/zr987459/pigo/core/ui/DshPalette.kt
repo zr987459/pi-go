@@ -13,6 +13,7 @@ import androidx.compose.ui.graphics.Color
  * 手工构造，不走动态取色：低饱和、70% 中性面、≤5% 强调色。
  * 界面代码一律从 [MaterialTheme.colorScheme] 或 [DshTheme.colors] 取色，不直接用这些常量。
  */
+@Deprecated("r3: r3/calm 删除（DESIGN-r3 X8，改用 core/ui/calm 的 CalmTheme / CalmIcons）")
 object DshPalette {
     // ── 浅色：晨雾（页面渐变取自参考截图，色相偏湖青） ─────────────────
     val MistTop = Color(0xFFD9EEF9)

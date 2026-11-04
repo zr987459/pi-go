@@ -6,7 +6,7 @@ import io.github.zr987459.pigo.contract.InstallProgress
 import io.github.zr987459.pigo.contract.InstallStep
 import io.github.zr987459.pigo.contract.Phase
 import io.github.zr987459.pigo.contract.RuntimeStatus
-import io.github.zr987459.pigo.core.ui.PiGoTheme
+import android.content.res.Configuration
 
 private val notInstalled = RuntimeStatus(Phase.NOT_INSTALLED, null, null, null, null)
 private val ready = RuntimeStatus(Phase.READY, "24.04.5", "v24.22.2", "1.5.0", null)
@@ -24,26 +24,26 @@ private val installing = OnboardingViewModel.UiState(
 
 @Preview(name = "安装引导 · 确认 · 浅色", widthDp = 380, heightDp = 760)
 @Composable
-private fun ConfirmLight() = PiGoTheme(darkTheme = false) { Sample(OnboardingViewModel.UiState(), notInstalled) }
+private fun ConfirmLight() = Sample(OnboardingViewModel.UiState(), notInstalled)
 
-@Preview(name = "安装引导 · 确认 · 深色", widthDp = 380, heightDp = 760)
+@Preview(name = "安装引导 · 确认 · 深色", widthDp = 380, heightDp = 760, uiMode = Configuration.UI_MODE_NIGHT_YES)
 @Composable
-private fun ConfirmDark() = PiGoTheme(darkTheme = true) { Sample(OnboardingViewModel.UiState(), notInstalled) }
+private fun ConfirmDark() = Sample(OnboardingViewModel.UiState(), notInstalled)
 
 @Preview(name = "安装引导 · 安装中 · 浅色", widthDp = 380, heightDp = 760)
 @Composable
-private fun InstallingLight() = PiGoTheme(darkTheme = false) { Sample(installing, RuntimeStatus(Phase.INSTALLING, null, null, null, null)) }
+private fun InstallingLight() = Sample(installing, RuntimeStatus(Phase.INSTALLING, null, null, null, null))
 
-@Preview(name = "安装引导 · 安装中 · 深色", widthDp = 380, heightDp = 760)
+@Preview(name = "安装引导 · 安装中 · 深色", widthDp = 380, heightDp = 760, uiMode = Configuration.UI_MODE_NIGHT_YES)
 @Composable
-private fun InstallingDark() = PiGoTheme(darkTheme = true) { Sample(installing, RuntimeStatus(Phase.INSTALLING, null, null, null, null)) }
+private fun InstallingDark() = Sample(installing, RuntimeStatus(Phase.INSTALLING, null, null, null, null))
 
-@Preview(name = "安装引导 · 失败 · 深色", widthDp = 380, heightDp = 760)
+@Preview(name = "安装引导 · 失败 · 深色", widthDp = 380, heightDp = 760, uiMode = Configuration.UI_MODE_NIGHT_YES)
 @Composable
-private fun FailedDark() = PiGoTheme(darkTheme = true) {
+private fun FailedDark() = run {
     Sample(OnboardingViewModel.UiState(mode = OnboardingViewModel.Mode.FAILED, error = "下载校验失败（SHA256 不一致）", log = listOf("x")), notInstalled)
 }
 
 @Preview(name = "安装引导 · 完成 · 浅色", widthDp = 380, heightDp = 760)
 @Composable
-private fun DoneLight() = PiGoTheme(darkTheme = false) { Sample(OnboardingViewModel.UiState(), ready) }
+private fun DoneLight() = Sample(OnboardingViewModel.UiState(), ready)

@@ -69,6 +69,7 @@ import kotlin.math.max
  * 页面背景（dsh-Go `AppBackdrop`）：竖向三段渐变 + 右上主色光晕 + 左下雾紫光晕。
  * 放在页面最底层，上面的 Scaffold/Surface 用透明底。
  */
+@Deprecated("r3: r3/calm 删除（DESIGN-r3 X8，改用 core/ui/calm 的 CalmTheme / CalmIcons）")
 @Composable
 fun AppBackdrop(
     modifier: Modifier = Modifier,
@@ -96,6 +97,7 @@ fun AppBackdrop(
 }
 
 /** 便捷 Modifier：只要渐变，不要光晕（列表项、抽屉内部）。 */
+@Deprecated("r3: r3/calm 删除（DESIGN-r3 X8，改用 core/ui/calm 的 CalmTheme / CalmIcons）")
 fun Modifier.dshGradient(colors: DshColors): Modifier =
     background(Brush.verticalGradient(listOf(colors.backdropTop, colors.backdropMid, colors.backdropBottom)))
 
@@ -115,6 +117,7 @@ fun glassStyle(tier: GlassTier): GlassStyle = when (tier) {
 /**
  * 玻璃面（dsh-Go `GlassSurface`）：填充 + 0.5dp 发丝描边 + 冷墨阴影。可点时带按压缩放（0.97）与水波纹。
  */
+@Deprecated("r3: r3/calm 删除（DESIGN-r3 X8，改用 core/ui/calm 的 CalmTheme / CalmIcons）")
 @Composable
 fun GlassSurface(
     modifier: Modifier = Modifier,
@@ -159,6 +162,7 @@ fun GlassSurface(
 }
 
 /** 卡片：Card 层玻璃 + md 圆角 + 14/16 内边距。 */
+@Deprecated("r3: r3/calm 删除（DESIGN-r3 X8，改用 core/ui/calm 的 CalmTheme / CalmIcons）")
 @Composable
 fun GlassCard(
     modifier: Modifier = Modifier,
