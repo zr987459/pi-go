@@ -1,7 +1,7 @@
 # r3/session 修复第 2 轮 状态（PR #20，审查 REVIEW-R2 = issuecomment-6619709504）
 
 - 2026-11-04 09:08 CST 已开始（r3/session head b7548f8）。
-- 2026-11-04 09:27 CST 进度更新；09:41 CST 再更新（见下）。
+- 2026-11-04 09:27 CST 进度更新；09:41、09:54 CST 再更新（见下）。
 
 ## 计划
 0. 9f6bc22 CI：模拟器 job 仍红，`UiCoverageTest.everyActionHasUiEntry` 报 `help.env（Explain）`（调度补充）。先修。普通 merge 最新 main。
@@ -27,4 +27,12 @@
 - [x] N1 `core/session/.../TranscriptSearch.kt`（真实检索 host.chat.items，transcript.jump(key) 定位 scrollAnchor）；N2 `ReportRedaction.kt`（URL user:pass@ 与机密键打码）。测试 `core/session/src/test/.../Review2NitsTest.kt`（4 个）。
 - [x] N4：§8.1 写明 `feature/commands/**（含删除 ui/**）` 归 r3/session；但 app 的 `PiGoNavHost.kt`、`WiredPages.kt` 仍引用 → 按 §8.2 第 2 条先由 **r3/app 去掉引用（交给 r3/app）**，合入 main 后本线再删。本轮不删。
 - [x] main 无新提交（compare r3/session...main：ahead_by 0），无需 merge。
-- [ ] 下一步：推送本批 → 等 CI 全绿（含模拟器）→ PATCH PR #20 描述 → 状态末行「完成，PR #20」。
+- [x] 09:42 推 f0a4941（N1/N2 + 测试）。其 CI 被 r3-session-ci 工作者的状态提交 ae24f82 取消；ae24f82 与 f0a4941 代码相同（只多了 r3-session-ci.md）。
+- [x] ae24f82 CI 全绿：push run 41755690305、PR run 41755696047，build（含全部单测）与**模拟器 job 都通过**。
+- [x] 09:53 POST /merges main → r3/session：204（无新提交，未产生合并提交）。
+- [x] PR #20 描述已追加「审查第 2 轮修复」一节（逐条处理、测试名、CI run、契约新增、feature/chat/build.gradle.kts、范围外改动）。
+- 关于 UiCoverageTest：调度补充明确允许「测试先 performScrollToNode 把结果块滚进视口再断言」，本轮按此修；没有放宽（块不在列表里或不能显示照样失败）。
+  r3-session-ci 状态里记的线索（原测试下 help.env 偶发不可见；它的说明文字最长、紧跟在 powershell 之后）留给 r3/calm 继续查 CalmMessages。
+- 未完成：feature/commands/ui/** 删除（交给 r3/app 先去掉引用）；本状态提交本身的 CI 结果写在 PR 描述里。
+
+完成，PR #20
