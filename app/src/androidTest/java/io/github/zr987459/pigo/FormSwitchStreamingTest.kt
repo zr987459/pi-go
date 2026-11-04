@@ -3,6 +3,8 @@ package io.github.zr987459.pigo
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
@@ -55,7 +57,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TestRule
 import org.junit.runner.RunWith
+import org.junit.runners.model.Statement
 
 /**
  * DESIGN-r3 §7.2 第 3 条（A 档，无 Key，CI 模拟器跑）。
@@ -80,7 +84,26 @@ import org.junit.runner.RunWith
  */
 @RunWith(AndroidJUnit4::class)
 class FormSwitchStreamingTest {
-    @get:Rule
+    /**
+     * 最外层：Compose 内部异常（如偶发的 `performMeasureAndLayout called during measure layout`）在 Gradle 控制台只打印首帧，
+     * 这里把完整堆栈放进失败信息，便于定位是谁在测量期间再次触发了测量。不吞异常、不重试。
+     */
+    @get:Rule(order = 0)
+    val fullStack = TestRule { base, _ ->
+        object : Statement() {
+            override fun evaluate() {
+                try {
+                    base.evaluate()
+                } catch (e: IllegalArgumentException) {
+                    throw AssertionError("完整堆栈：\n" + e.stackTraceToString().take(8000), e)
+                } catch (e: IllegalStateException) {
+                    throw AssertionError("完整堆栈：\n" + e.stackTraceToString().take(8000), e)
+                }
+            }
+        }
+    }
+
+    @get:Rule(order = 1)
     val rule = createAndroidComposeRule<MainWindowTestActivity>()
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -350,6 +373,38 @@ class FormSwitchStreamingTest {
                 assertEquals("${w} 宽度下点 form:toggle", want, host.form.value)
             }
         }
+    }
+
+    /**
+     * 「段号倒退 14 → 1」的回归（main 41814881073）：UI 形态贴底时视口变矮（软键盘弹出 / imePadding，这里用容器高度确定性地模拟），
+     * 流已停住、没有新内容触发贴底滚动；切到终端后仍应贴底看到最后一段，而不是从顶部或中间开始。
+     */
+    @Test
+    fun viewportShrinkWhileFollowingKeepsBottomAcrossSwitch() {
+        val ctx = BindingContext(InstrumentationRegistry.getInstrumentation().targetContext.applicationContext, scope)
+        val host = SessionBindings.host(Mode.FAKE, ctx, UiForm.CALM) { error("A 档只用 FAKE") } as FakeSessionHost
+        var h by mutableStateOf(600.dp)
+        rule.setContent {
+            Box(Modifier.fillMaxWidth().height(h)) {
+                ChatPage(
+                    host = host, panelEvents = null, panelSource = null, fileSearch = null,
+                    cwd = "/root/pi-cwd", home = "/root", onOpenSettings = {}, onAttachImage = {}, onBackground = {},
+                )
+            }
+        }
+        rule.waitForIdle()
+        val n = 80
+        val job = host.startStream(StreamScript(List(n) { "第${it}段\n" }, intervalMs = 5), userText = "数到八十")
+        pollUntil("流式结束") { job.isCompleted }
+        rule.waitForIdle()
+        rule.runOnIdle { h = 360.dp }
+        rule.waitForIdle()
+        clickToggle()
+        assertEquals(UiForm.TERM, host.form.value)
+        rule.waitUntil(3_000) { maxSegmentOnScreen() == n - 1 }
+        // 终端里同样：视口再变矮也保持贴底
+        rule.runOnIdle { h = 300.dp }
+        rule.waitUntil(3_000) { maxSegmentOnScreen() == n - 1 }
     }
 
     /** ⇄ 显示着、整体落在窗口（根节点）内、尺寸非零；失败时带上形态、边界、窗口软键盘配置与语义树，便于在 CI 日志里定位。 */

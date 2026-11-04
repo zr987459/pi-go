@@ -37,6 +37,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,6 +57,7 @@ import io.github.zr987459.pigo.contract.session.ScrollAnchor
 import io.github.zr987459.pigo.contract.session.SessionHost
 import io.github.zr987459.pigo.core.ui.calm.Calm
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 
 /** 消息区的一行：会话条目或本地块。key 与 ChatItem.key 一致（阅读位置按它恢复，§5.3）。 */
 private sealed interface Row_ {
@@ -117,6 +119,14 @@ internal fun CalmMessages(
     LaunchedEffect(rows.size, lastSize, follow) {
         if (follow && rows.isNotEmpty()) list.scrollToItem(rows.lastIndex, Int.MAX_VALUE / 2)
     }
+    // 视口变高 / 变矮（软键盘弹出收起、imePadding、旋转）时仍贴底：原来只在内容变化时滚，
+    // 流式暂停或已结束时弹出键盘，最后几行就被挤到视口下面，切换形态时又按「不在底部」写回锚点，终端从顶部开始显示。
+    val rowsNow by rememberUpdatedState(rows)
+    LaunchedEffect(list) {
+        snapshotFlow { list.layoutInfo.viewportSize }.distinctUntilChanged().drop(1).collect {
+            if (follow && rowsNow.isNotEmpty() && !dragging) list.scrollToItem(rowsNow.lastIndex, Int.MAX_VALUE / 2)
+        }
+    }
     // 新的本地结果块（「说明」条目、/session、/hotkeys 等）是用户刚触发的动作结果：滚到它并恢复贴底跟随。
     // 否则先用过「跳到上一条提示」或手动上滑（follow = false）后，结果追加在视口外，用户看不到任何反应。
     // 初值取进入时的条数，所以切换形态回来不会强行滚动，阅读位置照常恢复（§5.3）。
@@ -136,10 +146,12 @@ internal fun CalmMessages(
     }
     DisposableEffect(Unit) {
         onDispose {
+            // 贴底与否以 follow 为准（只由用户拖动 / 滚动停下的位置改写）；不再与 atBottom 相与：
+            // 视口刚变化、贴底滚动还没跟上的那一帧离开，会把「贴底」误记成「停在中间」。
             val i = list.firstVisibleItemIndex
             val key = rows.getOrNull(i)?.key
             host.scrollAnchor.value = if (key == null) ScrollAnchor("", 0, followBottom = true)
-            else ScrollAnchor(key, list.firstVisibleItemScrollOffset, followBottom = follow && atBottom)
+            else ScrollAnchor(key, list.firstVisibleItemScrollOffset, followBottom = follow)
         }
     }
 
