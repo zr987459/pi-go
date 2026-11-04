@@ -1,18 +1,9 @@
 # r4/model-config：模型配置极简化 + 修「配好用不了」
 
-状态：进行中（07:35 WIP 推送）。PR #29 审查 I1/I2/N1–N6 修复中；用户 07:14 改要求：I1 改为**热加载**。
+状态：**完成，PR #29**（07:51）。代码 head 2a87542：CI 全绿（Android debug build 含模拟器 run 41935456748；真 pi 桥接 run 41935456734）；本机真 pi 1.5.0 RealPiBridgeIntegrationTest 7/7（含 hotReloadNewKeyWithoutRestartWhileGenerating）。
 
-已做（WIP）：
-- 核实 pi 1.5.0 可热加载：`AuthStorage.read` 按文件修订号重读 auth.json；扩展 API `ctx.modelRegistry.refresh()` 重读 models.json 并重算可用模型。
-- pigo-bridge 新增 `/pigo:models-refresh`；`PiBridge.refreshModels()`；Key 以字面值写 auth.json（600，`pigoManaged` 标记），不再进进程环境；
-  `CredentialReloader`：先热加载，做不到（桥接不可用 / 凭据只能进环境）才退回「生成中等本轮结束再重启」。
-- I2 `QuickSaveRunner`（App 作用域）；N1–N5；N6 UI 测试移到 app androidTest，走真实 QuickModelSetup。
-- realpi 新增 `hotReloadNewKeyWithoutRestartWhileGenerating`。
-
-07:40：本地 `:core:store`、`:core:engine`、`:app`、`:feature:{chat,models,settings}` 单测全过，`:app:compileDebugAndroidTestKotlin` 通过。
-旧单测已改为校验 auth.json 字面 Key + `pigoManaged` + 600；日志脱敏改经 `LaunchEnvProvider.knownSecrets()`（含只在 auth.json 的 Key，热加载后立即生效）。
-
-下一步：本地真 pi 跑 RealPiBridgeIntegrationTest（含热加载用例）；等 CI（android.yml 模拟器 + realpi.yml）全绿；更新 PR #29 描述逐条对应 I1/I2/N1–N6。
+审查 I1 由热加载消除：Key 写 ~/.pi/agent/auth.json（600，pigoManaged），pigo-bridge `/pigo:models-refresh` → `ModelRegistry.refresh()`，生成中不重启不打断；凭据只能进环境的（Bedrock 多密文、代理）才退回重启并延后到本轮结束。I2、N1–N6 已修，对应关系见 PR 描述。
+待办：等审查/合并（不由本分支自行合并）。已知限制：/resume 旧会话仍用会话里记录的模型。
 
 根因：① AppGraph 构造 RealModelPanels 没传 onCredentialsChanged（默认空操作），保存 Key 后不重启 pi，而 Key 只在 pi 启动时经环境变量注入（pi docs/models.md:217）；② 只写 settings.json 默认模型，续接会话仍用会话里的旧模型，没发 set_model。
 
