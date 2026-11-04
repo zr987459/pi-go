@@ -24,6 +24,15 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.junit.Assert.assertTrue
+import androidx.compose.material3.Text
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.onNodeWithText
+import io.github.zr987459.pigo.contract.ExtUiRequest
+import io.github.zr987459.pigo.contract.fake.StreamScript
+import io.github.zr987459.pigo.contract.session.SelectGroup
+import io.github.zr987459.pigo.contract.session.SelectItem
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -32,6 +41,7 @@ import org.junit.runner.RunWith
  * DESIGN-r3 §7.1 第 3 条（r3/term）：遍历 `PiActions.all`，按每个动作声明的终端入口操作——输入 `/别名` 回车、点键条键、点页脚段、
  * 点选择器 / 页眉 / 编辑器 / 补全浮层 / 消息里的键帽——断言 Fake 收到该动作（`FakePiActions.ran`）或出现说明条目。
  * 形态切换（`form.toggle`）断言 `host.form` 改变且命令日志无新增。**任何一项缺失即失败。**
+ * 第二个用例 [leaveAndReenterKeepsEverything] 是 §8.5 的终端形态切换夹具。
  */
 @RunWith(AndroidJUnit4::class)
 class TermCoverageTest {
@@ -93,7 +103,7 @@ class TermCoverageTest {
                             rule.waitForIdle()
                         }
                         if (t.selector == "slash") { fake.draft.value = fake.draft.value.withText("/"); rule.waitForIdle() }
-                        rule.onNodeWithTag("term:keycap:${t.selector}:${t.key}", useUnmergedTree = true).performClick()
+                        rule.onNodeWithTag("term:keycap:${t.selector}:${t.key}", useUnmergedTree = true).performScrollTo().performClick()
                     }
                     is TermEntry.Explain -> {
                         // 说明条目：终端形态里经 /help 列出；这里直接执行，断言产生 explain 本地块。
@@ -116,5 +126,48 @@ class TermCoverageTest {
             if (!ok) missing += "${spec.id}: 没有收到动作"
         }
         assertTrue("终端形态缺少入口：\n" + missing.joinToString("\n"), missing.isEmpty())
+    }
+
+    /** DESIGN-r3 §8.5 r3/term「切换夹具」（放在本类里，CI 模拟器 job 按类名 TermCoverageTest 运行）。 */
+    @Test
+    fun leaveAndReenterKeepsEverything() {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+        val host = FakeSessionHost(scope, initialForm = UiForm.TERM)
+        rule.setContent {
+            val form by host.form.collectAsState()
+            if (form == UiForm.TERM) TermSurface(host) else Text("calm-placeholder")
+        }
+        // 草稿、打开中的模型面板（搜索词「son」）、扩展 confirm 对话框
+        host.draft.value = host.draft.value.withText("草稿abc").copy(selectionStart = 3, selectionEnd = 3)
+        host.overlay.push(OverlayModel.SelectList("model.select", "选择模型", listOf(SelectGroup(null, listOf(SelectItem("a/sonnet", "sonnet"), SelectItem("b/gpt", "gpt")))), query = "son"))
+        host.showExtDialog(ExtUiRequest("req-1", "confirm", title = "继续？", message = "要继续吗"))
+        val stream = host.startStream(StreamScript.counting(200, intervalMs = 20), userText = "数数")
+        rule.waitForIdle()
+        host.clearCommands()
+
+        repeat(6) {
+            rule.onNodeWithTag("form:toggle").performScrollTo().performClick()
+            rule.waitForIdle()
+            assertEquals(UiForm.CALM, host.form.value)
+            host.form.value = UiForm.TERM
+            rule.waitForIdle()
+        }
+
+        assertEquals("草稿abc", host.draft.value.text)
+        assertEquals(3, host.draft.value.safeSelectionStart)
+        rule.onNodeWithTag("term:editor").assertTextContains("草稿abc")
+        // 栈顶是扩展对话框，下面是搜索词保留的模型面板
+        assertEquals(listOf("model.select", "ext:req-1"), host.overlay.items.value.map { it.id })
+        assertEquals("son", (host.overlay.items.value[0] as OverlayModel.SelectList).query)
+        rule.onNodeWithTag("overlay:ext:req-1").assertIsDisplayed()
+        // 切换本身没有发出任何命令（流式仍在进行）
+        assertTrue("切换产生了命令：${host.commands.value}", host.commands.value.none { it.type in setOf("abort", "new_session", "switch_session", "ui_response") })
+        assertTrue(stream.isActive || host.chat.value.items.isNotEmpty())
+        // 确认对话框仍可应答，Fake 收到同一个 request id
+        rule.onNodeWithTag("term:keycap:ext:req-1:y 确定", useUnmergedTree = true).performClick()
+        rule.waitForIdle()
+        assertEquals(listOf("model.select"), host.overlay.items.value.map { it.id })
+        rule.onNodeWithTag("overlay:model.select").assertIsDisplayed()
+        rule.onNodeWithText("son").assertIsDisplayed()
     }
 }

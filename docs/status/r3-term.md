@@ -16,7 +16,7 @@
 - [x] 排版：TermFormatter 与 Markdown；TermFormatterGoldenTest 80 列 0/145 行差异
 - [x] Compose：TermSurface（消息区、状态行、队列、widget、编辑器、斜杠补全、页脚、键条、双指缩放、阅读位置）与 TermOverlay（全部 OverlayModel）
 - [x] TermInputTest（JVM 静态核对每个动作的终端入口）
-- [x] androidTest：TermCoverageTest、TermFormSwitchFixtureTest 已写好；本地取不到 androidx.test 依赖，靠 CI 的 assembleDebugAndroidTest 编译
+- [x] androidTest：TermCoverageTest（两个用例：入口遍历、切换夹具；CI 模拟器 job 按类名只跑 TermCoverageTest，所以切换夹具也放在这个类里）
 - [x] 快照：TermScreenSnapshotTest 输出整屏 JSON，`feature/term/snapshots/*.png` 由 render.py 渲染
 - [x] 已 merge main（de09f66，PR #15）
 - [ ] 开 PR，盯 CI
