@@ -13,14 +13,10 @@ import io.github.zr987459.pigo.contract.SlashCommand
 import io.github.zr987459.pigo.contract.fake.FakeEngineClient
 import io.github.zr987459.pigo.contract.fake.FakeEngineExtras
 import io.github.zr987459.pigo.contract.fake.FakeSessionIndex
-import io.github.zr987459.pigo.feature.commands.data.AutoNamer
-import io.github.zr987459.pigo.feature.commands.data.AutoTitlePolicy
 import io.github.zr987459.pigo.feature.commands.data.FileDraftStore
 import io.github.zr987459.pigo.feature.commands.data.PiSessionIndex
 import io.github.zr987459.pigo.feature.commands.data.SessionMetaStore
-import io.github.zr987459.pigo.feature.commands.data.SessionTitle
 import io.github.zr987459.pigo.feature.commands.data.SessionTranscriptReader
-import io.github.zr987459.pigo.feature.commands.data.TitleGenerator
 import io.github.zr987459.pigo.feature.commands.skills.SkillTemplateManager
 import java.io.File
 import kotlinx.coroutines.flow.first
@@ -59,7 +55,7 @@ class SessionDataTest {
         val b = session(dir, "--root-pi-cwd--/b.jsonl", "/root/pi-cwd", "写一个 README")
         val c = session(dir, "--root-blog--/c.jsonl", "/root/blog", "把博客换成深色主题")
         a.setLastModified(1_000_000); b.setLastModified(2_000_000); c.setLastModified(3_000_000)
-        val idx = PiSessionIndex(dir, metaStore = SessionMetaStore(File(tmp.root, "meta.json")), cacheFile = File(tmp.root, "idx.json"), titles = null)
+        val idx = PiSessionIndex(dir, metaStore = SessionMetaStore(File(tmp.root, "meta.json")), cacheFile = File(tmp.root, "idx.json"))
         idx.rescan()
         var groups = idx.observeGroups().first()
         assertEquals(listOf("/root/blog", "/root/pi-cwd"), groups.map { it.cwd })
@@ -82,7 +78,7 @@ class SessionDataTest {
         assertEquals(-1, idx.search("修登录").single().messageIndex)
 
         // 元数据持久化，新实例读回。
-        val again = PiSessionIndex(dir, metaStore = SessionMetaStore(File(tmp.root, "meta.json")), cacheFile = File(tmp.root, "idx.json"), titles = null)
+        val again = PiSessionIndex(dir, metaStore = SessionMetaStore(File(tmp.root, "meta.json")), cacheFile = File(tmp.root, "idx.json"))
         assertTrue(again.meta(ga).archived)
         idx.markNameLocked(ga)
         assertTrue(SessionMetaStore(File(tmp.root, "meta.json")).get(ga).nameLockedByUser)
@@ -91,33 +87,11 @@ class SessionDataTest {
     @Test
     fun pathMappingRejectsOutsidePaths() {
         val dir = tmp.newFolder("sessions")
-        val idx = PiSessionIndex(dir, metaStore = SessionMetaStore(File(tmp.root, "m.json")), cacheFile = null, titles = null)
+        val idx = PiSessionIndex(dir, metaStore = SessionMetaStore(File(tmp.root, "m.json")), cacheFile = null)
         assertNull(idx.hostOf("/root/.pi/agent/sessions/../auth.json"))
         assertNull(idx.hostOf("/etc/passwd"))
         assertEquals(File(dir, "x/y.jsonl"), idx.hostOf("/root/.pi/agent/sessions/x/y.jsonl"))
         assertNull(idx.guestOf(File(tmp.root, "other.jsonl").path))
-    }
-
-    @Test
-    fun suggestTitleUsesCurrentBranchAndPiPrint() = runTest {
-        val dir = tmp.newFolder("sessions")
-        session(dir, "--root-pi-cwd--/a.jsonl", "/root/pi-cwd", "帮我修登录页的空指针", "再加个单测")
-        val cmds = mutableListOf<List<String>>()
-        var promptSeen = ""
-        val gen = TitleGenerator(
-            exec = { argv -> cmds += argv; ExecResult(0, "标题：「修复登录页空指针」\n", "") },
-            writePrompt = { text -> promptSeen = text; File(tmp.root, "p.txt").apply { writeText(text) } to "/tmp/pigo-title.txt" },
-        )
-        val idx = PiSessionIndex(dir, metaStore = SessionMetaStore(File(tmp.root, "m.json")), cacheFile = null, titles = gen,
-            titleModel = { ModelInfo("deepseek", "deepseek-reasoner", reasoning = true) })
-        val r = idx.suggestTitle("/root/.pi/agent/sessions/--root-pi-cwd--/a.jsonl")
-        assertEquals(Outcome.Ok("修复登录页空指针"), r)
-        val argv = cmds.single()
-        assertEquals(listOf("pi", "--print", "--no-session", "--no-tools"), argv.take(4))
-        assertTrue(argv.containsAll(listOf("--provider", "deepseek", "--model", "deepseek-reasoner", "--thinking", "off", "@/tmp/pigo-title.txt")))
-        assertTrue(promptSeen.contains("User: 帮我修登录页的空指针"))
-        assertTrue(promptSeen.contains("Assistant: 答1"))
-        assertFalse("临时提示词文件用完即删", File(tmp.root, "p.txt").exists())
     }
 
     @Test
@@ -132,58 +106,6 @@ class SessionDataTest {
         val items = SessionTranscriptReader.read(f)
         assertEquals(2, items.size)
         assertEquals("新分支回答", ((items[1] as ChatItem.Assistant).blocks[0] as ContentBlock.Text).text)
-    }
-
-    @Test
-    fun titleParsingAndTranscriptBounds() {
-        assertEquals("修复登录", SessionTitle.parse("```\n\"修复登录\"\n```"))
-        assertEquals("Fix login bug", SessionTitle.parse("""{"title":"Fix login bug."}"""))
-        assertEquals("重构", SessionTitle.parse("Title: 重构\n解释……"))
-        assertNull(SessionTitle.parse("。。。"))
-        assertEquals(80, SessionTitle.parse("长".repeat(100))!!.length)
-
-        val many = (0 until 60).flatMap { i ->
-            listOf(ChatItem.User("u$i", "问题$i " + "x".repeat(200)), ChatItem.Assistant("a$i", listOf(ContentBlock.Text(0, "回答$i")), streaming = false))
-        }
-        val t = SessionTitle.transcript(many)
-        assertTrue(t.length <= SessionTitle.TRANSCRIPT_CHARS)
-        assertTrue("保留开头", t.startsWith("User: 问题0"))
-        assertTrue("保留结尾", t.endsWith("Assistant: 回答59"))
-        assertTrue(t.contains("[…]"))
-    }
-
-    @Test
-    fun autoTitlePolicyOncePerSession() {
-        val p = AutoTitlePolicy()
-        val items = listOf(ChatItem.User("u", "hi"), ChatItem.Assistant("a", listOf(ContentBlock.Text(0, "hello")), streaming = false))
-        assertFalse(p.claim("/s/a", "已有名字", false, items))
-        assertFalse(p.claim("/s/a", null, true, items))
-        assertFalse(p.claim("/s/a", null, false, items.take(1)))
-        assertTrue(p.claim("/s/a", null, false, items))
-        assertFalse("只试一次", p.claim("/s/a", null, false, items))
-    }
-
-    @Test
-    fun autoNamerRenamesAfterCompletedTurnOnly() = runTest {
-        val engine = FakeEngineClient(backgroundScope, stepDelayMs = 0)
-        engine.openSession("/root/.pi/agent/sessions/x/a.jsonl", "/root/pi-cwd")
-        engine.send("帮我写个 README")
-        // 等 Fake 回放结束（有会话文件和助手回复）。
-        engine.chat.first { !it.running && it.items.any { i -> i is ChatItem.Assistant } }
-        val extras = FakeEngineExtras()
-        val index = FakeSessionIndex()
-        val namer = AutoNamer(engine, extras, index,
-            TitleGenerator(exec = { ExecResult(0, "写 README", "") }, writePrompt = { File(tmp.root, "p").apply { writeText(it) } to "/tmp/p" }),
-            backgroundScope)
-        assertEquals("/root/.pi/agent/sessions/x/a.jsonl", engine.chat.value.sessionFile)
-        assertEquals("写 README", namer.maybeName())
-        assertNull("同一会话不再命名", namer.maybeName())
-        // 用户锁定名字的会话不自动命名。
-        engine.openSession("/root/.pi/agent/sessions/x/b.jsonl", "/root/pi-cwd")
-        engine.send("另一个")
-        engine.chat.first { !it.running && it.sessionFile!!.endsWith("b.jsonl") && it.items.any { i -> i is ChatItem.Assistant } }
-        index.markNameLocked("/root/.pi/agent/sessions/x/b.jsonl")
-        assertNull(namer.maybeName())
     }
 
     @Test
