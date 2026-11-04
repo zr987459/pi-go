@@ -1,6 +1,6 @@
 # r3/nits-models 状态
 
-**状态：review r1 修复 代码已推（0e3a2b8），等 CI**（2026-11-04 15:20 CST）
+**状态：完成，PR #25**（审查第 1 轮修复，2026-11-04 15:17 CST；代码提交 0e3a2b8）
 
 审查评论：https://github.com/zr987459/pi-go/pull/25#issuecomment-6624614325
 
@@ -18,8 +18,12 @@
 - Nit 3：core/contract PiActions.kt ActionResult.Toast 注释写清 failed。
 - 测试：RealModelPanelsNitsTest（cancelRemoveConfirmKeepsTypedKeyAndEdits、dismissRemoveConfirmDropsTypedKeyAndDraft、cancelClearConfirmKeepsPendingModel、dismissClearConfirmDropsPendingModel、newUnsavedProviderHasNoRemoveConfirm）、SettingsPanelLogicTest.dismissingModelConfirmSendsDismiss、TermPanelRouterRealHostTest.cancelInRemoveConfirmKeepsOpenFormUntouched。
 
+## CI
+- @452c104（代码同 0e3a2b8）：build（含全部 JVM 单测）push / PR 均 success，查找仪器测试类 success，realpi push / PR success；模拟器 job 运行中时被本状态提交取代。
+- 以本状态提交的最新 SHA 的 CI 为准（build / 查找仪器测试类 / 仪器测试（模拟器）/ realpi）。
+
 ## 之前（首版，已完成）
 首版 4 条 Nit 已在 143909c 完成，CI 全绿（见 PR #25 描述）。
 
 ## 下一步（若被切断，接手者）
-- 盯最新 SHA 的 CI（build / 查找仪器测试类 / 仪器测试（模拟器）/ realpi）；红了读日志修；绿了更新 PR #25 描述的 r1 证据，status 写“完成，PR #25”。
+- 盯最新 SHA 的 CI；core/engine 计时用例（PiEngineTest）偶发失败可 rerun 失败 job；其他红了读日志修；绿了把 CI 链接补进 PR #25 描述。
