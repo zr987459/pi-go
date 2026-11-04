@@ -16,6 +16,14 @@
 | #17 | r3/calm | 未合入 | FormHost 的 calm = CalmSurface(host, onOpenSettings=设置›模型)；会话列表换 CalmSessionList，删旧 PiGoDrawer / WiredPages 旧页 |
 | #18 | r3/term | 未合入 | 阶段 2（PR 2）：term = TermSurface(host, …) 替换 TermPlaceholder |
 
+
+## 第 3 步进度（续写，2026-11-04）
+- 10:20 推 status；merge main → 522462260（无冲突，含 #16/#17/#19/#20）。
+- 10:32 读完代码，确定做法（未推代码）：
+  - main 上**没有 PiBridge**（在 r3/core-base），`SessionOps` 由 app 实现：abortRetry=PiEngine.abortRetry；runGuest=runtime.exec(bash -lc)；writeReport=cacheDir；newSessionInDir=engine.newSession(dir)；dequeueAll/stopEngine 用 engine.stop；setLabel/reload/treeNavigate 暂返回「需要 pigo-bridge（r3/core-base 未合入 main）」→ 交接。
+  - **面板事件路由缺口**：calm 把面板内点击当 `runAction(面板id, key)`，而 ModelPanels 面板 id 与动作 id 重名（model.select / auth.login / auth.logout / provider.custom），会被 PiActionsImpl 当成「再开一次面板」。修法：calm 新增 `PanelEventSink`（owns(id) + onEvent），CalmSurface 可选参数；app 用 RealModelPanels 实现；Form.actions 按钮、表单提交（JSON）、确认框、OAuth 失败「重试」、OAuth 进度轮询、关闭时 cancel、secret 字段遮挡且不写进 values。
+  - 导航：Chat 路由 = FormHost(calm=CalmSurface)，去掉旧 ModalNavigationDrawer/PiGoDrawer/ChatPage（含 CommandPalette、SkillsScreen 引用）；设置路由 = SettingsScreen(panels, piSettings)。
+
 ## 计划
 1. ✅ §8.3 第 2 步：只被 app 引用的删除准备。
 2. ✅ 接线骨架（FakeSessionHost、Crossfade、形态偏好持久化、终端占位），CI 绿。
