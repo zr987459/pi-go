@@ -1,6 +1,6 @@
 # r3/session-overlay 审查第 1 轮修复（PR #23）
 
-状态：进行中（12:0x CST）。基线 21ef230。
+状态：进行中。基线 21ef230。代码与测试 OverlayFix1Test（15 例）已写，本地编译中。
 
 已写（未编译，测试待补）：I1 路由（SessionHostImpl.modelPanelRoute 规则 1/2 + landModelPanel 确认框收尾）、I2 show/replaceById/syncDialogs 单次 update（新增 OverlayStack.update，core/contract 范围外最小改动）、N1 navInFlight + 按实例关树、N2 失败压回表单、N3 侧键预拒绝+回滚、N4 get_tree 预填。
 下一步：OverlayPanelsTest 补用例 → 本地 :core:session:testDebugUnitTest → 推送 → 看 CI → PR 描述。

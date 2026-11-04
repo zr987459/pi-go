@@ -225,8 +225,8 @@ class SessionHostImpl(
     private fun show(m: OverlayModel) {
         overlay.update { list -> placed(list, m) }
         if (m.id in modelPanelIds) {
-            val prev = lastModelPanel.put(m.id, m)
-            if (m is OverlayModel.Confirm && prev !is OverlayModel.Confirm) {
+            lastModelPanel[m.id] = m
+            if (m is OverlayModel.Confirm && m.id !in confirmParent) {
                 overlay.items.value.lastOrNull { it.id != m.id && !isPinned(it) && it.id in modelPanelIds }?.let { confirmParent[m.id] = it.id }
             }
         }
