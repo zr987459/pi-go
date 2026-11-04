@@ -78,6 +78,8 @@ fun ModelsSettingsPage(
     onBack: (() -> Unit)? = null,
     /** 打开 OAuth 授权链接（默认用系统浏览器 / Custom Tab）；测试可替换。 */
     openUrl: ((String) -> Unit)? = null,
+    /** 页末由装配层追加的行（网络代理、运行环境修复、关于；PR #21 审查第 1 轮，r3/app 最小改动）。 */
+    extraContent: (@Composable () -> Unit)? = null,
 ) {
     val uriHandler = LocalUriHandler.current
     val openLink: (String) -> Unit = openUrl ?: { url -> runCatching { uriHandler.openUri(url) } }
@@ -200,6 +202,7 @@ fun ModelsSettingsPage(
                         )
                     }
                 }
+                if (extraContent != null) item(key = "extra") { extraContent() }
             }
         }
     }

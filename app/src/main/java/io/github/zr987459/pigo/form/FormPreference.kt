@@ -43,7 +43,19 @@ object FormPersistence {
 
     fun parse(raw: String?): UiForm? = raw?.let { r -> UiForm.entries.firstOrNull { it.name == r } }
 
-    fun initial(store: FormPrefStore): UiForm = runCatching { store.load() }.getOrNull() ?: DEFAULT
+    /**
+     * 终端形态是否已接线（r3/term 合入、r3/app PR 2 接线后改为 true）。PR 1 阶段终端只是占位页（[TermPlaceholder]）。
+     */
+    const val TERM_WIRED: Boolean = false
+
+    /**
+     * 启动时的形态：读回上次形态；终端形态还没接线时回落到 UI 形态，不会一启动就停在「终端形态尚未合入」占位页
+     * （PR #21 审查第 1 轮 Nit 4）。偏好本身不改写，PR 2 接线后照常恢复终端。
+     */
+    fun initial(store: FormPrefStore, termWired: Boolean = TERM_WIRED): UiForm {
+        val f = runCatching { store.load() }.getOrNull() ?: DEFAULT
+        return if (f == UiForm.TERM && !termWired) UiForm.CALM else f
+    }
 
     /**
      * 订阅 [form]，每次变化写回 [store]（跳过订阅时的当前值，相同值不重复写）。

@@ -1,5 +1,6 @@
 package io.github.zr987459.pigo.form
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
@@ -39,7 +40,13 @@ fun FormHost(
     calm: @Composable () -> Unit,
     term: @Composable () -> Unit,
     modifier: Modifier = Modifier,
+    /**
+     * 两种形态都没有可关的层时按返回（PR #21 审查第 1 轮 Important 3）：退到后台（`moveTaskToBack`），不结束 Activity、不打断生成。
+     * 这个 BackHandler 先注册、优先级最低：形态内部（CalmSurface 的面板 / 会话列表）启用的 BackHandler 先处理。
+     */
+    onBackground: (() -> Unit)? = null,
 ) {
+    if (onBackground != null) BackHandler(onBack = onBackground)
     val form by host.form.collectAsState()
     Crossfade(
         targetState = form,

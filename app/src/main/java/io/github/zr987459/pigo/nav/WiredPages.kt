@@ -61,7 +61,6 @@ import io.github.zr987459.pigo.feature.commands.skills.SkillsController
 import io.github.zr987459.pigo.feature.models.CustomProviderScreen
 import io.github.zr987459.pigo.feature.settings.session.SessionDefaultsController
 import io.github.zr987459.pigo.feature.settings.session.SessionDefaultsScreen
-import io.github.zr987459.pigo.feature.models.NetworkAndCostScreen
 import io.github.zr987459.pigo.feature.models.ProviderConfigScreen
 import io.github.zr987459.pigo.feature.models.ProviderListScreen
 import io.github.zr987459.pigo.feature.usage.logic.SessionTreeController
@@ -152,7 +151,6 @@ internal fun SettingsHub(onOpen: (String) -> Unit, onBack: () -> Unit, extrasRea
     SubPage("设置", "settingsHub", onBack) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             HubRow("服务商与登录", "42 个服务商的 Key / OAuth、自定义端点", "hub:providers") { onOpen(Routes.PROVIDERS) }
-            HubRow("代理与费用显示", "HTTP 代理、人民币换算", "hub:network") { onOpen(Routes.NETWORK) }
             // M8 依赖 W1 的 set_auto_* / set_*_mode：真实 extras 才显示（审查第 1 轮 Important 4）。
             if (extrasReady) {
                 HubRow("会话默认", "自动压缩、自动重试、插话与排队方式", "hub:sessionDefaults") { onOpen(Routes.SESSION_DEFAULTS) }
@@ -221,11 +219,6 @@ internal fun CustomProviderPage(graph: AppGraph, onBack: () -> Unit) {
     SubPage("自定义端点", "customProvider", onBack) {
         CustomProviderScreen(graph.models.custom, existing = null, onSaved = onBack)
     }
-}
-
-@Composable
-internal fun NetworkPage(graph: AppGraph, onBack: () -> Unit) {
-    SubPage("代理与费用显示", "network", onBack) { NetworkAndCostScreen(graph.models.settings) }
 }
 
 /** M8 会话默认（只在真实 extras 时有入口）。 */
@@ -423,7 +416,6 @@ object Routes {
     const val PROVIDERS = "providers"
     const val PROVIDER = "provider/{id}"
     const val CUSTOM_PROVIDER = "customProvider"
-    const val NETWORK = "network"
     const val SESSION_DEFAULTS = "sessionDefaults"
     const val ADVANCED = "settings"
     const val TREE = "tree"

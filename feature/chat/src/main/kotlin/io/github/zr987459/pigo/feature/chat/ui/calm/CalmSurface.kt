@@ -74,9 +74,16 @@ fun CalmSurface(
     panelEvents: PanelEventSink? = null,
     /** `@文件` 模糊搜索（装配层注入 core/workspace FileSearch，根 = 会话 cwd）；为 null 时只能手动输入路径引用。 */
     fileSearch: (suspend (String) -> List<FileMatch>)? = null,
+    /** 「＋ › 图片」：装配层打开系统图片选择器，选中的图片写进 `host.draft.images`（两形态共用，PR #21 审查 Important 1）。 */
+    onAttachImage: (() -> Unit)? = null,
+    /**
+     * 返回键注册（装配层传 `{ enabled, onBack -> BackHandler(enabled, onBack) }`；本模块不依赖 activity-compose）。
+     * 有可关的层（[CalmBack]）时启用；都关着时不拦截，交给外层（FormHost 退到后台）。
+     */
+    backHandler: (@Composable (enabled: Boolean, onBack: () -> Unit) -> Unit)? = null,
 ) {
-    if (dark == null) CalmTheme { CalmSurfaceBody(host, modifier, onOpenSettings, panelEvents, fileSearch) }
-    else CalmTheme(dark = dark) { CalmSurfaceBody(host, modifier, onOpenSettings, panelEvents, fileSearch) }
+    if (dark == null) CalmTheme { CalmSurfaceBody(host, modifier, onOpenSettings, panelEvents, fileSearch, onAttachImage, backHandler) }
+    else CalmTheme(dark = dark) { CalmSurfaceBody(host, modifier, onOpenSettings, panelEvents, fileSearch, onAttachImage, backHandler) }
 }
 
 /** 视图状态：只影响本形态怎么画，不是业务状态。 */
@@ -99,6 +106,8 @@ private fun CalmSurfaceBody(
     onOpenSettings: () -> Unit,
     panelEvents: PanelEventSink? = null,
     fileSearch: (suspend (String) -> List<FileMatch>)? = null,
+    onAttachImage: (() -> Unit)? = null,
+    backHandler: (@Composable (enabled: Boolean, onBack: () -> Unit) -> Unit)? = null,
 ) {
     val c = Calm.colors
     val scope = rememberCoroutineScope()
@@ -125,6 +134,7 @@ private fun CalmSurfaceBody(
                     view.historyCursor = k; host.draft.value = host.draft.value.withText(t)
                 }
                 "transcript.jump" -> view.jumpTick++
+                "attach.image" -> if (onAttachImage != null) onAttachImage() else view.toast = "图片附件未接线"
             }
         }
     }
@@ -171,6 +181,22 @@ private fun CalmSurfaceBody(
 
         // 面板（overlay 栈顶，两种形态共用同一模型，§5.4）
         val top = overlays.lastOrNull()
+        fun dismissTop(t: io.github.zr987459.pigo.contract.session.OverlayModel) {
+            val sink = panelEvents?.takeIf { it.owns(t.id) }
+            if (sink != null) CalmPanelLogic.dismissEvent(t)?.let { k -> scope.launch { sink.onEvent(t.id, k, null) } }
+            host.overlay.remove(t.id)
+        }
+        // 返回键（PR #21 审查 Important 3）：编辑器 → 面板 → 会话列表 → 搜索；都关着不拦截。
+        val backStep = CalmBack.step(view.editorExpanded, top, view.drawerOpen, view.searchOpen)
+        backHandler?.invoke(backStep != CalmBack.Step.NONE) {
+            when (CalmBack.step(view.editorExpanded, host.overlay.top, view.drawerOpen, view.searchOpen)) {
+                CalmBack.Step.EDITOR -> view.editorExpanded = false
+                CalmBack.Step.OVERLAY -> host.overlay.top?.let { dismissTop(it) }
+                CalmBack.Step.DRAWER -> view.drawerOpen = false
+                CalmBack.Step.SEARCH -> { view.searchOpen = false; view.searchQuery = "" }
+                CalmBack.Step.NONE -> Unit
+            }
+        }
         if (top != null) {
             val sink = panelEvents?.takeIf { it.owns(top.id) }
             val panel: ((String, String?) -> Unit)? = sink?.let { s ->
@@ -183,10 +209,7 @@ private fun CalmSurfaceBody(
             }
             CalmSheet(
                 host = host, model = top, onAction = run, panel = panel,
-                onDismiss = {
-                    if (sink != null) CalmPanelLogic.dismissEvent(top)?.let { k -> scope.launch { sink.onEvent(top.id, k, null) } }
-                    host.overlay.pop()
-                },
+                onDismiss = { dismissTop(top) },
             )
         }
 

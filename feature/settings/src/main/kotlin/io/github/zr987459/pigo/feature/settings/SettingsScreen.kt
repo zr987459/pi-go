@@ -149,9 +149,11 @@ fun SettingsScreen(
     onBack: (() -> Unit)? = null,
     panels: io.github.zr987459.pigo.contract.models.ModelPanels? = null,
     piSettings: io.github.zr987459.pigo.contract.settings.PiSettings? = null,
+    /** 设置 › 模型页末尾由装配层追加的行（网络代理、运行环境修复、关于；PR #21 审查第 1 轮，r3/app 最小改动）。 */
+    extraContent: (@Composable () -> Unit)? = null,
 ) {
     if (panels != null) {
-        ModelsSettingsPage(panels, piSettings, modifier, onBack)
+        ModelsSettingsPage(panels, piSettings, modifier, onBack, extraContent = extraContent)
         return
     }
     val scope = rememberCoroutineScope()

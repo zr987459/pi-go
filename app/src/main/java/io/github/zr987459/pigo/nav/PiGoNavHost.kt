@@ -1,6 +1,12 @@
 package io.github.zr987459.pigo.nav
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import io.github.zr987459.pigo.attach.ImageAttach
+import io.github.zr987459.pigo.settings.ModelsPageExtras
+import io.github.zr987459.pigo.contract.session.DraftImage
 import androidx.compose.runtime.key
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.foundation.layout.Row
@@ -90,6 +96,10 @@ enum class Destination(val route: String, val label: String) {
 /** 设置 › 模型（CalmSurface 的「设置」入口、会话列表底部的设置）。 */
 const val SETTINGS_FOCUS_MODELS = "models"
 
+/** 设置 › 模型 › 关于（DESIGN-r3 §8.5）。与 ⌘ › 帮助 › 关于（PiActions `about`）同一句话，再加版本与许可。 */
+internal fun aboutText(version: String?): String =
+    "pi-go ${version.orEmpty()}".trim() + "\npi 1.5.0（@earendil-works/pi-coding-agent）的安卓客户端，引擎：pi --mode rpc。\n第三方许可见 THIRD_PARTY_NOTICES.md。"
+
 /** 设置页带可选定位参数：`settings?focus=models`（见 [SettingsFocus]）。 */
 private const val SETTINGS_PATTERN = "settings?focus={focus}"
 
@@ -148,6 +158,18 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
                 composable(Destination.Chat.route) {
                     // r3：会话页 = FormHost（DESIGN-r3 §5.2）。UI 形态 = CalmSurface（r3/calm），读写同一个 SessionHostImpl；
                     // 终端形态在 r3/term 合入前是占位。切换只改 sessionHost.form，引擎与会话不受影响。
+                    // 「＋ › 图片」：系统照片选择器 → 草稿图片（两形态共用 host.draft），发送时 imageLoader 读成 base64（审查 Important 1）。
+                    val activity = LocalContext.current as? android.app.Activity
+                    val pickImages = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(ImageAttach.MAX_PICK)) { uris ->
+                        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+                        val cr = app.contentResolver
+                        val imgs = uris.map { u ->
+                            // 照片选择器的 URI 默认只在本进程存活期间可读；能持久化就持久化（发送前 App 被回收也不丢）。
+                            runCatching { cr.takePersistableUriPermission(u, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+                            DraftImage(uri = u.toString(), mimeType = runCatching { cr.getType(u) }.getOrNull())
+                        }
+                        graph.sessionHost.draft.value = ImageAttach.add(graph.sessionHost.draft.value, imgs)
+                    }
                     FormHost(
                         graph.sessionHost,
                         calm = {
@@ -156,9 +178,13 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
                                 onOpenSettings = { navController.openSettings(SETTINGS_FOCUS_MODELS) },
                                 panelEvents = graph.modelPanelEvents,
                                 fileSearch = graph.fileSearch?.asLambda,
+                                onAttachImage = { pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                                backHandler = { enabled, onBack -> BackHandler(enabled, onBack) },
                             )
                         },
                         term = { TermPlaceholder(onBackToUi = { graph.sessionHost.toggleForm() }) },
+                        // 各层都关着时按返回：退到后台，不结束 Activity、不打断生成（N4；终端形态同理）。
+                        onBackground = { activity?.moveTaskToBack(true) },
                     )
                 }
                 composable(Routes.SETTINGS_HUB) {
@@ -184,7 +210,6 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
                     )
                 }
                 composable(Routes.CUSTOM_PROVIDER) { CustomProviderPage(graph, onBack = { navController.popBackStack() }) }
-                composable(Routes.NETWORK) { NetworkPage(graph, onBack = { navController.popBackStack() }) }
                 composable(Routes.SESSION_DEFAULTS) { SessionDefaultsPage(graph, onBack = { navController.popBackStack() }) }
                 composable(Routes.TREE) {
                     if (!graph.extrasReady) {
@@ -314,6 +339,19 @@ private fun SettingsPage(graph: AppGraph, focus: String?, onBack: () -> Unit) {
         // r3：设置只留模型配置（DESIGN-r3 §6.1）：按 ModelPanels 逐行渲染，与 /model、/login 同一份实现。
         panels = graph.modelPanels,
         piSettings = graph.piSettings,
+        // 设置只留模型配置；网络代理、运行环境修复、关于作为本页末尾的行（PR #21 审查第 1 轮 Important 2、Nit 3）。
+        extraContent = {
+            ModelsPageExtras(
+                settings = graph.models.settings,
+                onRepairRuntime = {
+                    when (val r = graph.runtime.repair()) {
+                        is Outcome.Ok -> "运行环境已修复"
+                        is Outcome.Err -> "修复失败：${r.message}"
+                    }
+                },
+                aboutText = aboutText(remember(app) { runCatching { app.packageManager.getPackageInfo(app.packageName, 0).versionName }.getOrNull() }),
+            )
+        },
     )
 }
 
