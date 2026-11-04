@@ -26,3 +26,6 @@
 
 ## 09:25 CST（进行中）
 - 3e8489f：run 41752332211 build 绿；模拟器剩 2 个失败：externalKeyboardMatchesPi（Ctrl+L，清面板后编辑器失焦，已补重新聚焦）、slowFramesUnder5PercentWith1000Deltas（CI 模拟器慢帧 17.49%，184/1052，未解决）。
+
+## 接手（第 3 位修复工作者）09:26 CST
+- 已开始。计划：①确认 externalKeyboardMatchesPi 的重新聚焦修复；②终端流式渲染降重组（只重组最后一条、文本增量追加、避免整列表重算与每 delta 重新测量），再测 slowFramesUnder5PercentWith1000Deltas；仍因软件渲染超标则按调度者裁定加同模拟器基线；③CI 全绿后补 PR #18 描述。
