@@ -1,6 +1,6 @@
 # r3/calm（工作流 ④ UI 形态）状态
 
-**状态：进行中**（最近更新 2026-11-04 08:05 CST）
+**状态：进行中，PR #17 已开（r3/calm → main）**（最近更新 2026-11-04 08:13 CST）
 
 ## 已完成
 - `core/ui/.../calm/CalmTheme.kt`：§4.2 配色（浅/深）、字体（系统 Sans 16sp/1.55、JetBrains Mono 14sp）、圆角与动效常量。
@@ -14,8 +14,8 @@
 - `docs/notices/r3-calm.md`。
 
 ## 下一步（接手者照做）
-1. 看 CI（/actions/runs?branch=r3/calm）：模拟器 job 的 UiCoverageTest 修绿。
-2. PR #15 已合入 main：经 merges API 把 main 普通合并进 r3/calm，再开 PR r3/calm → main。
+1. 看 CI（/actions/runs?branch=r3/calm）：run 41743112979（87626d9）build 全绿；模拟器 UiCoverageTest 5 例中 3 例过，2 例失败（tree.label 夹具消息不在屏上、离开时 followBottom），已在 97f543e 修，等新 run 确认。
+2. main 已普通合并进本分支（87626d9）；PR #17 已开，CI 绿后更新 PR 描述里的 CI 一节，状态改「完成，PR #17」。
 3. 未做：onboarding 重画（仍是 dsh 视觉）、feature/sessions 旧页面删除（待 r3/app 改接 CalmSessionList）、慢帧测试、截图产物。
 
 ## 约定
