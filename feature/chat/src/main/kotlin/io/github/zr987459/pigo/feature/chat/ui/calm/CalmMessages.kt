@@ -100,6 +100,17 @@ internal fun CalmMessages(
     LaunchedEffect(rows.size, lastSize, follow) {
         if (follow && rows.isNotEmpty()) list.scrollToItem(rows.lastIndex, Int.MAX_VALUE / 2)
     }
+    // 新的本地结果块（「说明」条目、/session、/hotkeys 等）是用户刚触发的动作结果：滚到它并恢复贴底跟随。
+    // 否则先用过「跳到上一条提示」或手动上滑（follow = false）后，结果追加在视口外，用户看不到任何反应。
+    // 初值取进入时的条数，所以切换形态回来不会强行滚动，阅读位置照常恢复（§5.3）。
+    var seenLocals by remember { mutableStateOf(locals.size) }
+    LaunchedEffect(locals.size) {
+        if (locals.size > seenLocals && rows.isNotEmpty()) {
+            follow = true
+            list.scrollToItem(rows.lastIndex, Int.MAX_VALUE / 2)
+        }
+        seenLocals = locals.size
+    }
     LaunchedEffect(view.jumpTick) {
         if (view.jumpTick == 0) return@LaunchedEffect
         val cur = list.firstVisibleItemIndex
