@@ -53,6 +53,10 @@ object CalmIcons {
     val Gear: ImageVector by lazy {
         stroke("calm.gear", "M12 9A3 3 0 1 1 12 15A3 3 0 1 1 12 9Z", "M12 3V5", "M12 19V21", "M3 12H5", "M19 12H21", "M5.6 5.6L7 7", "M17 17L18.4 18.4", "M5.6 18.4L7 17", "M17 7L18.4 5.6")
     }
+    val Back: ImageVector by lazy { stroke("calm.back", "M15 6L9 12L15 18") }
+    val Check: ImageVector by lazy { stroke("calm.check", "M5 12.5L10 17.5L19 7") }
+    val Alert: ImageVector by lazy { stroke("calm.alert", "M12 3A9 9 0 1 1 12 21A9 9 0 1 1 12 3Z", "M12 7.5V13", "M12 16.5V16.6") }
+    val Bell: ImageVector by lazy { stroke("calm.bell", "M6 16V11A6 6 0 0 1 18 11V16L19.5 17.5H4.5Z", "M10 20H14") }
     val Star: ImageVector by lazy { stroke("calm.star", "M12 4L14.4 9L20 9.6L15.8 13.4L17 19L12 16.2L7 19L8.2 13.4L4 9.6L9.6 9Z") }
     val StarFilled: ImageVector by lazy { stroke("calm.starFilled", fill = "M12 4L14.4 9L20 9.6L15.8 13.4L17 19L12 16.2L7 19L8.2 13.4L4 9.6L9.6 9Z") }
 }
