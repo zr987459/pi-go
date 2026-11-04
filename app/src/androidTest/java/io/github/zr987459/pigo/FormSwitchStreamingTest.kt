@@ -5,6 +5,7 @@ import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.github.zr987459.pigo.contract.ChatItem
 import io.github.zr987459.pigo.contract.ContentBlock
@@ -76,7 +77,9 @@ class FormSwitchStreamingTest {
         // ① 经真实 UI 每 300ms 点一次 ⇄，共 10 次；屏幕背后的助手文本长度单调不减
         var lastLen = 0
         repeat(10) { i ->
-            rule.onNodeWithTag("form:toggle", useUnmergedTree = true).performClick()
+            // 终端的 ⇄UI 在可横向滚动的键条靠右（第 14 个键），窄屏上在视口外；performClick 点在视口外坐标会落空
+            // （CI 3c6aa27：expected CALM but was TERM）。先 performScrollTo 滚到可见再点，与 TermCoverageTest.tap() 一致。
+            rule.onNodeWithTag("form:toggle", useUnmergedTree = true).apply { runCatching { performScrollTo() } }.performClick()
             rule.waitForIdle()
             assertEquals(if (i % 2 == 0) UiForm.TERM else UiForm.CALM, host.form.value)
             if (host.form.value == UiForm.TERM) assertTrue(exists("term:surface"))

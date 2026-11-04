@@ -8,6 +8,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.github.zr987459.pigo.contract.fake.FakeSessionHost
 import io.github.zr987459.pigo.contract.session.DraftState
@@ -50,7 +51,7 @@ class FormHostTest {
         compose.onNodeWithTag("term:surface").assertIsDisplayed()
         assertEquals(UiForm.TERM, host.form.value)
 
-        compose.onNodeWithTag("form:toggle", useUnmergedTree = true).performClick()
+        compose.onNodeWithTag("form:toggle", useUnmergedTree = true).apply { runCatching { performScrollTo() } }.performClick()
         compose.waitForIdle()
         compose.onNodeWithTag("calm:toggle").assertIsDisplayed()
         assertEquals(UiForm.CALM, host.form.value)

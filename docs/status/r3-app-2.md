@@ -22,3 +22,4 @@
 - 14:25 已开 PR #26（草稿描述），等 CI。
 - 14:45 CI 79ffb91（push run 41784967642）：build 绿、真 pi 桥接绿；模拟器 UiCoverageTest（7，含新增 calm 慢帧 / 截图）、TermCoverageTest（16）、AppCoverageTest（6）全过；FormSwitchStreamingTest 失败 `ComposeNotIdleException`（20ms 一段流式下 waitForIdle 超时，测试本身问题）。已改为 120 段 × 100ms 并推送；SettingsScreenUiTest 因前一项失败未跑到。
 - 下一步（接手者）：看新 SHA 的 Android debug build（PR #26）模拟器 job；绿则在 PR 描述「CI 证据」补 run 链接，status 改「完成，PR #26」；红则看 emu 日志修。
+- 15:10 CI 3c6aa27（41787406103 / 41787412596）：模拟器只剩 FormSwitchStreamingTest `expected CALM but was TERM`（UiCoverageTest 7、TermCoverageTest 16、AppCoverageTest 6 全过）。根因：测试问题——终端 ⇄UI（form:toggle）是可横向滚动键条第 14 个键，窄屏在视口外，performClick 点在被裁剪区域落空；切换逻辑本身由 FormHostTest/AppCoverageTest 与第一次点击（UI→终端）证明正常。修：点前 performScrollTo（同 TermCoverageTest.tap），FormHostTest 同改。产品观察（r3/term 范围，不在本 PR 改）：窄屏上 ⇄UI 需横滑才看到，建议调度者评估是否把 ⇄UI 前移。
