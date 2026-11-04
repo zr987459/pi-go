@@ -291,6 +291,63 @@ class FormSwitchStreamingTest {
         }
     }
 
+    /**
+     * PR #26 增量审查 I1、Nit 1：UI 形态里有面板 / 扩展对话框时，顶栏只有 ⇄ 可点。
+     * - 扩展对话框等待应答：点 ⌘、⋯、☰、标题都不改变栈顶（仍是 ext:<id>）、不发命令、不出菜单 / 会话列表；
+     * - ⇄ 照常切换，切过去、切回来对话框都还在栈顶；
+     * - 普通面板打开时点 ☰ 不会把会话列表画到面板下面。
+     */
+    @Test
+    fun extDialogKeepsTopBarModalButToggleSwitches() {
+        val ctx = BindingContext(InstrumentationRegistry.getInstrumentation().targetContext.applicationContext, scope)
+        val host = SessionBindings.host(Mode.FAKE, ctx, UiForm.CALM) { error("A 档只用 FAKE") } as FakeSessionHost
+        rule.setContent {
+            ChatPage(
+                host = host, panelEvents = null, panelSource = null, fileSearch = null,
+                cwd = "/root/pi-cwd", home = "/root", onOpenSettings = {}, onAttachImage = {}, onBackground = {},
+            )
+        }
+        rule.waitForIdle()
+        rule.runOnIdle {
+            host.showExtDialog(ExtUiRequest(id = "req-2", method = "confirm", title = "确认", message = "继续吗？", timeoutMs = 60_000), System.currentTimeMillis())
+        }
+        rule.waitForIdle()
+        host.clearCommands()
+        assertEquals("ext:req-2", host.overlay.top?.id)
+
+        for (tag in listOf("calm:commands", "calm:sessionMenu", "persist:session.resume", "persist:session.name")) {
+            rule.onNodeWithTag(tag, useUnmergedTree = true).performClick()
+            rule.waitForIdle()
+            assertEquals("对话框等待应答时点 $tag 改变了栈顶：${host.overlay.items.value.map { it.id }}", "ext:req-2", host.overlay.top?.id)
+            assertEquals("对话框等待应答时点 $tag 压入了面板", 1, host.overlay.items.value.size)
+            assertTrue("对话框等待应答时点 $tag 发出了命令：${host.commands.value}", host.commands.value.isEmpty())
+            assertTrue("对话框等待应答时点 $tag 弹出了会话菜单", !exists("menu:session.clone"))
+            assertTrue("对话框等待应答时点 $tag 打开了会话列表", !exists("calm:drawer"))
+        }
+        assertTrue(exists("overlay:ext:req-2"))
+
+        // ⇄ 仍可切换，对话框两边都在栈顶
+        clickToggle()
+        assertEquals(UiForm.TERM, host.form.value)
+        assertTrue(exists("overlay:ext:req-2"))
+        assertEquals("ext:req-2", host.overlay.top?.id)
+        clickToggle()
+        assertEquals(UiForm.CALM, host.form.value)
+        assertTrue(exists("overlay:ext:req-2"))
+        assertEquals("ext:req-2", host.overlay.top?.id)
+
+        // 普通面板：点 ☰ 不打开画在面板下面的会话列表
+        rule.runOnIdle {
+            host.overlay.clear()
+            host.overlay.push(OverlayModel.SelectList(id = "model.select", title = "选择模型", groups = listOf(SelectGroup(null, listOf(SelectItem("a/b", "b"))))))
+        }
+        rule.waitForIdle()
+        rule.onNodeWithTag("persist:session.resume", useUnmergedTree = true).performClick()
+        rule.waitForIdle()
+        assertTrue("面板打开时点 ☰ 打开了会话列表", !exists("calm:drawer"))
+        assertEquals("model.select", host.overlay.top?.id)
+    }
+
     /** ⇄ 节点显示着、整体落在窗口（根节点）内、尺寸非零；失败时带上形态、边界与语义树，便于在 CI 日志里定位。 */
     private fun assertToggleOnScreen(w: Dp) {
         val node = rule.onNodeWithTag("form:toggle", useUnmergedTree = true)

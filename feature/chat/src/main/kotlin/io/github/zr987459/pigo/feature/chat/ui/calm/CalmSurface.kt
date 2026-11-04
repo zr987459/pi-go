@@ -149,6 +149,8 @@ private fun CalmSurfaceBody(
 
     // 顶栏下沿（相对本形态的位置，px）：面板 / 扩展对话框的遮罩从这里往下画，顶栏的 ⇄ 在面板打开时仍可点
     // （硬性要求 ②「一键即切」；面板、扩展对话框在两种形态共用，切过去照样在）。
+    // 顶栏其余按钮（☰、改名、⌘、⋯）在有面板时锁住，与之前遮罩盖住整个顶栏时一致：扩展对话框等待应答期间仍是模态的
+    // （ExtDialog 固定在栈顶，PR #23；终端形态 Esc 也是先应答对话框），会话列表也不会画到面板下面（PR #26 增量审查 I1、Nit 1）。
     var surfaceY by remember { mutableFloatStateOf(0f) }
     var topBarBottom by remember { mutableFloatStateOf(0f) }
     val density = LocalDensity.current
@@ -163,6 +165,7 @@ private fun CalmSurfaceBody(
                 onCommands = { openCommandCenter(host) },
                 onToggleForm = toggleForm,
                 onAction = run,
+                locked = overlays.isNotEmpty(),
             )
             }
             if (engineStatus is EngineStatus.Crashed) {
@@ -273,7 +276,9 @@ internal fun subtitleOf(running: Boolean, status: String?, retry: String?, ephem
 
 internal fun openCommandCenter(host: SessionHost) {
     if (host.overlay.top?.id == COMMANDS_OVERLAY_ID) return
-    host.overlay.push(
+    // 不盖住扩展对话框（ExtDialog 固定在栈顶，PR #23）
+    CalmPanelLogic.pushBelowPinned(
+        host.overlay,
         io.github.zr987459.pigo.contract.session.OverlayModel.SelectList(id = COMMANDS_OVERLAY_ID, title = "⌘ 命令中心"),
     )
 }
@@ -302,15 +307,18 @@ private fun CalmTopBar(
     onCommands: () -> Unit,
     onToggleForm: () -> Unit,
     onAction: (String, String?) -> Unit,
+    /** 有面板 / 扩展对话框打开：只有 ⇄ 可点，其余按钮停用（[CalmSurface] 里的说明）。 */
+    locked: Boolean = false,
 ) {
     val c = Calm.colors
     var menu by remember { mutableStateOf(false) }
+    val tint = if (locked) c.secondary else c.text
     Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        IconButton(onClick = onMenu, modifier = Modifier.testTag(persistentTag("session.resume") ?: "persist:session.resume")) {
-            Icon(CalmIcons.Menu, contentDescription = "会话列表", tint = c.text)
+        IconButton(onClick = onMenu, enabled = !locked, modifier = Modifier.testTag(persistentTag("session.resume") ?: "persist:session.resume")) {
+            Icon(CalmIcons.Menu, contentDescription = "会话列表", tint = tint)
         }
         Column(
-            Modifier.weight(1f).clickable(onClick = onRename).padding(horizontal = 4.dp, vertical = 2.dp)
+            Modifier.weight(1f).clickable(enabled = !locked, onClick = onRename).padding(horizontal = 4.dp, vertical = 2.dp)
                 .testTag(persistentTag("session.name") ?: "persist:session.name"),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -325,14 +333,15 @@ private fun CalmTopBar(
                 Text(subtitle, style = Calm.type.caption, color = c.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.testTag("calm:subtitle"))
             }
         }
-        IconButton(onClick = onCommands, modifier = Modifier.testTag("calm:commands")) {
-            Icon(CalmIcons.Command, contentDescription = "命令中心", tint = c.text)
+        IconButton(onClick = onCommands, enabled = !locked, modifier = Modifier.testTag("calm:commands")) {
+            Icon(CalmIcons.Command, contentDescription = "命令中心", tint = tint)
         }
         Box {
-            IconButton(onClick = { menu = true }, modifier = Modifier.testTag("calm:sessionMenu")) {
-                Icon(CalmIcons.More, contentDescription = "会话菜单", tint = c.text)
+            IconButton(onClick = { menu = true }, enabled = !locked, modifier = Modifier.testTag("calm:sessionMenu")) {
+                Icon(CalmIcons.More, contentDescription = "会话菜单", tint = tint)
             }
-            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            // 菜单开着时弹出扩展对话框 / 面板：菜单一并收起
+            DropdownMenu(expanded = menu && !locked, onDismissRequest = { menu = false }) {
                 for ((id, label) in SESSION_MENU) {
                     DropdownMenuItem(
                         text = { Text(label, style = Calm.type.label) },
