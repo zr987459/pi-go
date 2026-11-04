@@ -46,9 +46,9 @@ object CalmPanelLogic {
                 val top = stack.top
                 val m = keepTyped(top, r.model)
                 when {
-                    m is OverlayModel.Confirm -> stack.push(m)
+                    m is OverlayModel.Confirm -> pushBelowPinned(stack, m)
                     top != null && (top.id == from || top.id == m.id) -> stack.replaceTop(m)
-                    else -> stack.push(m)
+                    else -> pushBelowPinned(stack, m)
                 }
                 null
             }
@@ -56,6 +56,17 @@ object CalmPanelLogic {
             is ActionResult.Toast -> r.text
             is ActionResult.LocalBlock -> r.title
         }
+    }
+
+    /**
+     * 压栈但不盖住扩展对话框（main@584a056 / PR #23 约定：ExtDialog 固定在栈顶）。
+     * 用单次原子 [OverlayStack.update]，与宿主的 syncDialogs 不交错；同 id 的旧实例先移除。
+     */
+    fun pushBelowPinned(stack: OverlayStack, m: OverlayModel) = stack.update { list ->
+        val rest = list.filterNot { it.id == m.id }
+        var i = rest.size
+        while (i > 0 && rest[i - 1] is OverlayModel.ExtDialog) i--
+        rest.subList(0, i) + m + rest.subList(i, rest.size)
     }
 
     /**

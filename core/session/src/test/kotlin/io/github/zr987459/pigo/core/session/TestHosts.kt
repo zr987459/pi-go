@@ -20,9 +20,12 @@ class RecordingOps(private val engine: FakeScriptedEngine) : SessionOps {
     var guestResult: (String) -> GuestOutput = { GuestOutput(0, "ok") }
     override suspend fun treeNavigate(entryId: String, summarize: Boolean): Outcome<TreeNav> {
         engine.record("tree_nav", mapOf("entryId" to entryId, "summarize" to summarize.toString()))
+        navGate?.await()
         return Outcome.Ok(TreeNav(leafId = entryId, editorText = navEditorText))
     }
     var navEditorText: String? = null
+    /** 非空时 tree_nav 挂起到它完成（模拟「摘要后切换」要等几十秒）。 */
+    var navGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
     override suspend fun runGuest(command: String, timeoutMs: Long): Outcome<GuestOutput> { guestCommands += command; return Outcome.Ok(guestResult(command)) }
     val reports = mutableListOf<Pair<String, String>>()
     override suspend fun writeReport(fileName: String, text: String): Outcome<String> { reports += fileName to text; return Outcome.Ok("/cache/$fileName") }
@@ -41,6 +44,9 @@ class TestChatPort(private val engine: io.github.zr987459.pigo.contract.EngineCl
     override val editorTextOffer: kotlinx.coroutines.flow.StateFlow<String?> = _offer
     override val notices = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 8)
     val answers = mutableListOf<Triple<String, String?, Boolean>>()
+
+    /** 测试：直接设定待应答的扩展对话框列表（等同 pi 发来 / 应答了阻塞请求）。 */
+    fun setDialogs(list: List<io.github.zr987459.pigo.contract.ExtUiRequest>) { _dialogs.value = list }
 
     init {
         scope.launch {

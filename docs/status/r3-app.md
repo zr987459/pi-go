@@ -107,6 +107,10 @@
 - CalmPanelLogic.isOAuthFinal 同时认 main 新增的 `FlowState.DONE/FAILED`。
 - 下一步：等 CI；之后可能再 merge PR #23（r3/session-overlay）。
 
-## merge main@584a056（2026-11-04 12:35 CST，进行中）
+## merge main@584a056（2026-11-04 12:35 CST 开始）
 - 已开始：把 main@584a056（PR#23 r3/session-overlay）普通 merge 进 r3/app@7f9bceb，不 rebase、不 force。
 - 计划：①merge 并列冲突文件；②core/session 路由/栈逻辑以 main 为准，app/calm 适配新接口，保留 PR#21 全部审查修复；③本地 assembleDebug testDebugUnitTest；④推送盯 CI（含模拟器）；⑤更新 PR 描述。
+- 12:39 CST：前一节由另一个（已取消的）合并任务写入，其推送取消了 7f9bceb 的模拟器 run；e3f7c9e 与 7f9bceb 代码相同。r3/app 现只由本任务处理。
+- 冲突：只有 `feature/chat/.../calm/CalmSheet.kt`（三方合并无文本冲突）。core/session、core/contract 全部取 main。
+- 适配：FormView 在面板事件模式下不重复画 main 新加的 Form.actions 键帽（由 PR #21 的附加按钮发出，带密文字段）；CalmPanelLogic 压栈改用 `OverlayStack.update` 原子插到 ExtDialog 之下（守 main 的「扩展对话框固定栈顶」）。测试：CalmPanelLogicTest.pushedPanelsStayBelowPinnedExtDialog。
+- 下一步：推送 merge 提交，盯 CI（含模拟器）。

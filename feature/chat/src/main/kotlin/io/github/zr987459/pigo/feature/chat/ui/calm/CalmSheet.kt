@@ -81,7 +81,8 @@ import kotlinx.coroutines.launch
  * - SelectList 点某项 → `runAction(<面板 id>, <项 key>)`；点星标 → `runAction(<面板 id>, "star:<key>")`；
  * - Form 提交 → `runAction(<面板 id>, "k=v" 每行一个)`；
  * - Confirm 确定 → `runAction(<面板 id>, "confirm")`；
- * - Tree 点节点 → `runAction("session.tree", <节点 id>)`；长按 → `runAction("tree.label", <节点 id>)`。
+ * - Tree 点节点 → `runAction("session.tree", <节点 id>)`；长按 → `runAction("tree.label", <节点 id>)`（先弹标签表单）。
+ * - 面板自带键帽（SelectList.keyCaps、Form.actions）→ `runAction(<actionId>)`：由 SessionHostImpl 按栈顶面板转成面板事件。
  */
 @Composable
 internal fun CalmSheet(
@@ -369,6 +370,9 @@ private fun FormView(host: SessionHost, model: OverlayModel.Form, onAction: (Str
             else FieldRow(f, model.values[f.key].orEmpty()) { set(f.key, it) }
         }
     }
+    // 表单自带的操作（测试、账号登录、清除…）：键帽约定，宿主按栈顶面板转成面板事件（value = 表单值）。
+    // 面板事件模式（装配层 PanelEventSink）下由下面的 extra 按钮发出（带密文字段），这里不重复画（merge main@584a056 适配）。
+    if (panel == null && model.actions.isNotEmpty()) KeyCapRow(model.actions.map { it.label to it.actionId }, onAction)
     Spacer(Modifier.size(12.dp))
     val extra = if (panel != null) CalmPanelLogic.formActions(model) else emptyList()
     if (extra.isNotEmpty()) {

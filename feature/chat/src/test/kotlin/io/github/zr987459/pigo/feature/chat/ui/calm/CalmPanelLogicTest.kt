@@ -1,5 +1,6 @@
 package io.github.zr987459.pigo.feature.chat.ui.calm
 
+import io.github.zr987459.pigo.contract.ExtUiRequest
 import io.github.zr987459.pigo.contract.actions.ActionResult
 import io.github.zr987459.pigo.contract.session.KeyCap
 import io.github.zr987459.pigo.contract.session.OverlayModel
@@ -76,5 +77,18 @@ class CalmPanelLogicTest {
     @Test
     fun keyCapValueIsSelectedItem() {
         assertEquals("model:deepseek/deepseek-chat", CalmPanelLogic.keyCapValue(OverlayModel.SelectList("model.select", "模型", selectedKey = "model:deepseek/deepseek-chat")))
+    }
+
+    /** merge main@584a056（PR #23）：扩展对话框固定栈顶，面板事件压出的确认框 / 下一步面板落在它下面。 */
+    @Test
+    fun pushedPanelsStayBelowPinnedExtDialog() {
+        val s = OverlayStack()
+        s.push(form("provider.form:deepseek"))
+        s.push(OverlayModel.ExtDialog("ext:req-1", "确认？", ExtUiRequest(id = "req-1", method = "confirm"), 0L))
+        CalmPanelLogic.apply(s, "provider.form:deepseek", ActionResult.Overlay(OverlayModel.Confirm("confirm.clear:deepseek", "清除", "确定？")))
+        assertEquals(listOf("provider.form:deepseek", "confirm.clear:deepseek", "ext:req-1"), s.items.value.map { it.id })
+        CalmPanelLogic.apply(s, "auth.login", ActionResult.Overlay(form("provider.form:qwen")))
+        assertEquals("ext:req-1", s.top?.id)
+        assertEquals(listOf("provider.form:deepseek", "confirm.clear:deepseek", "provider.form:qwen", "ext:req-1"), s.items.value.map { it.id })
     }
 }
