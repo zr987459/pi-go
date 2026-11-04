@@ -352,7 +352,7 @@ class TermCoverageTest {
         val frames = AtomicInteger()
         val slow = AtomicInteger()
         val last = AtomicLong(0)
-        @Volatile var tracking = true
+        val tracking = java.util.concurrent.atomic.AtomicBoolean(true)
         val refreshNs = (1_000_000_000L / (androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
             .getSystemService(android.view.WindowManager::class.java).defaultDisplay.refreshRate.coerceAtLeast(30f))).toLong()
         val cb = object : Choreographer.FrameCallback {
@@ -362,7 +362,7 @@ class TermCoverageTest {
                     frames.incrementAndGet()
                     if (t - p > 2 * refreshNs) slow.incrementAndGet()
                 }
-                if (tracking) Choreographer.getInstance().postFrameCallback(this)
+                if (tracking.get()) Choreographer.getInstance().postFrameCallback(this)
             }
         }
         val chunks = (0 until 1000).map { i -> if (i % 40 == 0) "\n\n## 第 ${i / 40} 节\n\n- 列表项 $i " else "字$i " }
@@ -370,7 +370,7 @@ class TermCoverageTest {
         val stream = host.startStream(StreamScript(chunks, intervalMs = 8), userText = "写长一点")
         rule.waitUntil(120_000) { !stream.isActive }
         rule.waitForIdle()
-        tracking = false
+        tracking.set(false)
         val total = frames.get()
         val ratio = if (total == 0) 0.0 else slow.get().toDouble() / total
         assertTrue("没有采集到帧", total > 0)
