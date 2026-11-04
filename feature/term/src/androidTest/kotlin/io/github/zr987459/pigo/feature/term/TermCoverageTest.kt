@@ -379,7 +379,9 @@ class TermCoverageTest {
         rule.waitForIdle()
         assertEquals(listOf(Triple("model.select", "default", "model:b/gpt"), Triple("model.select", "star", "model:b/gpt")), events)
         assertTrue("键帽不应作为动作 id 交给 runAction：${host.fake.fakeActions.ran.drop(ranBefore)}", host.fake.fakeActions.ran.drop(ranBefore).none { it.first == "default" || it.first == "star" })
-        rule.onNodeWithTag("term:toast", useUnmergedTree = true).assertIsDisplayed()
+        // 审查第 3 轮 Important 2：面板宿主的 Toast 显示在面板里，面板不关
+        rule.onNodeWithTag("overlay:model.select:notice", useUnmergedTree = true).assertIsDisplayed()
+        assertEquals("model.select", host.overlay.top?.id)
     }
 
     private class HistHost(val fake: FakeSessionHost, override val promptHistory: MutableStateFlow<List<String>>) : SessionHost by fake

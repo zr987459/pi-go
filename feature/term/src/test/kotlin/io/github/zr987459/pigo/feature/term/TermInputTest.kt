@@ -186,10 +186,9 @@ class TermPanelRoutingTest {
     fun oauthPanelOffersRetryOnlyWhenFailed() {
         // 审查第 3 轮 Nit 1：按结构化状态 OverlayModel.Text.flow 判断，不看文案
         val T = io.github.zr987459.pigo.contract.session.OverlayModel::Text
-        val F = io.github.zr987459.pigo.contract.session.FlowState
-        org.junit.Assert.assertEquals(listOf("refresh", "retry"), TermInput.oauthCaps(T("oauth:x", "登录 x", "任意文案", F.FAILED)).map { it.second })
-        org.junit.Assert.assertEquals(listOf("refresh"), TermInput.oauthCaps(T("oauth:x", "登录 x", "登录失败：文案不算数", F.RUNNING)).map { it.second })
-        org.junit.Assert.assertTrue(TermInput.oauthCaps(T("oauth:x", "登录 x", "已登录", F.DONE)).isEmpty())
+        org.junit.Assert.assertEquals(listOf("refresh", "retry"), TermInput.oauthCaps(T("oauth:x", "登录 x", "任意文案", io.github.zr987459.pigo.contract.session.FlowState.FAILED)).map { it.second })
+        org.junit.Assert.assertEquals(listOf("refresh"), TermInput.oauthCaps(T("oauth:x", "登录 x", "登录失败：文案不算数", io.github.zr987459.pigo.contract.session.FlowState.RUNNING)).map { it.second })
+        org.junit.Assert.assertTrue(TermInput.oauthCaps(T("oauth:x", "登录 x", "已登录", io.github.zr987459.pigo.contract.session.FlowState.DONE)).isEmpty())
         org.junit.Assert.assertTrue("没有结构化状态的普通文字面板没有键帽", TermInput.oauthCaps(T("about", "关于", "登录失败", null)).isEmpty())
     }
 }

@@ -33,6 +33,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
@@ -134,8 +135,6 @@ class TermPanelRouterRealHostTest {
         testScheduler.runCurrent()
         return Ctx(host, engine, panels, router, ran, toasts)
     }
-
-    private fun CoroutineScope.launch(block: suspend () -> Unit) = kotlinx.coroutines.launch(this.coroutineContext) { block() }
 
     @Test
     fun modelPickSwitchesSessionModel() = runTest(UnconfinedTestDispatcher()) {
