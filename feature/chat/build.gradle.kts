@@ -30,6 +30,8 @@ kotlin {
 
 dependencies {
     implementation(project(":core:contract"))
+    // r3/session 审查第 1 轮 I1：ChatControllerPort 实现 core/session 的 SessionChatPort（范围外最小改动，PR 描述已注明）。
+    implementation(project(":core:session"))
     implementation(project(":core:ui"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)

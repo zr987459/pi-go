@@ -21,6 +21,8 @@ import io.github.zr987459.pigo.contract.Outcome
 import io.github.zr987459.pigo.contract.QueueSnapshot
 import io.github.zr987459.pigo.contract.RetryBanner
 import io.github.zr987459.pigo.contract.SendMode
+import io.github.zr987459.pigo.contract.session.DraftState
+import io.github.zr987459.pigo.core.session.DraftCodec
 import io.github.zr987459.pigo.feature.chat.logic.ChatRow
 import io.github.zr987459.pigo.feature.chat.logic.ChatRows
 import io.github.zr987459.pigo.feature.chat.logic.ComposerLogic
@@ -53,6 +55,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -158,6 +162,13 @@ class ChatController(
 
     private val local = MutableStateFlow(Local())
 
+    /**
+     * 两种形态共用的草稿（DESIGN-r3 §5.1；审查第 1 轮 I1）。文字与输入框 `composer.draft` 双向同步，
+     * 另带光标、`@` 引用、`!` 模式、图片 URI、「已撤回」芯片；按会话经 [drafts] 持久化（[DraftCodec]）。
+     * `SessionHostImpl.draft` 就是这一个对象（经 `ChatControllerPort`）。
+     */
+    val sharedDraft: MutableStateFlow<DraftState> = MutableStateFlow(DraftState.EMPTY)
+
     /** 合成协程最后处理过的会话文件（草稿和分叉文本按它归属）。 */
     @Volatile
     private var observedFile: String? = engine.chat.value.sessionFile
@@ -214,6 +225,25 @@ class ChatController(
 
     init {
         scope.launch { engine.uiRequests.collect { onUiRequest(it) } }
+        // composer.draft → sharedDraft（输入框、队列退回、分叉文本、扩展 set_editor_text 改的都是 composer）。
+        scope.launch {
+            local.collect { l ->
+                val t = l.composer.draft
+                if (sharedDraft.value.text != t) sharedDraft.update { if (it.text == t) it else it.withText(t) }
+            }
+        }
+        // sharedDraft → composer.draft（两种形态改的是 sharedDraft），并按会话持久化。
+        scope.launch {
+            var last = sharedDraft.value
+            sharedDraft.collect { d ->
+                if (local.value.composer.draft != d.text) {
+                    local.update { it.copy(composer = it.composer.copy(draft = d.text)) }
+                    if (SlashCompletion.queryOf(d.text) != null) ensureCommands()
+                }
+                if (d != last) persistDraftSoon()
+                last = d
+            }
+        }
         scope.launch {
             var wasRunning = engine.chat.value.running
             var lastFile = engine.chat.value.sessionFile
@@ -609,7 +639,7 @@ class ChatController(
         draftJob?.cancel()
         draftJob = scope.launch {
             delay(config.draftSaveDelayMs)
-            store.put(key, local.value.composer.draft)
+            store.put(key, DraftCodec.encode(currentDraft()))
         }
     }
 
@@ -621,11 +651,11 @@ class ChatController(
         val store = drafts ?: return
         draftJob?.cancel()
         draftJob = null
-        val draft = local.value.composer.draft
+        val draft = currentDraft()
         scope.launch {
             try {
                 store.remove(keyOf(null))
-                if (draft.isNotBlank()) store.put(keyOf(file), draft)
+                if (!DraftCodec.isBlank(draft)) store.put(keyOf(file), DraftCodec.encode(draft))
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Throwable) {
@@ -637,11 +667,12 @@ class ChatController(
     private fun swapOutDraft(file: String?) {
         draftJob?.cancel()
         draftJob = null
-        val draft = local.value.composer.draft
+        val draft = currentDraft()
         if (drafts == null) return
         local.update { it.copy(composer = it.composer.withDraft("")) }
+        sharedDraft.value = DraftState.EMPTY
         val key = keyOf(file)
-        scope.launch { drafts.put(key, draft) }
+        scope.launch { if (DraftCodec.isBlank(draft)) drafts.remove(key) else drafts.put(key, DraftCodec.encode(draft)) }
     }
 
     /**
@@ -660,18 +691,44 @@ class ChatController(
             } catch (_: Throwable) {
                 null
             }
-            if (saved.isNullOrBlank()) return@launch
+            val restored = DraftCodec.decode(saved)
+            if (DraftCodec.isBlank(restored)) return@launch
             // 读回来时已经又换了会话：不要放进别的会话。
             if (observedFile != file) return@launch
+            var applied = false
             local.update { s ->
                 when {
-                    s.composer.draft.isBlank() -> s.copy(composer = s.composer.withDraft(saved))
-                    firstLearn || s.composer.draft.trim() == saved.trim() -> s
-                    else -> s.copy(composer = s.composer.copy(withdrawn = s.composer.withdrawn + saved))
+                    s.composer.draft.isBlank() -> { applied = true; s.copy(composer = s.composer.withDraft(restored.text)) }
+                    firstLearn || s.composer.draft.trim() == restored.text.trim() -> s
+                    else -> s.copy(composer = s.composer.copy(withdrawn = s.composer.withdrawn + restored.text))
                 }
             }
+            // 光标、@ 引用、! 模式、图片、撤回芯片随文字一起回来（只在文字真的放回输入框时）。
+            if (applied) sharedDraft.value = restored
         }
     }
+
+    /** 要持久化的草稿：以输入框文字为准，加上共享草稿里的其余字段。 */
+    private fun currentDraft(): DraftState = sharedDraft.value.let { d ->
+        val t = local.value.composer.draft
+        if (d.text == t) d else d.withText(t)
+    }
+
+    // ---------------- 供 SessionHost（ChatControllerPort）用的单一状态 ----------------
+
+    /** 等待应答的扩展阻塞对话框（唯一订阅者是本控制器）。 */
+    val pendingDialogs: StateFlow<List<ExtUiRequest>> =
+        local.map { l -> l.dialogs.map { it.request } }.distinctUntilChanged().stateIn(scope, SharingStarted.Eagerly, emptyList())
+
+    /** 扩展 `set_editor_text` 想替换非空草稿时的待确认文字。 */
+    val editorTextOffer: StateFlow<String?> =
+        local.map { it.replaceDraftOffer }.distinctUntilChanged().stateIn(scope, SharingStarted.Eagerly, null)
+
+    /** 输入框当前文字（同步读取，不经合成后的 [state]）。 */
+    val composerDraft: String get() = local.value.composer.draft
+
+    /** 正在停止（此时发送会被忽略）。 */
+    val isStopping: Boolean get() = local.value.composer.stopping
 
     private fun modelAcceptsImages(m: ModelInfo?): Boolean {
         val input = m?.raw?.get("input") as? JsonArray ?: return true

@@ -36,9 +36,14 @@ class SessionHostFormSwitchTest {
         val overlayBefore = host.overlay.items.value
         assertTrue("扩展 confirm 应已压栈", overlayBefore.any { it is OverlayModel.ExtDialog && it.request.id == "c1" })
 
-        repeat(20) {
+        // 切换期间只允许出现流式本身产生的记录：切换前后命令日志的差集必须为空（§7.2 第 1 条，审查 N1）。
+        repeat(20) { i ->
             delay(script.intervalMs * 200 / 25)
+            assertTrue("第 ${i + 1} 次切换时应仍在生成", host.chat.value.running)
+            val before = engine.commands.value.size
             host.form.value = if (host.form.value == UiForm.CALM) UiForm.TERM else UiForm.CALM
+            testScheduler.runCurrent()
+            assertEquals("第 ${i + 1} 次切换发出了命令：${engine.commands.value.drop(before)}", before, engine.commands.value.size)
         }
         job.join()
 
