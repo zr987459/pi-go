@@ -343,6 +343,35 @@ class TermCoverageTest {
         rule.onNodeWithTag("term:header:section:Prompts", useUnmergedTree = true).assertIsDisplayed()
     }
 
+    /** 调度者裁定（PR #19 审查 Nit 1）：面板自带键帽发面板事件（overlay id、键帽 actionId、高亮项）给面板宿主，不当作动作 id 执行。 */
+    @Test
+    fun panelKeyCapsEmitPanelEvents() {
+        val events = mutableListOf<Triple<String, String, String?>>()
+        val host = setUp(
+            TermEnv(onPanelEvent = { id, key, value ->
+                events += Triple(id, key, value)
+                io.github.zr987459.pigo.contract.actions.ActionResult.Toast("已设为默认")
+            }),
+        )
+        host.overlay.push(
+            OverlayModel.SelectList(
+                "model.select", "选择模型",
+                listOf(SelectGroup(null, listOf(SelectItem("model:a/sonnet", "sonnet"), SelectItem("model:b/gpt", "gpt")))),
+                selectedKey = "model:b/gpt",
+                keyCaps = listOf(io.github.zr987459.pigo.contract.session.KeyCap("Ctrl+S", "设为默认", "default"), io.github.zr987459.pigo.contract.session.KeyCap("Space", "常用", "star")),
+            ),
+        )
+        rule.waitForIdle()
+        val ranBefore = host.fake.fakeActions.ran.size
+        rule.onNodeWithTag("term:keycap:model:Ctrl+S 设为默认", useUnmergedTree = true).tap()
+        rule.waitForIdle()
+        rule.onNodeWithTag("term:keycap:model:Space 常用", useUnmergedTree = true).tap()
+        rule.waitForIdle()
+        assertEquals(listOf(Triple("model.select", "default", "model:b/gpt"), Triple("model.select", "star", "model:b/gpt")), events)
+        assertTrue("键帽不应作为动作 id 交给 runAction：${host.fake.fakeActions.ran.drop(ranBefore)}", host.fake.fakeActions.ran.drop(ranBefore).none { it.first == "default" || it.first == "star" })
+        rule.onNodeWithTag("term:toast", useUnmergedTree = true).assertIsDisplayed()
+    }
+
     /** §8.5 / §7.3：1000 条流式 delta 下慢帧 < 5%（帧间隔超过 2 个刷新周期计为慢帧，与 JankStats 的默认判定相同）。 */
     @Test
     fun slowFramesUnder5PercentWith1000Deltas() {

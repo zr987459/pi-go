@@ -141,6 +141,8 @@ data class TermEnv(
     val contextFiles: List<String> = emptyList(),
     val availableProviderCount: Int = 1,
     val latestCacheHitRate: Double? = null,
+    /** 面板宿主：面板自带键帽的点击（key = KeyCap.actionId，value = 高亮项），装配层接到 `ModelPanels.onPanelEvent`。 */
+    val onPanelEvent: (suspend (overlayId: String, key: String, value: String?) -> io.github.zr987459.pigo.contract.actions.ActionResult)? = null,
 )
 
 private val SPINNER = listOf("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
@@ -197,6 +199,23 @@ private fun TermScreen(
         when (val r = host.runAction(id, args)) {
             is io.github.zr987459.pigo.contract.actions.ActionResult.Toast -> toast = r.text
             else -> Unit
+        }
+    }
+
+    /**
+     * 面板事件（键帽点击）交给面板宿主 [TermEnv.onPanelEvent] 分发，结果在这里落地一次：
+     * 面板 → 同 id 替换栈顶、否则压栈；提示 → toast。未接线时给出提示，不当作动作 id 执行。
+     */
+    fun panelEvent(overlayId: String, key: String, value: String?) {
+        val dispatch = env.onPanelEvent
+        if (dispatch == null) { toast = "面板操作未接线：$overlayId/$key"; return }
+        scope.launch {
+            when (val r = dispatch(overlayId, key, value)) {
+                is io.github.zr987459.pigo.contract.actions.ActionResult.Overlay ->
+                    if (host.overlay.top?.id == r.model.id) host.overlay.replaceTop(r.model) else host.overlay.push(r.model)
+                is io.github.zr987459.pigo.contract.actions.ActionResult.Toast -> toast = r.text
+                else -> Unit
+            }
         }
     }
 
@@ -439,7 +458,7 @@ private fun TermScreen(
                     Column(Modifier.testTag("term:widget:$k")) { v.second.forEach { TermLineText(TermLine(listOf(Span(CellWidth.truncate(it, cols)))), fontSp.sp, tokens) } }
                 }
                 overlays.lastOrNull()?.let { top ->
-                    TermOverlay(host, top, cols, fontSp, tokens, catalog, onRun = { id, a -> run(id, a) })
+                    TermOverlay(host, top, cols, fontSp, tokens, catalog, onRun = { id, a -> run(id, a) }, onPanelEvent = ::panelEvent)
                 }
                 if (atMatches.isNotEmpty() && overlays.isEmpty()) AtCompletion(atMatches.take(maxVisible.coerceAtLeast(5)), cols, fontSp, tokens, ::pickAt)
                 TermInput.slashQuery(draft.text)?.let { q ->

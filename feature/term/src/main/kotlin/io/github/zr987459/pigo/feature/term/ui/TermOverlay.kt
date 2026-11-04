@@ -16,6 +16,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
@@ -48,8 +49,16 @@ fun TermOverlay(
     tokens: PiTokens,
     catalog: List<PiActionSpec>,
     onRun: (String, String?) -> Unit,
+    onPanelEvent: (overlayId: String, key: String, value: String?) -> Unit = { _, _, _ -> },
 ) {
     val scope = rememberCoroutineScope()
+    val catalogIds = remember(catalog) { catalog.map { it.id }.toSet() }
+    // 面板自带的键帽（OverlayModel.keyCaps）按面板事件协议回传（调度者裁定，PR #19 审查 Nit 1）：
+    // key = KeyCap.actionId，value = 当前高亮项（SelectList.selectedKey），交给面板宿主（ModelPanels.onPanelEvent）分发，
+    // 与 UI 形态一致；只有动作表里存在的 id（selectorCaps）才走 runAction。
+    fun panelCap(id: String, selected: String?) {
+        if (id in catalogIds) onRun(id, null) else onPanelEvent(model.id, id, selected)
+    }
     val style = monoStyle(fontSp.sp, tokens)
     fun line(spans: List<Span>, bg: String? = null) = TermLine(listOf(Span(" ")) + spans, bg)
     fun close() { host.overlay.pop() }
@@ -113,7 +122,9 @@ fun TermOverlay(
                         }
                     }
                 }
-                KeyCapRow(model.keyCaps.map { it.key + " " + it.label to it.actionId } + selectorCaps(model.id, catalog), style, tokens, model.id, onRun)
+                KeyCapRow(model.keyCaps.map { it.key + " " + it.label to it.actionId } + selectorCaps(model.id, catalog), style, tokens, model.id) { id, a ->
+                    if (model.keyCaps.any { it.actionId == id }) panelCap(id, model.selectedKey) else onRun(id, a)
+                }
             }
 
             is OverlayModel.Form -> {
