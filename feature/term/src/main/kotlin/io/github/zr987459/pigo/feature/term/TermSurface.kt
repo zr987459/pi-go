@@ -608,17 +608,19 @@ private fun StatusLine(chat: io.github.zr987459.pigo.contract.ChatState, cols: I
     var runStart by remember { mutableLongStateOf(0L) }
     val retry = chat.retry
     val retryStart = remember(retry) { System.currentTimeMillis() }
+    // 由下方计时循环每 80ms 更新，倒计时随之重组（只在本状态行内）
+    var nowMs by remember { androidx.compose.runtime.mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(chat.running, retry) {
         if (chat.running || retry != null) {
             if (chat.running && runStart == 0L) runStart = System.currentTimeMillis()
-            while (true) { delay(80); tick++ }
+            while (true) { delay(80); tick++; nowMs = System.currentTimeMillis() }
         } else runStart = 0L
     }
     val text: List<Span>? = when {
         retry != null -> listOf(
             Span(SPINNER[tick % SPINNER.size] + " ", "warning"),
             // 倒计时（Nit 5）：从横幅出现起倒数，向上取整，同 pi 的 `Retrying (n/m) in Ns`
-            Span("Retrying (${retry.attempt}/${retry.maxAttempts}) in ${TermInput.retrySecondsLeft(retry.delayMs, System.currentTimeMillis() - retryStart + 0L * tick)}s", "warning"),
+            Span("Retrying (${retry.attempt}/${retry.maxAttempts}) in ${TermInput.retrySecondsLeft(retry.delayMs, nowMs - retryStart)}s", "warning"),
             Span(retry.errorMessage?.let { " · $it" } ?: "", "dim"),
             Span(" (escape to cancel)", "dim"),
         )

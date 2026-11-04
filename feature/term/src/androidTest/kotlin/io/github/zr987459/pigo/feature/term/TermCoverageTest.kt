@@ -170,6 +170,9 @@ class TermCoverageTest {
         val bash = MutableStateFlow(false)
         val host = setUp(TermEnv(bashRunning = bash))
         fun escRan(): String? {
+            // Fake 的占位动作会压一个 Text 面板；面板打开时 Esc 先关面板，所以每次按前清栈
+            host.overlay.clear()
+            rule.waitForIdle()
             val n = host.fake.fakeActions.ran.size
             rule.onNodeWithTag("term:key:Esc").tap()
             rule.waitForIdle()
@@ -193,7 +196,8 @@ class TermCoverageTest {
         val host = setUp()
         val editor = rule.onNodeWithTag("term:editor")
         editor.performClick()
-        fun last() = host.fake.fakeActions.ran.lastOrNull()?.first
+        // Fake 的占位动作会压一个 Text 面板（面板打开时 Esc 关面板、Enter 交给面板），每步取结果后清栈
+        fun last() = host.fake.fakeActions.ran.lastOrNull()?.first.also { host.overlay.clear(); rule.waitForIdle() }
 
         host.chat.value = baseChat.copy(running = true)
         rule.waitForIdle()
