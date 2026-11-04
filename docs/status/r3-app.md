@@ -107,13 +107,12 @@
 - CalmPanelLogic.isOAuthFinal 同时认 main 新增的 `FlowState.DONE/FAILED`。
 - 下一步：等 CI；之后可能再 merge PR #23（r3/session-overlay）。
 
-## merge main@584a056（2026-11-04 12:35 CST 开始）
+## merge main@584a056（2026-11-04 12:35 CST，进行中）
 - 已开始：把 main@584a056（PR#23 r3/session-overlay）普通 merge 进 r3/app@7f9bceb，不 rebase、不 force。
 - 计划：①merge 并列冲突文件；②core/session 路由/栈逻辑以 main 为准，app/calm 适配新接口，保留 PR#21 全部审查修复；③本地 assembleDebug testDebugUnitTest；④推送盯 CI（含模拟器）；⑤更新 PR 描述。
-- 12:39 CST：前一节由另一个（已取消的）合并任务写入，其推送取消了 7f9bceb 的模拟器 run；e3f7c9e 与 7f9bceb 代码相同。r3/app 现只由本任务处理。
-- 冲突：只有 `feature/chat/.../calm/CalmSheet.kt`（三方合并无文本冲突）。core/session、core/contract 全部取 main。
-- 适配：FormView 在面板事件模式下不重复画 main 新加的 Form.actions 键帽（由 PR #21 的附加按钮发出，带密文字段）；CalmPanelLogic 压栈改用 `OverlayStack.update` 原子插到 ExtDialog 之下（守 main 的「扩展对话框固定栈顶」）。测试：CalmPanelLogicTest.pushedPanelsStayBelowPinnedExtDialog。
-- 下一步：推送 merge 提交，盯 CI（含模拟器）。
 
-## PR #21 审查第 2 轮修复（2026-11-04 12:54 CST 已开始，基于 afa66ed）
-计划：I1 OAuth NeedCode 表单期间照常轮询，keepTyped 保留输入，DONE/FAILED 切已登录/失败（扩展 CalmPkceLoginTest）；Nit1 确认框防连点、不残留栈；Nit2 返回键按画面层级自上而下关；Nit3 菜单文案改「图片」（相机/剪贴板留 PR 2）；Nit4 oauthUrls 结束/重试时清理、代理页重启入口或文案。每条加测试，CI 全绿含模拟器。
+### 12:55 CST — merge main@584a056 已推送（等 CI）
+- 普通 merge（两父：r3/app e3f7c9e + main 584a056）。文本冲突：无（git merge-file 三方合并 CalmSheet.kt 干净）；core/session、OverlayStack、相关测试取 main 版本。
+- 语义适配 1 处：CalmSheet.FormView——main 新增的 Form.actions 键帽行与本线 formActions 行（模型面板经 ModelPanelEvents，带密文字段）重复，改为仅在 panel == null（非模型面板）时画 main 的键帽行，走 SessionHostImpl 的面板事件路由。
+- 本地：全部模块 Kotlin 编译通过，testDebugUnitTest 除 core:ui（本地环境，未改动）外全过；app:processDebugResources 因本地 AAPT2 无法启动失败（已知环境问题），以 CI 为准。
+- 下一步：盯 CI（build、模拟器、真 pi 桥），更新 PR #21 描述。

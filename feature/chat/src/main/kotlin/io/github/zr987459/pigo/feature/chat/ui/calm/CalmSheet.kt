@@ -371,7 +371,7 @@ private fun FormView(host: SessionHost, model: OverlayModel.Form, onAction: (Str
         }
     }
     // 表单自带的操作（测试、账号登录、清除…）：键帽约定，宿主按栈顶面板转成面板事件（value = 表单值）。
-    // 面板事件模式（装配层 PanelEventSink）下由下面的 extra 按钮发出（带密文字段），这里不重复画（merge main@584a056 适配）。
+    // 模型面板（panel != null）由下方 formActions 行经面板事件发出（带密文字段），这里不重复画。
     if (panel == null && model.actions.isNotEmpty()) KeyCapRow(model.actions.map { it.label to it.actionId }, onAction)
     Spacer(Modifier.size(12.dp))
     val extra = if (panel != null) CalmPanelLogic.formActions(model) else emptyList()
