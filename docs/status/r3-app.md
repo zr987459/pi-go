@@ -95,3 +95,9 @@
 - 推送：Important 1（CalmSurface.onAttachImage → 系统照片选择器 → ImageAttach.add 进 host.draft.images）、Important 2（设置 › 模型页末尾 ModelsPageExtras：网络代理查看/修改/关闭、修复运行环境、关于；删除 NetworkPage、Routes.NETWORK、hub 行、NetworkAndCostScreen）、Important 3（CalmBack 顺序 + CalmSurface.backHandler 注入；FormHost.onBackground → moveTaskToBack）、Nit 3（运行环境修复、关于入口；导出在会话菜单 ⋯）、Nit 4（FormPersistence.TERM_WIRED=false 时 TERM 回落 CALM）。
 - JVM 测试：CalmAppFix1Test、ImageAttachTest、ProxyLogicTest、CalmPkceLoginTest、FormPreferenceTest 更新。
 - 下一步：等 CI 编译；补仪器测试 AppCoverageTest（返回键、＋›图片、长按设为默认）。
+
+### 12:24 CST — 完成，PR #21
+- 更正：上两节标题“12:10”“12:08”实为 11:59、12:04。
+- 代码 5c0ef5a：Android debug build（push 41771064968 / PR 41771070096）、真 pi 桥接（41771064901 / 41771069764）全绿；模拟器：UiCoverageTest 5、AppCoverageTest 3（新）、SettingsScreenUiTest 9，失败 0。
+- PR #21 描述已补“审查第 1 轮修复”逐条表、越界改动、CI 链接；未改 .github。
+- 未完成 / 交接 PR 2：TERM_WIRED 改 true 并接线 TermSurface（返回键、附件同样接入）；删 SettingsHub 等旧路由；相机 / 剪贴板图片入口（本轮只接系统照片选择器）。
