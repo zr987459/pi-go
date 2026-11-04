@@ -44,3 +44,9 @@
   - readingPositionSurvivesSwitch：偏移 46 → 52（空行与文字行高度不同，按行号 × 行高还原有误差）→ 每行固定为行高。
   - externalKeyboardMatchesPi：Ctrl+L 无反应。根因是 KeyChords.keyName 用 Compose `Key.keyCode`（原生键码左移 32 位）做 A–Z 区间，结果只认得 A，**所有 Ctrl+字母组合键都失效**（真机同样）→ 改用 nativeKeyCode，新增 JVM 测试 KeyChordsTest。
 - 下一步：等这次 CI；绿了补 PR #18 描述。
+
+## 09:55 CST — 完成，PR #18
+- 7ef0de9：run 41756143567（pull_request）与 41756136675（push）全绿；模拟器 11 个仪器用例失败 0（含 slowFrames、externalKeyboard、readingPosition）。
+- PR #18 描述已补“慢帧与外接键盘”处理表、暂缓项原因、Form.actions 说明、CI 链接；未改 .github。
+- 更正：上两节标题时间“09:46”“09:50”实为 09:30、09:44。
+- 未完成：Form.actions（等 r3/models 修复 2 合入 main 后另派）；fullscreenCopyOnSelect、Mermaid 字符画暂缓；真机慢帧 <5% 列入真机清单。
