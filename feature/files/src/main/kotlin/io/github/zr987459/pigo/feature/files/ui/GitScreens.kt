@@ -69,6 +69,7 @@ internal fun groupChanges(files: List<GitFileChange>): Map<ChangeGroup, List<Git
 /** Git 状态（F4）：分支、领先/落后、按「冲突 / 已暂存 / 未暂存 / 未跟踪」分组的改动列表；点开看 diff。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+@Deprecated("r3: r3/app 删除（DESIGN-r3 X4），新代码不得引用")
 fun GitStatusScreen(
     fs: WorkspaceFs,
     cwd: String,
@@ -138,6 +139,7 @@ fun GitStatusScreen(
 /** 单个文件的 diff 页。[path] 为相对仓库根的路径或容器绝对路径。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+@Deprecated("r3: r3/app 删除（DESIGN-r3 X4/X11），新代码不得引用")
 fun DiffScreen(fs: WorkspaceFs, cwd: String, path: String, staged: Boolean, onBack: () -> Unit, modifier: Modifier = Modifier) {
     BackHandler(onBack = onBack)
     val d by produceState<Outcome<List<FileDiff>>?>(null, cwd, path, staged) { value = fs.gitDiff(cwd, path, staged) }
@@ -163,6 +165,7 @@ fun DiffScreen(fs: WorkspaceFs, cwd: String, path: String, staged: Boolean, onBa
 
 /** 统一 diff 视图：新旧行号两栏、增删着色、hunk 头。二进制文件只给提示。 */
 @Composable
+@Deprecated("r3: r3/app 删除（DESIGN-r3 X4/X11），新代码不得引用")
 fun DiffView(d: FileDiff, modifier: Modifier = Modifier) {
     if (d.binary) { CenterMessage("二进制文件有改动，不能显示差异", modifier); return }
     val addBg = Color(0x332EA043)

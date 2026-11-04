@@ -28,6 +28,7 @@ import io.github.zr987459.pigo.feature.usage.logic.TreeUiState
  * 页面外壳（顶栏、返回）由 W5 的导航提供。
  */
 @Composable
+@Deprecated("r3: r3/app 删除（DESIGN-r3 X11），新代码不得引用")
 fun SessionTreeContent(
     state: TreeUiState,
     onToggle: (String) -> Unit,

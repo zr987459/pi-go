@@ -4,6 +4,7 @@ import java.math.BigDecimal
 import java.math.RoundingMode
 
 /** 用量弹层的数字格式（U1/U2），纯函数。 */
+@Deprecated("r3: r3/app 删除（DESIGN-r3 X2/X3），新代码不得引用")
 object UsageFormat {
     /** 默认汇率：只用于「约合人民币」的粗略换算，可在用量弹层里改。 */
     const val DEFAULT_CNY_PER_USD = 7.1

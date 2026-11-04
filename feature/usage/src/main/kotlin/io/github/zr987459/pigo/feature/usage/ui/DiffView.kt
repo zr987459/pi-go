@@ -22,6 +22,7 @@ import io.github.zr987459.pigo.feature.usage.logic.LineDiff
 
 /** `edit` 工具的行级 diff（C11）：增绿、删红、段头灰；超过 [maxLines] 行时截断并提示。 */
 @Composable
+@Deprecated("r3: r3/app 删除（DESIGN-r3 X11），新代码不得引用")
 fun DiffView(lines: List<DiffLine>, modifier: Modifier = Modifier, maxLines: Int = 400) {
     val (add, del) = LineDiff.stats(lines)
     Column(modifier.fillMaxWidth()) {

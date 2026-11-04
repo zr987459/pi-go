@@ -68,6 +68,7 @@ import kotlinx.coroutines.launch
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
+@Deprecated("r3: r3/app 删除（DESIGN-r3 X4），新代码不得引用")
 fun FilesBrowserScreen(
     controller: FilesController,
     onOpenFile: (FileNode) -> Unit,

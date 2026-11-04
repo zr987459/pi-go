@@ -39,6 +39,7 @@ import java.io.File
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+@Deprecated("r3: r3/app 删除（DESIGN-r3 X11），新代码不得引用")
 fun ExportSheet(exporter: SessionExporter, sessionGuestPath: String, onDismiss: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()

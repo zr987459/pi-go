@@ -14,6 +14,7 @@ import io.github.zr987459.pigo.feature.usage.logic.TurnSummary
 
 /** 轮末汇总（C10）：耗时 · 速率，下面列出本轮改过的文件，点文件交给 [onOpenFile]（W3 的预览或 diff）。 */
 @Composable
+@Deprecated("r3: r3/app 删除（DESIGN-r3 X3），新代码不得引用")
 fun TurnSummaryRow(item: TimelineExtra.TurnSummary, onOpenFile: (String) -> Unit, modifier: Modifier = Modifier) {
     val head = listOfNotNull(
         item.durationMs?.let { "用时 " + TurnSummary.formatDuration(it) },
