@@ -70,7 +70,7 @@ class TermCoverageTest {
             rule.waitForIdle()
             val before = fake.fakeActions.ran.count { it.first == spec.id }
             val commandsBefore = fake.commands.value.size
-            runCatching {
+            val failure = runCatching {
                 when (val t = spec.term) {
                     TermEntry.Slash -> {
                         fake.draft.value = fake.draft.value.withText("/${spec.slash.first()}")
@@ -100,7 +100,11 @@ class TermCoverageTest {
                         kotlinx.coroutines.runBlocking { host.runAction(spec.id) }
                     }
                 }
-            }.onFailure { missing += "${spec.id}: ${it.message?.lineSequence()?.firstOrNull()}"; continue }
+            }.exceptionOrNull()
+            if (failure != null) {
+                missing += "${spec.id}: ${failure.message?.lineSequence()?.firstOrNull()}"
+                continue
+            }
             rule.waitForIdle()
             val ok = when {
                 spec.id == "form.toggle" -> fake.form.value == UiForm.CALM && fake.commands.value.size == commandsBefore
