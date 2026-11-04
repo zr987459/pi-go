@@ -19,6 +19,11 @@ import io.github.zr987459.pigo.di.ExtrasBindings
 import io.github.zr987459.pigo.di.ModelsBindings
 import io.github.zr987459.pigo.di.StoreBindings
 import io.github.zr987459.pigo.di.WorkspaceBindings
+import io.github.zr987459.pigo.di.SessionBindings
+import io.github.zr987459.pigo.contract.session.SessionHost
+import io.github.zr987459.pigo.form.FormPersistence
+import io.github.zr987459.pigo.form.FormPrefStore
+import io.github.zr987459.pigo.form.SharedPrefsFormStore
 import io.github.zr987459.pigo.contract.EngineExtras
 import io.github.zr987459.pigo.feature.commands.CommandsGraph
 import kotlinx.coroutines.CoroutineScope
@@ -70,4 +75,12 @@ class AppGraph(context: Context) {
 
     // 聊天界面：界面侧的可替换依赖（控制器带上 W1 extras 与 W4 草稿）
     val chatDeps: ChatBindings.ChatDeps by lazy { ChatBindings.deps(BindingMode.chat, ctx, engine, liveExtras, commands.drafts) }
+
+    // r3：两种形态共用的会话宿主（DESIGN-r3 §5.1）。形态偏好存 App 设置，启动时读回、变化时写回。
+    val formPrefs: FormPrefStore by lazy { SharedPrefsFormStore(ctx.appContext) }
+
+    val sessionHost: SessionHost by lazy {
+        SessionBindings.host(BindingMode.session, ctx, FormPersistence.initial(formPrefs))
+            .also { FormPersistence.bind(it.form, formPrefs, appScope) }
+    }
 }

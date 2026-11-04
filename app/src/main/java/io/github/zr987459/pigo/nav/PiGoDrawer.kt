@@ -72,6 +72,8 @@ fun PiGoDrawer(
     modifier: Modifier = Modifier,
     /** W1 的 extras 是否为真实实现；为 false 时不显示会话树、技能与模板、用量（它们只有假数据）。 */
     extrasReady: Boolean = true,
+    /** r3：切到终端形态（null 时不显示该行）。 */
+    onToggleForm: (() -> Unit)? = null,
     panel: @Composable (footer: @Composable () -> Unit) -> Unit,
 ) {
     BoxWithConstraints(modifier.fillMaxHeight()) {
@@ -91,6 +93,16 @@ fun PiGoDrawer(
                     val currentBase = current?.substringBefore('?')
                     for (d in entries) {
                         DrawerRow(d, selected = currentBase == d.route.substringBefore('?'), modifier = Modifier.padding(horizontal = 10.dp)) { onDestination(d) }
+                    }
+                    if (onToggleForm != null) {
+                        DrawerRow(
+                            label = "切到终端形态",
+                            glyph = AppIcons.terminal,
+                            tag = "form:toggleFromDrawer",
+                            selected = false,
+                            modifier = Modifier.padding(horizontal = 10.dp),
+                            onClick = onToggleForm,
+                        )
                     }
                     DrawerRow(
                         Destination.Onboarding,
@@ -122,6 +134,17 @@ private fun DrawerRow(
     modifier: Modifier = Modifier,
     trailing: (@Composable () -> Unit)? = null,
     onClick: () -> Unit,
+) = DrawerRow(d.label, d.glyph(), "nav:${d.route}", selected, modifier, trailing, onClick)
+
+@Composable
+private fun DrawerRow(
+    label: String,
+    glyph: Glyph,
+    tag: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    trailing: (@Composable () -> Unit)? = null,
+    onClick: () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
     val bg = if (selected) {
@@ -137,13 +160,13 @@ private fun DrawerRow(
             .background(bg)
             .clickable(role = Role.Button, onClick = onClick)
             .padding(horizontal = 10.dp)
-            .testTag("nav:${d.route}"),
+            .testTag(tag),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        AppIcon(d.glyph(), null, size = 20.dp, tint = if (selected) scheme.primary else scheme.onSurfaceVariant)
+        AppIcon(glyph, null, size = 20.dp, tint = if (selected) scheme.primary else scheme.onSurfaceVariant)
         Spacer(Modifier.width(10.dp))
         Text(
-            d.label,
+            label,
             style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp, lineHeight = 21.sp, fontWeight = FontWeight.Medium),
             color = scheme.onSurface,
             modifier = Modifier.weight(1f),

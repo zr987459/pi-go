@@ -54,6 +54,9 @@ import io.github.zr987459.pigo.di.BindingContext
 import io.github.zr987459.pigo.di.BindingMode
 import io.github.zr987459.pigo.di.EngineBindings
 import io.github.zr987459.pigo.di.StoreBindings
+import io.github.zr987459.pigo.form.FormHost
+import io.github.zr987459.pigo.form.TermPlaceholder
+import io.github.zr987459.pigo.form.toggleForm
 import io.github.zr987459.pigo.feature.chat.ui.ChatScreen
 import io.github.zr987459.pigo.feature.onboarding.OnboardingScreen
 import io.github.zr987459.pigo.feature.sessions.SessionsScreen
@@ -167,6 +170,12 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
                 // 会话树、技能与模板、用量依赖 W1 的 extras：切 REAL 前不显示（审查第 1 轮 Important 1）。
                 extrasReady = graph.extrasReady,
                 engineStatus = graph.engine.status.collectAsState().value,
+                // r3：一键切到终端形态（旧抽屉过渡期入口；r3/calm 合入后由 CalmSurface 顶栏 ⇄ 提供）。
+                onToggleForm = {
+                    scope.launch { drawerState.close() }
+                    graph.sessionHost.toggleForm()
+                    navController.navigateTopLevel(Destination.Chat)
+                },
             ) { footer ->
                 SessionsPage(
                     graph,
@@ -194,17 +203,25 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
                     )
                 }
                 composable(Destination.Chat.route) {
-                    ChatPage(
-                        graph,
-                        // 旧设置页入口换成 W2 的服务商页（审查 Nit ④）。
-                        onOpenModelSettings = { navController.navigate(Routes.PROVIDERS) { launchSingleTop = true } },
-                        onOpenDrawer = { scope.launch { drawerState.open() } },
-                        onNewChat = newChat,
-                        // 抽屉开着时聊天页的「返回 = 退到后台」让位给关抽屉（审查 Nit ①，旋转/切深色后也成立）。
-                        drawerOpen = drawerOpen,
-                        onConfigureProvider = { id -> navController.navigate(Routes.provider(id)) { launchSingleTop = true } },
-                        onOpenFile = { path -> navController.navigate(Routes.files(path)) },
-                        onToast = ::toast,
+                    // r3：会话页 = FormHost（DESIGN-r3 §5.2）。UI 形态在 r3/calm 合入前仍是现有聊天页；
+                    // 终端形态在 r3/term 合入前是占位。切换只改 sessionHost.form，引擎与会话不受影响。
+                    FormHost(
+                        graph.sessionHost,
+                        calm = {
+                            ChatPage(
+                                graph,
+                                // 旧设置页入口换成 W2 的服务商页（审查 Nit ④）。
+                                onOpenModelSettings = { navController.navigate(Routes.PROVIDERS) { launchSingleTop = true } },
+                                onOpenDrawer = { scope.launch { drawerState.open() } },
+                                onNewChat = newChat,
+                                // 抽屉开着时聊天页的「返回 = 退到后台」让位给关抽屉（审查 Nit ①，旋转/切深色后也成立）。
+                                drawerOpen = drawerOpen,
+                                onConfigureProvider = { id -> navController.navigate(Routes.provider(id)) { launchSingleTop = true } },
+                                onOpenFile = { path -> navController.navigate(Routes.files(path)) },
+                                onToast = ::toast,
+                            )
+                        },
+                        term = { TermPlaceholder(onBackToUi = { graph.sessionHost.toggleForm() }) },
                     )
                 }
                 composable(Routes.SETTINGS_HUB) {
