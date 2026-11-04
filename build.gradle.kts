@@ -21,13 +21,4 @@ subprojects {
     tasks.matching { it.name == "preBuild" || it.name == "compileKotlin" }.configureEach {
         dependsOn(checkLicenseHygiene)
     }
-    // CI 的单测步骤是 `./gradlew testDebugUnitTest`，纯 JVM 模块（core/contract、core/protocol）没有这个任务，
-    // 它们的单测原来不跑（PR #15 遗留 Nit）。给纯 JVM 模块补一个同名任务，依赖它们的 `test`。
-    plugins.withId("org.jetbrains.kotlin.jvm") {
-        tasks.register("testDebugUnitTest") {
-            group = "verification"
-            description = "纯 JVM 模块的单测（与 Android 模块的 testDebugUnitTest 同名，CI 一条命令全跑）。"
-            dependsOn("test")
-        }
-    }
 }
