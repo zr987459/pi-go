@@ -68,9 +68,9 @@ class FormSwitchStreamingTest {
         rule.runOnIdle { host.draft.value = draft }
         host.clearCommands()
 
-        // 慢速流：500 段、每段 20ms（约 10 秒）
-        val script = StreamScript(List(500) { "第${it}段\n" }, intervalMs = 20)
-        val job = host.startStream(script, userText = "数到五百")
+        // 慢速流：120 段、每段 100ms（约 12 秒）。段间留空档，Compose 才能在每次切换后进入空闲（20ms 一段会让 waitForIdle 超时，CI 79ffb91 实测）
+        val script = StreamScript(List(120) { "第${it}段\n" }, intervalMs = 100)
+        val job = host.startStream(script, userText = "数到一百二")
         rule.waitUntil(5_000) { assistantText(host).isNotEmpty() }
 
         // ① 经真实 UI 每 300ms 点一次 ⇄，共 10 次；屏幕背后的助手文本长度单调不减
@@ -127,6 +127,6 @@ class FormSwitchStreamingTest {
         // 最终在终端形态也看得到同一份结尾（列表贴底）
         rule.runOnIdle { host.form.value = UiForm.TERM }
         rule.waitForIdle()
-        rule.waitUntil(3_000) { rule.onAllNodes(androidx.compose.ui.test.hasText("第499段", substring = true), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+        rule.waitUntil(3_000) { rule.onAllNodes(androidx.compose.ui.test.hasText("第119段", substring = true), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
     }
 }
