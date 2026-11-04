@@ -19,3 +19,8 @@
   - PiEngineTest.promptTimeout… 改闸门（CountDownLatch），去掉 300 ms 时间差。
   - 新测试：PiEngineBridgeTest 6 条（slowSummarize…、treeNavTimeoutReconciles…、switchTimeoutReconciles…、switchCancelledByExtensionFailsFast、rejectedPromptFailsFast、concurrentLabelsGetTheirOwnReplies）；RealPi 断言 editorText。
 - 下一步：看 CI（Android debug build、真 pi 桥接集成测试），修红；更新 PR #16 描述（范围外改动：EngineBindings.kt:76-77 调度者 2026-11-04 授权）。
+
+## 完成，PR #16（08:16 CST）
+- 修复提交 c71f4fd：CI 全绿。Android debug build：run 41744276606（pull_request）、41744271242（push），87 个测试类 679 个用例，失败 0，跳过 29。真 pi 桥接集成测试：run 41744276227、41744271268，5/5 通过，无跳过，treeNav 用例新增的 editorText 断言也通过。
+- PR #16 描述已更新：「范围外最小改动」注明调度者 2026-11-04 授权；新增「审查第 1 轮修复」表，逐条列出处理与证据。
+- 未完成（与修复前相同）：TurnStats 收缩（等 r3/app 删除 feature/usage）；`include(":feature:usage")` 残留按 §8.3-5 单独提小 PR；FakePiBridge 没有填 editorText（可选，由 r3/session 按需补）。
