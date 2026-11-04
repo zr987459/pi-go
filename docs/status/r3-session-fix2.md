@@ -1,7 +1,7 @@
 # r3/session 修复第 2 轮 状态（PR #20，审查 REVIEW-R2 = issuecomment-6619709504）
 
 - 2026-11-04 09:08 CST 已开始（r3/session head b7548f8）。
-- 2026-11-04 09:27 CST 进度更新（见下）。
+- 2026-11-04 09:27 CST 进度更新；09:41 CST 再更新（见下）。
 
 ## 计划
 0. 9f6bc22 CI：模拟器 job 仍红，`UiCoverageTest.everyActionHasUiEntry` 报 `help.env（Explain）`（调度补充）。先修。普通 merge 最新 main。
@@ -22,4 +22,9 @@
   - `ChatController`：草稿只存在 `sharedDraft`（删掉两条同步协程），`composer.draft/withdrawn` 从它派生，`withdrawn` = `DraftState.recalled`；
     revision 按「打字写入的对象引用」判定；`submitContent` 明确返回 Accepted/Rejected；异步失败发 notice 并留在 `outgoing`；`stopAndWait()`。
   - `ChatControllerPort.send`：图片随本次提交传入、不进控制器附件；被拒原样返回 Err。
-- [ ] 下一步：写行为测试（I1–I4、N1、N2），做 N1/N2，推送，看 CI，merge main，更新 PR 描述。
+- [x] 09:31 推 329cda5（含 r3-session-ci 工作者的 b230ae9 CalmMessages 改动）。CI 全绿：push run 41754395039、PR run 41754401378，**模拟器 job 通过**（help.env 已过）。
+- [x] 行为测试 `feature/chat/src/test/.../ChatControllerReview2Test.kt`（16 个，全部经 SessionHostImpl + 真实 ChatControllerPort/ChatController）。
+- [x] N1 `core/session/.../TranscriptSearch.kt`（真实检索 host.chat.items，transcript.jump(key) 定位 scrollAnchor）；N2 `ReportRedaction.kt`（URL user:pass@ 与机密键打码）。测试 `core/session/src/test/.../Review2NitsTest.kt`（4 个）。
+- [x] N4：§8.1 写明 `feature/commands/**（含删除 ui/**）` 归 r3/session；但 app 的 `PiGoNavHost.kt`、`WiredPages.kt` 仍引用 → 按 §8.2 第 2 条先由 **r3/app 去掉引用（交给 r3/app）**，合入 main 后本线再删。本轮不删。
+- [x] main 无新提交（compare r3/session...main：ahead_by 0），无需 merge。
+- [ ] 下一步：推送本批 → 等 CI 全绿（含模拟器）→ PATCH PR #20 描述 → 状态末行「完成，PR #20」。

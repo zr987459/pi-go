@@ -185,8 +185,18 @@ class PiActionsImpl(
                 }
                 is Outcome.Err -> ActionResult.Toast(r.message)
             }
-            "transcript.search" -> ActionResult.Overlay(OverlayModel.SelectList("overlay:transcript.search", spec.title, query = args.orEmpty()))
-            "transcript.jump" -> ActionResult.Done
+            // 搜索本会话：真实检索 host.chat 的条目（审查第 2 轮 N1）；选中结果 = transcript.jump(args = 条目 key)。
+            "transcript.search" -> {
+                val hits = TranscriptSearch.search(host.chat.value.items, args.orEmpty())
+                ActionResult.Overlay(OverlayModel.SelectList("overlay:transcript.search", spec.title, TranscriptSearch.groups(hits), query = args.orEmpty()))
+            }
+            // 跳到某条：args = ChatItem.key → 阅读位置定到那条（两种形态都按 scrollAnchor 滚动）；不认识的 key 提示。
+            // 不带 args 时（⇞⇟ 键）由形态在自己的列表里找上 / 下一条提示。
+            "transcript.jump" -> when {
+                args.isNullOrBlank() -> ActionResult.Done
+                host.chat.value.items.any { it.key == args } -> { host.scrollAnchor.value = io.github.zr987459.pigo.contract.session.ScrollAnchor(args); ActionResult.Done }
+                else -> ActionResult.Toast("这条消息已不在本会话里")
+            }
 
             // ---- 模型与思考 ----
             "model.select" -> modelPanels?.let { ActionResult.Overlay(it.modelPicker(ModelPickerTab.ALL, args.orEmpty())) } ?: modelFallback()
@@ -347,7 +357,8 @@ class PiActionsImpl(
             appendLine("扩展命令：${exts.ifBlank { "—" }}")
             appendLine("会话文件：${c.sessionFile ?: "—"}")
             appendLine(); appendLine("## settings.json")
-            host.settings.values.value.forEach { (k, v) -> appendLine("$k = $v") }
+            // 打码：URL 里的 user:pass@、像机密的键（审查第 2 轮 N2）。
+            ReportRedaction.settingsLines(host.settings.values.value).forEach { appendLine(it) }
         }
         return when (val r = ops.writeReport("pi-bug-${System.currentTimeMillis()}.md", text)) {
             is Outcome.Ok -> ActionResult.LocalBlock("问题报告已生成", "已保存到 ${r.value}\npi 的上传通道需要 Radius 登录，pi-go 只生成本地报告；可在会话菜单 › 导出 里一起分享会话文件。")

@@ -86,9 +86,23 @@ class ChatControllerReview2Test {
         }
     }
 
+    /** 终端形态 Esc 走的真实动作表需要的 SessionOps：本测试只用到 abort，其余不该被调用。 */
+    private object NoOps : io.github.zr987459.pigo.core.session.SessionOps {
+        private fun <T> no(): Outcome<T> = Outcome.Err(ErrCode.UNKNOWN, "not used")
+        override suspend fun abortRetry() = no<Unit>()
+        override suspend fun dequeueAll() = no<io.github.zr987459.pigo.contract.QueueSnapshot>()
+        override suspend fun stopEngine() = no<Unit>()
+        override suspend fun setLabel(entryId: String, label: String?) = no<Unit>()
+        override suspend fun reload() = no<Unit>()
+        override suspend fun treeNavigate(entryId: String, summarize: Boolean) = no<io.github.zr987459.pigo.core.session.TreeNav>()
+        override suspend fun runGuest(command: String, timeoutMs: Long) = no<io.github.zr987459.pigo.core.session.GuestOutput>()
+        override suspend fun writeReport(fileName: String, text: String) = no<String>()
+        override suspend fun newSessionInDir(dir: String) = no<Unit>()
+    }
+
     private class Rig(val host: SessionHostImpl, val controller: ChatController, val engine: TestEngine, val extras: TestExtras, val drafts: MemDrafts)
 
-    private fun TestScope.rig(drafts: MemDrafts = MemDrafts(), withExtras: Boolean = true): Rig {
+    private fun TestScope.rig(drafts: MemDrafts = MemDrafts(), withExtras: Boolean = true, realActions: Boolean = false): Rig {
         val fake = FakeScriptedEngine(backgroundScope).also { it.start() }
         val engine = TestEngine(fake, backgroundScope)
         val extras = TestExtras()
@@ -96,7 +110,8 @@ class ChatControllerReview2Test {
         val loader: suspend (List<DraftImage>) -> List<ImageInput> = { list -> list.map { ImageInput("image/png", "b64:" + it.uri) } }
         val host = SessionHostImpl(
             engine = engine, extras = extras, scope = backgroundScope, settings = FakePiSettings(),
-            sessions = FakeSessionCatalog(fake), chatPort = ChatControllerPort(controller, loader), actionsFactory = { NoActions },
+            sessions = FakeSessionCatalog(fake), chatPort = ChatControllerPort(controller, loader),
+            actionsFactory = { h -> if (realActions) io.github.zr987459.pigo.core.session.PiActionsImpl(h, NoOps) else NoActions },
         )
         testScheduler.runCurrent()
         return Rig(host, controller, engine, extras, drafts)
@@ -228,6 +243,24 @@ class ChatControllerReview2Test {
         r2.controller.insertWithdrawn(); testScheduler.runCurrent()
         assertEquals("我正在写\n排队的那条", r2.host.draft.value.text)
         assertTrue(r2.host.draft.value.recalled.isEmpty())
+    }
+
+    @Test
+    fun escAbortActionThroughSessionHostRecallsIntoSharedDraft() = runTest {
+        val r = rig(realActions = true)
+        r.engine.inner.startStream(StreamScript(List(200) { "字" }, intervalMs = 50), userText = "先问一句")
+        settle()
+        r.host.draft.value = DraftState(text = "排队A")
+        r.host.sendDraft(SendMode.FOLLOW_UP); settle()
+        r.host.draft.value = DraftState(text = "草稿B")
+        val res = r.host.runAction("abort")
+        settle()
+        assertEquals(ActionResult.Done, res)
+        assertTrue("经 clear_queue + abort 停止", r.engine.inner.commands.value.map { it.type }.containsAll(listOf("clear_queue", "abort")))
+        assertEquals("草稿B", r.host.draft.value.text)
+        assertEquals("abort 动作与 UI 停止键是同一条路径：撤回进共享芯片", listOf("排队A"), r.host.draft.value.recalled)
+        assertEquals(listOf("排队A"), r.controller.state.value.composer.withdrawn)
+        assertTrue("排队条目随撤回消失", r.host.outgoing.value.none { it.text == "排队A" })
     }
 
     @Test
