@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+
 package io.github.zr987459.pigo.feature.term
 
 import androidx.compose.ui.Alignment
@@ -446,14 +448,17 @@ private fun TermScreen(
             suspend fun scrollToBottom() {
                 val last = (rowsNow.size + localRows.size + headerCount).coerceAtLeast(1) - 1
                 // 偏移给极大值：LazyList 会夹到最大可滚动位置，停在末尾。
-                listState.scrollToItem(last, Int.MAX_VALUE)
+                // requestScrollToItem：只登记位置、在下一次测量时生效，不强制立即重测。这些效应在 BoxWithConstraints 的子组合里，
+                // 子组合发生在测量期间，效应若被同步启动，scrollToItem 的强制重测会嵌套在测量里
+                // （CI：performMeasureAndLayout called during measure layout）。
+                listState.requestScrollToItem(last, Int.MAX_VALUE)
             }
             LaunchedEffect(Unit) {
                 val anchor = host.scrollAnchor.value
                 val idx = anchor?.let { a -> rows.indexOfFirst { it.itemKey == a.itemKey } }?.takeIf { it >= 0 }
                 // 偏移可以超过首行高度：LazyList 会顺延到本消息后面的行。
                 if (anchor == null || anchor.followBottom || idx == null) scrollToBottom()
-                else listState.scrollToItem(idx + headerCount, anchor.offsetPx)
+                else listState.requestScrollToItem(idx + headerCount, anchor.offsetPx)
             }
             LaunchedEffect(listState) {
                 snapshotFlow { listState.isScrollInProgress }.drop(1).collect { scrolling ->
@@ -476,8 +481,7 @@ private fun TermScreen(
                     host.scrollAnchor.value = ScrollAnchor(key, offPx, followBottom = f)
                 }
             }
-            // 视口高度变化（软键盘、imePadding、键条收起）时仍贴底，同 UI 形态。以 BoxWithConstraints 的 maxHeight 为键重启效应，
-            // 不在 snapshotFlow 收集里滚动：布局阶段发出的快照通知可能同步恢复收集协程，scrollToItem 的强制重测会嵌套在测量里。
+            // 视口高度变化（软键盘、imePadding、键条收起）时仍贴底，同 UI 形态。以 BoxWithConstraints 的 maxHeight 为键重启效应。
             var lastViewport by remember { mutableStateOf(maxHeight) }
             LaunchedEffect(maxHeight) {
                 if (maxHeight != lastViewport) {

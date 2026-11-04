@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+
 package io.github.zr987459.pigo.feature.chat.ui.calm
 
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -125,7 +127,7 @@ internal fun CalmMessages(
     // （performMeasureAndLayout called during measure layout）。
     var viewportH by remember { mutableStateOf(0) }
     LaunchedEffect(viewportH) {
-        if (viewportH > 0 && follow && rows.isNotEmpty() && !dragging) list.scrollToItem(rows.lastIndex, Int.MAX_VALUE / 2)
+        if (viewportH > 0 && follow && rows.isNotEmpty() && !dragging) list.requestScrollToItem(rows.lastIndex, Int.MAX_VALUE / 2)
     }
     // 新的本地结果块（「说明」条目、/session、/hotkeys 等）是用户刚触发的动作结果：滚到它并恢复贴底跟随。
     // 否则先用过「跳到上一条提示」或手动上滑（follow = false）后，结果追加在视口外，用户看不到任何反应。
