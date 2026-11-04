@@ -9,7 +9,10 @@
 - I2 `QuickSaveRunner`（App 作用域）；N1–N5；N6 UI 测试移到 app androidTest，走真实 QuickModelSetup。
 - realpi 新增 `hotReloadNewKeyWithoutRestartWhileGenerating`。
 
-下一步：修 `:core:store` 单测（旧断言「容器文件不落明文 / env 注入」改为校验 auth.json 权限与格式）；本地跑 realpi；推送等 CI；PR 描述逐条对应审查。
+07:40：本地 `:core:store`、`:core:engine`、`:app`、`:feature:{chat,models,settings}` 单测全过，`:app:compileDebugAndroidTestKotlin` 通过。
+旧单测已改为校验 auth.json 字面 Key + `pigoManaged` + 600；日志脱敏改经 `LaunchEnvProvider.knownSecrets()`（含只在 auth.json 的 Key，热加载后立即生效）。
+
+下一步：本地真 pi 跑 RealPiBridgeIntegrationTest（含热加载用例）；等 CI（android.yml 模拟器 + realpi.yml）全绿；更新 PR #29 描述逐条对应 I1/I2/N1–N6。
 
 根因：① AppGraph 构造 RealModelPanels 没传 onCredentialsChanged（默认空操作），保存 Key 后不重启 pi，而 Key 只在 pi 启动时经环境变量注入（pi docs/models.md:217）；② 只写 settings.json 默认模型，续接会话仍用会话里的旧模型，没发 set_model。
 

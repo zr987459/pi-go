@@ -529,8 +529,10 @@ class PiEngine(
             log.w(TAG, "读取启动环境失败", e)
             emptyMap()
         }
-        knownSecrets = keyEnv.filterKeys { it.endsWith("_API_KEY") || it.startsWith("PIGO_KEY_") || it.endsWith("_TOKEN") }
-            .values.filter { it.length >= 6 }
+        knownSecrets = (
+            keyEnv.filterKeys { it.endsWith("_API_KEY") || it.startsWith("PIGO_KEY_") || it.endsWith("_TOKEN") }.values +
+                runCatching { launchEnv.knownSecrets() }.getOrDefault(emptyList())
+            ).filter { it.length >= 6 }.distinct()
         val withBridge = withContext(io) { prepareBridge() }
         bridge.reset(gen, withBridge, if (config.bridgeExtension == null) "未启用桥接扩展" else null)
         val spec = config.spec(session, cwd, keyEnv, withBridge)
@@ -1630,6 +1632,10 @@ class PiEngine(
     /** r4/model-config 热加载：`/pigo:models-refresh`（见 pigo-bridge.ts）。不重启进程，生成中也可以调用。 */
     override suspend fun refreshModels(): Outcome<Unit> {
         if (!bridgeReady()) return Outcome.Err(ErrCode.ENGINE_START, PiBridge.MODELS_REFRESH_UNAVAILABLE + "：" + unavailableReason())
+        // 新存的 Key 从此刻起也参与日志脱敏（不等下次启动）
+        runCatching { launchEnv.knownSecrets() }.getOrNull()?.let { fresh ->
+            knownSecrets = (knownSecrets + fresh.filter { it.length >= 6 }).distinct()
+        }
         return bridgeSerial("models-refresh") {
             val req = bridge.newReq()
             when (val r = bridgeCall(PigoBridge.modelsRefreshCommand(req), bridge.expectReply("models-refresh", req), config.bridgeReplyTimeoutMs)) {

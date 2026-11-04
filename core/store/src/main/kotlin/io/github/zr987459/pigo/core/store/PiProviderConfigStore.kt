@@ -508,16 +508,25 @@ class PiProviderConfigStore(
         return out
     }
 
+    /** 全部已知 Key 原文（含只在 auth.json 里的热加载 Key），只用于日志与诊断的兜底脱敏。 */
+    override suspend fun knownSecrets(): Collection<String> = buildList {
+        for ((k, v) in env()) if (k !in ProviderSpecs.PROXY_ENVS && k != "NODE_USE_ENV_PROXY") add(v)
+        for (p in ProviderPresets.BUILT_IN) {
+            val spec = ProviderSpecs.specFor(p.provider, p.label)
+            for (f in spec.allFields) if (f.secret) {
+                val alias = if (f.envVar == spec.keyEnv) ProviderPresets.builtInAlias(p.provider) else fieldAlias(p.provider, f.envVar)
+                secrets.get(alias)?.let(::add)
+            }
+        }
+        for (id in customProviders().keys) secrets.get(ProviderPresets.customAlias(id))?.let(::add)
+    }.distinct()
+
     /**
      * 诊断信息（可复制导出）：只列出配置了哪些服务、Key 末 4 位与配置文件状态，**从不包含完整 Key**；
      * 末尾再用全部已知 Key 做一次兜底脱敏。
      */
     suspend fun diagnostics(): String {
-        val known = buildList {
-            addAll(env().filterKeys { it !in ProviderSpecs.PROXY_ENVS && it != "NODE_USE_ENV_PROXY" }.values)
-            for (p in ProviderPresets.BUILT_IN) secrets.get(ProviderPresets.builtInAlias(p.provider))?.let(::add)
-            for (id in customProviders().keys) secrets.get(ProviderPresets.customAlias(id))?.let(::add)
-        }
+        val known = knownSecrets()
         val sb = StringBuilder()
         sb.appendLine("模型与 Key：")
         for (p in ProviderPresets.BUILT_IN) {
