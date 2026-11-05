@@ -59,4 +59,15 @@ class OpenMinisLayoutTest {
         assertEquals(CalmBack.Step.LIST, CalmBack.step(editorExpanded = false, top = null, listOpen = false, searchOpen = false))
         assertEquals(CalmBack.Step.NONE, CalmBack.step(editorExpanded = false, top = null, listOpen = true, searchOpen = false))
     }
+
+    /** PR #31 审查 N1：只显示最后 3 条时，「引导 / 排队」按在 all 里的真实下标判断。 */
+    @Test
+    fun queueLabelsUseIndexInFullQueue() {
+        // 引导 2 条、排队 3 条：显示的是最后 3 条，全是排队
+        assertEquals(listOf(false, false, false), (0 until 3).map { queueLabelIsSteering(5, 3, it, 2) })
+        // 引导 2 条、排队 1 条：前两条引导，最后一条排队
+        assertEquals(listOf(true, true, false), (0 until 3).map { queueLabelIsSteering(3, 3, it, 2) })
+        // 引导 4 条、排队 1 条：显示 all[2..4] = 引导、引导、排队
+        assertEquals(listOf(true, true, false), (0 until 3).map { queueLabelIsSteering(5, 3, it, 4) })
+    }
 }

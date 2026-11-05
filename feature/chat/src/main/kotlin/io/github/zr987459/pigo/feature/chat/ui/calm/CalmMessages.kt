@@ -161,6 +161,19 @@ internal fun CalmMessages(
     LaunchedEffect(rows.size, lastSize, follow) {
         if (follow && rows.isNotEmpty()) list.scrollToItem(rows.lastIndex, Int.MAX_VALUE / 2)
     }
+    // 末项高度变化（流式增长、思考块展开、Markdown 重排）时仍贴底（PR #31 审查 I1）：上面的效应只在文字长度变化那一刻滚，
+    // 之后条目若再长高（布局晚一帧、子项尺寸动画），LazyList 保持首个可见项不动，末尾会落到视口外。
+    // 只登记位置（requestScrollToItem），不在测量中强制重测（见下方视口效应的说明）。
+    val lastItemH by remember {
+        derivedStateOf {
+            val info = list.layoutInfo
+            info.visibleItemsInfo.lastOrNull()?.takeIf { it.index == info.totalItemsCount - 1 }?.size ?: -1
+        }
+    }
+    LaunchedEffect(lastItemH) {
+        val lastIdx = list.layoutInfo.totalItemsCount - 1
+        if (lastItemH > 0 && lastIdx >= 0 && follow && !dragging && !atBottom) list.requestScrollToItem(lastIdx, Int.MAX_VALUE / 2)
+    }
     // 视口变高 / 变矮（软键盘弹出收起、imePadding、旋转）时仍贴底：原来只在内容变化时滚，
     // 流式暂停或已结束时弹出键盘，最后几行就被挤到视口下面，切换形态时又按「不在底部」写回锚点，终端从顶部开始显示。
     // 视口高度由 onSizeChanged 写入状态、在效应里滚动：不能在 snapshotFlow 收集里直接 scrollToItem——
@@ -334,7 +347,7 @@ internal fun Modifier.dashedBorder(color: Color, radius: androidx.compose.ui.uni
     drawRoundRect(color = color, cornerRadius = CornerRadius(radius.toPx(), radius.toPx()), style = stroke)
 }
 
-/** 助手消息（OpenMinis AssistantMessageView）：无气泡、全宽；思考块、正文 Markdown；正文增长时平滑撑开。 */
+/** 助手消息（OpenMinis AssistantMessageView）：无气泡、全宽；思考块、正文 Markdown。 */
 @Composable
 private fun AssistantBlock(item: ChatItem.Assistant, view: CalmViewState, onAction: (String, String?) -> Unit, showHeader: Boolean, modifier: Modifier = Modifier) {
     val c = Calm.colors
@@ -345,7 +358,9 @@ private fun AssistantBlock(item: ChatItem.Assistant, view: CalmViewState, onActi
         if (showHeader) AssistantHeader()
         Box {
             Column(
-                Modifier.fillMaxWidth().animateContentSize(tween(160))
+                // 不用 animateContentSize（PR #31 审查 I1）：流式时条目高度在动画里落后于内容，贴底滚动只在内容变化那一刻夹到当时的高度，
+                // 最后一个 token 之后条目继续长高、没有事件再滚，回复末尾几行停在视口下面。
+                Modifier.fillMaxWidth()
                     .combinedClickable(onClick = {}, onLongClick = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); menu = true })
                     .padding(vertical = 4.dp)
                     .testTag("msg:${item.key}"),

@@ -82,7 +82,7 @@ internal object TermChrome {
 
 /** 终端顶栏（OpenMinis TerminalTopBar）。✕ 的测试标签沿用 `form:toggle` / `persist:form.toggle`（动作表里「终端 ⇄ 聊天」的入口）。 */
 @Composable
-internal fun TermTopBar(title: String, subtitle: String?, onClose: () -> Unit, onClear: () -> Unit) {
+internal fun TermTopBar(title: String, subtitle: String?, onClose: () -> Unit, onClearScreen: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().height(52.dp).background(TermChrome.Bg).padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -96,7 +96,7 @@ internal fun TermTopBar(title: String, subtitle: String?, onClose: () -> Unit, o
             if (!subtitle.isNullOrBlank()) Text(subtitle, style = TextStyle(fontFamily = JetBrainsMono, fontSize = 10.sp), color = TermChrome.Fg.copy(alpha = 0.55f), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.width(200.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
         }
         Spacer(Modifier.weight(1f))
-        CircleButton("🖌", TermChrome.Green, "清空输入行", Modifier.testTag("term:clear"), onClear)
+        CircleButton("🖌", TermChrome.Green, "清屏", Modifier.testTag("term:clear"), onClearScreen)
     }
 }
 
@@ -108,4 +108,19 @@ private fun CircleButton(glyph: String, tint: Color, description: String, modifi
     ) {
         Text(glyph, color = tint, fontSize = 15.sp)
     }
+}
+
+/**
+ * 🖌 清屏（OpenMinis TerminalScreen 的 Brush → `terminalSession.clearOutput()`，PR #31 审查 I2）：只清终端回显，不碰输入行 / 共享草稿。
+ * 终端形态没有自己的模拟器缓冲，回显是会话条目排版出的行：清屏时记下每条消息已排出的行数和已有的本地块，之后只显示新出现的行
+ * （流式中的消息接着往下长的行照常显示）。纯视图状态：会话、草稿、阅读锚点都不改，「复制全部」仍复制完整记录。
+ */
+data class TermClearMark(val linesByItem: Map<String, Int> = emptyMap(), val localKeys: Set<String> = emptySet(), val cleared: Boolean = false)
+
+object TermClear {
+    fun mark(rows: List<io.github.zr987459.pigo.feature.term.format.TermRow>, localKeys: Collection<String>): TermClearMark =
+        TermClearMark(rows.groupBy { it.itemKey }.mapValues { (_, rs) -> rs.maxOf { it.lineIndex } + 1 }, localKeys.toSet(), cleared = true)
+
+    fun visible(rows: List<io.github.zr987459.pigo.feature.term.format.TermRow>, mark: TermClearMark): List<io.github.zr987459.pigo.feature.term.format.TermRow> =
+        if (!mark.cleared) rows else rows.filter { it.lineIndex >= (mark.linesByItem[it.itemKey] ?: 0) }
 }

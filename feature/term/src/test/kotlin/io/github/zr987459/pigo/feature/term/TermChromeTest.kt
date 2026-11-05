@@ -25,4 +25,20 @@ class TermChromeTest {
         assertTrue(TermInput.KEY_FORM in keys) // 键条表里仍登记；界面上由顶栏 ✕ 承担
         for (k in listOf("Esc", TermInput.KEY_TAB, "⏎", "^C")) assertTrue(k in keys)
     }
+
+    /** PR #31 审查 I2：🖌 清屏只隐藏清屏时已有的行与本地块；之后新出现的行（含流式消息接着长出的行）照常显示。 */
+    @Test
+    fun clearScreenHidesExistingLinesOnlyAndKeepsNewOnes() {
+        val line = io.github.zr987459.pigo.feature.term.format.TermLine(emptyList())
+        fun row(item: String, i: Int) = io.github.zr987459.pigo.feature.term.format.TermRow("$item#$i", item, i, line, null)
+        val before = listOf(row("u0", 0), row("a0", 0), row("a0", 1))
+        assertEquals(before, TermClear.visible(before, TermClearMark())) // 未清屏：原样
+        val mark = TermClear.mark(before, listOf("loc1"))
+        assertTrue(mark.cleared)
+        assertTrue(TermClear.visible(before, mark).isEmpty())
+        // a0 流式又长出第 2 行，来了新消息 u1：只显示新行
+        val after = before + row("a0", 2) + row("u1", 0)
+        assertEquals(listOf("a0#2", "u1#0"), TermClear.visible(after, mark).map { it.key })
+        assertEquals(setOf("loc1"), mark.localKeys)
+    }
 }

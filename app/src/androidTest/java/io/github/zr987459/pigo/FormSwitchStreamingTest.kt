@@ -271,6 +271,8 @@ class FormSwitchStreamingTest {
         // 生成结束：发送键回到「发送」（有草稿可发）；屏幕贴底能看到最后一段——两种形态都看
         assertTrue(exists("send:send"))
         rule.waitUntil(3_000) { maxSegmentOnScreen() == SEGMENTS - 1 }
+        // 段号读的是语义文字，被裁到视口外也读得到（PR #31 审查 I1）：再看最后一条回复的底边真的在消息列表视口内
+        assertLastAssistantBottomInViewport(host)
         clickToggle()
         assertEquals(UiForm.TERM, host.form.value)
         rule.waitUntil(3_000) { maxSegmentOnScreen() == SEGMENTS - 1 }
@@ -412,6 +414,44 @@ class FormSwitchStreamingTest {
         // 终端里同样：视口再变矮也保持贴底
         rule.runOnIdle { h = 300.dp }
         rule.waitUntil(3_000) { maxSegmentOnScreen() == n - 1 }
+    }
+
+    /**
+     * PR #31 审查 I1：贴底时流式回复结束，最后一段（回复末尾）必须在消息列表视口内，不能停在输入卡片上方的视口之外。
+     * 每段 20ms、整条回复远高于视口；结束后界面空闲（动画都已跑完）再量：回复节点未裁剪的底边 ≤ 列表视口底边。
+     */
+    @Test
+    fun streamEndKeepsLastLineInsideViewport() {
+        val ctx = BindingContext(InstrumentationRegistry.getInstrumentation().targetContext.applicationContext, scope)
+        val host = SessionBindings.host(Mode.FAKE, ctx, UiForm.CALM) { error("A 档只用 FAKE") } as FakeSessionHost
+        rule.setContent {
+            Box(Modifier.fillMaxWidth().height(480.dp)) {
+                ChatPage(
+                    host = host, panelEvents = null, panelSource = null, fileSearch = null,
+                    cwd = "/root/pi-cwd", home = "/root", onOpenSettings = {}, onAttachImage = {}, onBackground = {},
+                )
+            }
+        }
+        rule.waitForIdle()
+        val n = 150
+        val job = host.startStream(StreamScript(List(n) { "第${it}段\n" }, intervalMs = 20), userText = "数到一百五十")
+        pollUntil("流式结束", 60_000) { job.isCompleted }
+        rule.waitForIdle()
+        rule.waitUntil(3_000) { maxSegmentOnScreen() == n - 1 }
+        assertLastAssistantBottomInViewport(host)
+    }
+
+    /** 最后一条助手回复的节点（未裁剪）底边在 `calm:messages` 视口内，且节点显示着。 */
+    private fun assertLastAssistantBottomInViewport(host: FakeSessionHost) {
+        rule.waitForIdle()
+        val key = host.chat.value.items.last { it is io.github.zr987459.pigo.contract.ChatItem.Assistant }.key
+        val msg = rule.onNodeWithTag("msg:$key", useUnmergedTree = true)
+        msg.assertIsDisplayed()
+        val m = msg.fetchSemanticsNode()
+        val list = rule.onNodeWithTag("calm:messages", useUnmergedTree = true).fetchSemanticsNode()
+        val msgBottom = m.positionInRoot.y + m.size.height
+        val listBottom = list.positionInRoot.y + list.size.height
+        assertTrue("回复末尾在视口外：回复底边 $msgBottom > 列表视口底边 $listBottom（差 ${msgBottom - listBottom}px）", msgBottom <= listBottom + 1f)
     }
 
     /** ⇄ 显示着、整体落在窗口（根节点）内、尺寸非零；失败时带上形态、边界、窗口软键盘配置与语义树，便于在 CI 日志里定位。 */

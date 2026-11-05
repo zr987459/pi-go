@@ -36,6 +36,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.structuralEqualityPolicy
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -218,6 +219,9 @@ private fun TermScreen(
     val historyNav = remember { HistoryNav() }
     var stripVisible by rememberSaveable { mutableStateOf(true) }
     var toast by remember { mutableStateOf<String?>(null) }
+    // 🖌 清屏（只清回显，不碰草稿）：clearTick 由顶栏递增，时间线子组合据当时的行记下 clearMark
+    var clearTick by remember { mutableIntStateOf(0) }
+    var clearMark by remember { mutableStateOf(TermClearMark()) }
     var commands by remember { mutableStateOf(emptyList<SlashCommand>()) }
     var lastEsc by remember { mutableLongStateOf(0L) }
     val hideThinking = settings["hideThinkingBlock"] == "true"
@@ -439,12 +443,12 @@ private fun TermScreen(
                 }
             },
     ) {
-        // 顶栏（OpenMinis TerminalScreen：左圆形 ✕ 关闭回聊天、居中等宽标题、右绿色 🖌 清空输入行）
+        // 顶栏（OpenMinis TerminalScreen：左圆形 ✕ 关闭回聊天、居中等宽标题、右绿色 🖌 清屏——只清回显，不碰输入行，PR #31 审查 I2）
         TermTopBar(
             title = "终端",
             subtitle = chat.sessionName,
             onClose = { toggleForm() },
-            onClear = { setDraftText(""); toast = "已清空输入行" },
+            onClearScreen = { clearTick++; toast = "已清屏" },
         )
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().background(tokens.bg)) {
             val measurer = rememberTextMeasurer()
@@ -455,16 +459,21 @@ private fun TermScreen(
             val items = chatFull.value.items
             val opts = FormatOptions(width = cols, hideThinking = hideThinking, toolsExpanded = toolsExpanded, expandedKeys = expandedKeys, cwd = cwd, home = home, expandKey = expandKey)
             // 按行拆分（审查第 1 轮慢帧修复）：只重排变化的消息，LazyColumn 只组合可见行。
-            val rows = remember(items, opts) { rowCache.rows(items, opts) }
+            val allRows = remember(items, opts) { rowCache.rows(items, opts) }
+            val rows = remember(allRows, clearMark) { TermClear.visible(allRows, clearMark) }
             // 每行固定同一高度（= 行高）：空行与中英混排的行高度一致，锚点「行号 × 行高 + 行内偏移」才能精确还原（§5.3）。
             val rowHeight = with(density) { (fontSp * 1.35f).sp.toDp() }
-            val localRows = remember(localBlocks, cols) {
-                localBlocks.flatMap { b ->
+            val localRows = remember(localBlocks, cols, clearMark) {
+                localBlocks.filter { !clearMark.cleared || it.key !in clearMark.localKeys }.flatMap { b ->
                     (listOf(TermLine(emptyList())) + TermFormatter.wrapSpans(listOf(Span("[${b.title}] ", "customMessageLabel", bold = true), Span(b.text, "customMessageText")), cols - 2)
                         .map { TermLine(listOf(Span(" ")) + it, "customMessageBg") }).mapIndexed { i, l -> TermRow("local:${b.key}#$i", "local:${b.key}", i, l, null) }
                 }
             }
             val rowsNow by rememberUpdatedState(rows)
+            val allRowsNow by rememberUpdatedState(allRows)
+            LaunchedEffect(clearTick) {
+                if (clearTick > 0) clearMark = TermClear.mark(allRowsNow, host.localBlocks.value.map { it.key })
+            }
 
             // 阅读位置：进入时恢复，用户滚动时写回 host.scrollAnchor（§5.3）。锚点仍是「消息 key + 消息内像素偏移」，与 calm 形态通用：
             // 行号 → 消息 key；消息内偏移 = 本消息在首个可见行之前的行数 × 行高 + 首个可见行内偏移。
@@ -541,7 +550,7 @@ private fun TermScreen(
                         },
                 ) {
                     item(key = "term:header") {
-                        Header(piVersion, cols, fontSp, tokens, bindings, TermInput.startupResources(env.contextFiles, commands, enabledModels, home), quiet = settings["quietStartup"] == "true") { run("about") }
+                        if (!clearMark.cleared) Header(piVersion, cols, fontSp, tokens, bindings, TermInput.startupResources(env.contextFiles, commands, enabledModels, home), quiet = settings["quietStartup"] == "true") { run("about") }
                     }
                     items(rows, key = { it.key }) { r ->
                         val l = r.line

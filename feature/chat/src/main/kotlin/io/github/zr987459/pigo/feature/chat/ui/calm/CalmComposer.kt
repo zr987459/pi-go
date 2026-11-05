@@ -289,18 +289,22 @@ private fun QueueBar(chat: ChatState, onAction: (String, String?) -> Unit) {
     val q = chat.queue
     AnimatedVisibility(!q.isEmpty, enter = fadeIn(tween(180)) + expandVertically(tween(180)), exit = fadeOut(tween(150)) + shrinkVertically(tween(150))) {
         val all = q.steering + q.followUp
+        val shown = all.takeLast(3)
         Column(Modifier.fillMaxWidth().testTag("calm:queueBar"), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            all.takeLast(3).forEachIndexed { i, t ->
+            shown.forEachIndexed { i, t ->
+                // i 是 takeLast 之后的下标：换算回 all 里的真实下标再判断是引导还是排队（PR #31 审查 N1）
+                val steering = queueLabelIsSteering(all.size, shown.size, i, q.steering.size)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        (if (i < q.steering.size) "引导 · " else "排队 · ") + t,
+                        (if (steering) "引导 · " else "排队 · ") + t,
                         style = Calm.type.label, color = c.secondary, maxLines = 2, overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false).widthIn(max = 300.dp).dashedBorder(c.secondary.copy(alpha = 0.5f), CalmDims.bubbleRadius)
                             .padding(horizontal = 14.dp, vertical = 8.dp),
                     )
-                    if (i == all.takeLast(3).lastIndex) {
+                    if (i == shown.lastIndex) {
+                        // queue.dequeue → dequeueAll：全部排队消息取回输入框，文案按实际行为写（N1）
                         IconButton(onClick = { onAction("queue.dequeue", null) }, modifier = Modifier.size(44.dp).testTag("calm:dequeue")) {
-                            Icon(CalmIcons.Cancel, contentDescription = "撤回排队消息", tint = c.danger, modifier = Modifier.size(24.dp))
+                            Icon(CalmIcons.Cancel, contentDescription = "全部撤回到输入框", tint = c.danger, modifier = Modifier.size(24.dp))
                         }
                     } else Spacer(Modifier.width(44.dp))
                 }
@@ -309,6 +313,9 @@ private fun QueueBar(chat: ChatState, onAction: (String, String?) -> Unit) {
         }
     }
 }
+
+/** 排队气泡第 [i] 条（显示的是 all 的最后 [shownSize] 条）是否为引导消息：all = steering + followUp。 */
+internal fun queueLabelIsSteering(allSize: Int, shownSize: Int, i: Int, steeringSize: Int): Boolean = allSize - shownSize + i < steeringSize
 
 /** 浮层卡片（斜杠 / @ 候选、搜索条）：OpenMinis 10dp 圆角 + 阴影 + 细描边。 */
 internal fun Modifier.popoverCard(c: io.github.zr987459.pigo.core.ui.calm.CalmColors): Modifier =

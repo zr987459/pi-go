@@ -58,7 +58,14 @@
   模拟器 127048225633 ✅（UiCoverageTest 7、TermCoverageTest 16、AppCoverageTest 8、FormSwitchStreamingTest 4、SettingsScreenUiTest 9、QuickModelSetupUiTest 2）、
   realpi 127048194341 ✅（RealPiBridgeIntegrationTest 7 个，失败 0 跳过 0）。已开 PR #31（r5/openminis → main），未合并。
 
+- 2026-11-05 13:40 CST PR #31 审查第 1 轮（评论 6649957111，FAIL 2 Important）修复：
+  I1 助手正文去掉 animateContentSize（流式结束后末尾几行停在视口外），并在末项高度变化且贴底时再 requestScrollToItem；
+  新测 FormSwitchStreamingTest.streamEndKeepsLastLineInsideViewport，主测试末尾也断言最后一条回复底边在 calm:messages 视口内（不再只读语义文字）。
+  I2 终端顶栏 🖌 改为清屏（同 OpenMinis clearOutput：只隐藏清屏时已有的回显行 / 本地块 / 页眉，新输出照常显示），不碰草稿、不发命令；
+  新测 TermCoverageTest.brushClearsScreenButKeepsDraft（仪器）、TermChromeTest.clearScreenHidesExistingLinesOnlyAndKeepsNewOnes（单测）。
+  N1 排队气泡标签按 all 里的真实下标判断（queueLabelIsSteering，单测 OpenMinisLayoutTest.queueLabelsUseIndexInFullQueue），⊗ 读屏文案改「全部撤回到输入框」。N2–N4 未改。
+
 ## 下一步（精确）
-- 等所有者审查 PR #31；不合并。已知差距见 PR 描述（终端内容区仍是 pi TUI 渲染、附件条无粘滞 Ctrl / 方向键、高级设置子页未逐页对照、未真机验收）。
+- 等 CI 全绿后请所有者复审 PR #31；不合并。已知差距见 PR 描述（终端内容区仍是 pi TUI 渲染、附件条无粘滞 Ctrl / 方向键、高级设置子页未逐页对照、未真机验收）。
 
 完成，PR #31

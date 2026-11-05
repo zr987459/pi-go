@@ -10,7 +10,7 @@ pi-go 只换「界面与交互」：引擎仍是 `pi --mode rpc`（SessionHost /
 |---|---|---|
 | `SessionListScreen`（首页：⚙ 设置、标题、Terminal 图标菜单、日期分节的会话行、右下米色 FAB 新对话） | `CalmSessionList`（`calm:drawer`）整页 | 顶栏 ⚙→设置 › 模型；「终端」图标 + ⋯ 菜单（排序 / 只看已命名 / 显示路径 / 导入 / 终端）；搜索栏；今天 / 昨天 / 7 天内 / 30 天内 / 更早分节；44dp 圆形头像 + 标题 + 预览 + 时间；长按菜单（重命名 / 删除）、左滑删除 + 撤销条；FAB = `session.new`（长按：临时会话 / 在其他目录新建）。数据仍是 `host.sessions`（= pi `/resume`）。 |
 | `ChatScreen`（← 返回、居中标题、⋯ 菜单） | `CalmSurface` 聊天页 | ← = `session.resume`（回会话列表）；标题点按 = `session.name`；右侧「终端」图标 = `form.toggle`；⋯ = 新对话 / 分享 / 分支树 / 复制会话 / 导出 / 搜索 / 展开工具 / 会话信息 / 打开终端（`menu:<id>`）。 |
-| `TerminalScreen`（黑底、圆形 ✕、等宽标题、绿色 🖌、键盘附件条） | `TermSurface` 终端页（`host.form = TERM`） | 内容是 pi TUI 的 Compose 渲染（同一个 SessionHost）；✕ / 返回键 = 回聊天页；🖌 = 清空输入行；附件条 = 键盘开关、复制全部、Esc、Tab、⇣排队、↑队、^C、⌃O、⌕、⇞⇟、⤢、/、@、!、📎、⏎（`term:key:*`）。入口：聊天顶栏终端图标、⋯「打开终端」、会话列表终端图标 / 菜单、`/term`。 |
+| `TerminalScreen`（黑底、圆形 ✕、等宽标题、绿色 🖌、键盘附件条） | `TermSurface` 终端页（`host.form = TERM`） | 内容是 pi TUI 的 Compose 渲染（同一个 SessionHost）；✕ / 返回键 = 回聊天页；🖌 = 清屏（只清终端回显，不碰输入行 / 草稿，同 OpenMinis clearOutput）；附件条 = 键盘开关、复制全部、Esc、Tab、⇣排队、↑队、^C、⌃O、⌕、⇞⇟、⤢、/、@、!、📎、⏎（`term:key:*`）。入口：聊天顶栏终端图标、⋯「打开终端」、会话列表终端图标 / 菜单、`/term`。 |
 | 导航转场（推入 / 推出） | `FormHost` AnimatedContent：终端从右推入（280ms），会话列表从左滑入 | 只换渲染层，不发 RPC、不重启引擎、草稿 / overlay / 阅读位置不丢（FormToggleNoRpcTest、RealHostFormSwitchTest、UiCoverageTest、FormSwitchStreamingTest）。 |
 | 设置（`SettingsSection` / `SectionDesign` / `SectionTextField` 分组卡片） | 设置 › 模型（r4 QuickModelSetupPage + 高级） | 逻辑不变（r4 模型配置 + Key 热加载）；外观换成分组卡片：服务商单选行（右侧 ✓）、卡片内无边框输入框、模型列表行、蓝字操作行、「高级设置 ›」。 |
 
