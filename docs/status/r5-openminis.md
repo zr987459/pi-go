@@ -44,6 +44,12 @@
   模型列表为同一张卡片里的行、「获取 / 刷新列表」「去申请 Key」是卡片里的蓝字行、「高级设置」是带 › 的卡片行；保存 / 测试逻辑与测试标签不变。
   QuickModelSetupUiTest 随之改为先滚到控件再操作（页面变长），并加入 CI 模拟器 job 的类列表（此前没在 CI 跑）。
 
+- 2026-11-05 12:20 CST b6f1fc8 的 CI：realpi 127038768053 ✅；build 127038768575 ❌——单测 CredentialReloaderTest.quickSaveWhileGeneratingFallbackFinishesAfterTurnThenSwitchesModel
+  偶发失败：QuickSaveRunner 先公布 Done 再回调 onFinished，测试看到 Done 时提示回调可能还没跑。改为先回调再公布结果（产品行为同时更稳：看到「已保存」时全局提示一定已发出）。
+  模拟器 127038810016 ❌：UiCoverageTest、TermCoverageTest、AppCoverageTest、FormSwitchStreamingTest、SettingsScreenUiTest 全过；新加入的 QuickModelSetupUiTest 失败——
+  自动选中第一个模型后，模型列表按输入框文字筛选，只剩选中的那一个，其他模型看不到也点不了（r4 起就有的真实缺陷，此前这个类没上 CI）。
+  改为：输入框是列表里的模型时列出全部，只有手打列表外的文字才筛选。THIRD_PARTY_NOTICES 补设置页来源。
+
 ## 下一步（精确）
 - 盯本次推送的 CI（build、realpi、模拟器 6 个类：UiCoverageTest/TermCoverageTest/AppCoverageTest/FormSwitchStreamingTest/SettingsScreenUiTest/QuickModelSetupUiTest）；失败按日志修。
 - 全绿后开 PR（r5/openminis → main），描述含改动、证据（测试名 + CI run/job id）、来源说明、已知差距。

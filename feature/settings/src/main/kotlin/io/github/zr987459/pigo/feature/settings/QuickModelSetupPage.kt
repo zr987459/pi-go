@@ -194,8 +194,10 @@ fun QuickModelSetupPage(
                 }
             }
             item { Step("模型") }
-            val shown = models.filter { model.isBlank() || it.contains(model, ignoreCase = true) || it == model }.take(40)
-                .ifEmpty { models.take(40) }
+            // 输入框里是列表中的某个模型（自动选中的第一个 / 点选的）时列出全部，方便换；只有手打了列表外的文字才按它筛选。
+            // （此前选中后列表只剩它自己，别的模型看不到——QuickModelSetupUiTest 首次上 CI 模拟器时抓到。）
+            val shown = (if (model.isBlank() || model in models) models else models.filter { it.contains(model, ignoreCase = true) })
+                .ifEmpty { models }.take(40)
             item {
                 Card(Slice.Top) {
                     CardField(model, { model = it.trim(); result = null }, "从下面选，或直接输入模型名", Modifier.testTag(QuickTags.MODEL_INPUT))
