@@ -8,6 +8,8 @@
  *   /pigo:label <entryId> [text…]            → pi.setLabel（text 为空 = 清除）{"cmd":"label","ok":true,"entryId":"…","label":"…"}
  *   /pigo:reload                              → ctx.reload()          完成信号：新实例的 {"event":"ready","reason":"reload"}
  *   /pigo:switch <sessionPath>                → ctx.switchSession     完成信号：新实例的 {"event":"ready","reason":"resume","sessionFile":"…"}
+ *   /pigo:models-refresh                      → ctx.modelRegistry.refresh() {"cmd":"models-refresh","ok":true,"available":N}
+ *     （r4/model-config 热加载：重读 models.json、按修订号重读 auth.json、重算可用模型；不重启、不打断正在生成的回复）
  *
  * 失败一律回 {"cmd":…,"ok":false,"error":"…"}（label 另带 entryId）；App 侧每种命令串行（同一时刻最多一个在途），
  * 按 `cmd` 匹配，label 再按 entryId 关联。tree-nav 的成功回复带 editorText（选中用户消息时的原文）。
@@ -155,6 +157,25 @@ export default function pigoBridge(pi: Api) {
 			} catch (e) {
 				takePending("reload");
 				reply(ctx, { cmd: "reload", ok: false, error: errText(e), ...r0 });
+			}
+		},
+	});
+
+	// r4/model-config：App 写完 auth.json / models.json 后调用，新 Key、新端点立即可用（之后再发 RPC set_model）。
+	// ModelRegistry.refresh() 是 pi 1.5.0 公开给扩展的 API（dist/core/model-registry.js），内部即 ModelRuntime.refresh：
+	// ModelConfig.load(models.json) → 重组 provider → 可用性重算（凭据经 AuthStorage.read 按文件修订号重读）。
+	pi.registerCommand("pigo:models-refresh", {
+		description: "pi-go 内部：重新读取模型与凭据配置（models.json、auth.json）",
+		handler: async (rawArgs: string, ctx: Ctx) => {
+			const [req] = takeReq(rawArgs);
+			const r0 = req ? { req } : {};
+			try {
+				await ctx.modelRegistry.refresh({ allowNetwork: false });
+				const error = ctx.modelRegistry.getError?.() ?? null;
+				const available = (ctx.modelRegistry.getAvailable?.() ?? []).length;
+				reply(ctx, { cmd: "models-refresh", ok: true, available, ...(error ? { warning: String(error) } : {}), ...r0 });
+			} catch (e) {
+				reply(ctx, { cmd: "models-refresh", ok: false, error: errText(e), ...r0 });
 			}
 		},
 	});

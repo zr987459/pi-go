@@ -66,6 +66,7 @@ import io.github.zr987459.pigo.feature.settings.SettingsFocus
 import io.github.zr987459.pigo.feature.settings.SettingsScreen
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -113,6 +114,8 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
     fun toast(msg: String) {
         scope.launch { snackbar.showSnackbar(msg) }
     }
+    // 后台完成的事（生成结束后的重启、「保存并使用」的结果）在任何页面都提示。
+    LaunchedEffect(graph) { graph.notices.collect { toast(it) } }
 
     // 运行环境就绪后预先拉起引擎（握手、冷启动回到上次会话 L5），聊天页一打开就有模型与会话信息。
     // 跑在 appScope 里且只做一次：旋转、切换深色模式等 Activity 重建不会取消或重复启动。
@@ -193,8 +196,30 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
     }
 }
 
+/**
+ * 设置 › 模型（r4/model-config）：先是极简配置页（选服务商 → 填 Key → 选模型 → 测试 → 保存并使用）；
+ * 「高级设置」进入原来的完整页面（全部服务商、账号登录、自定义端点细节、代理、运行环境）。
+ */
 @Composable
 private fun SettingsPage(graph: AppGraph, focus: String?, onBack: () -> Unit) {
+    var advanced by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+    if (advanced) {
+        androidx.activity.compose.BackHandler { advanced = false }
+        AdvancedSettingsPage(graph, focus, onBack = { advanced = false })
+        return
+    }
+    val setup = graph.quickModelSetup
+    val scope = rememberCoroutineScope()
+    val current = remember(graph) {
+        graph.engine.chat.map { c -> c.model?.let { "${it.provider}/${it.id}" } }
+            .stateIn(scope, kotlinx.coroutines.flow.SharingStarted.Eagerly, graph.engine.chat.value.model?.let { "${it.provider}/${it.id}" })
+    }
+    val actions = remember(graph, current) { io.github.zr987459.pigo.di.QuickSetupWiring.actions(setup, graph.quickSaver, current) }
+    io.github.zr987459.pigo.feature.settings.QuickModelSetupPage(actions, onBack = onBack, onAdvanced = { advanced = true })
+}
+
+@Composable
+private fun AdvancedSettingsPage(graph: AppGraph, focus: String?, onBack: () -> Unit) {
     val runtimeStatus by graph.runtime.status.collectAsState()
     val scope = rememberCoroutineScope()
     val app = LocalContext.current.applicationContext

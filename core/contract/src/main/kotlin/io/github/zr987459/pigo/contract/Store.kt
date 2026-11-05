@@ -60,6 +60,12 @@ interface ProviderConfigStore {
 /** 由 `:core:store` 实现，engine 启动时取。 */
 interface LaunchEnvProvider {
     suspend fun env(): Map<String, String>
+
+    /**
+     * 当前已知的全部 Key 原文，只用于日志脱敏（r4/model-config：热加载的 Key 写在 auth.json，不再出现在 [env] 里）。
+     * 默认就是 [env] 的值。
+     */
+    suspend fun knownSecrets(): Collection<String> = env().values
 }
 
 /** 清洗用户粘贴的 Key：去首尾空白与开头的 `Bearer `（DESIGN.md §3.10）。 */

@@ -56,6 +56,9 @@ class MockOpenAiServer : AutoCloseable {
     /** 请求里出现过的 `image_url.url`（C1 集成测试断言用，feat/engine-rpc 追加）。 */
     val imageUrls: MutableList<String> = java.util.concurrent.CopyOnWriteArrayList()
 
+    /** 模型请求带的 Authorization 头（r4 热加载集成测试断言新 Key 生效）。 */
+    val authorizations: MutableList<String> = java.util.concurrent.CopyOnWriteArrayList()
+
     val port: Int get() = server.localPort
     val baseUrl: String get() = "http://127.0.0.1:$port/v1"
 
@@ -129,6 +132,7 @@ class MockOpenAiServer : AutoCloseable {
                 }.toString(Charsets.UTF_8)
                 val ex = Exchange(body, s.getOutputStream())
                 if (path.startsWith("/v1/chat/completions")) {
+                    headers["authorization"]?.let { authorizations += it }
                     handle(ex)
                 } else {
                     respondJson(ex, 200, """{"object":"list","data":[{"id":"mock-model","object":"model"}]}""")

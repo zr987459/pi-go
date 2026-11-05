@@ -119,12 +119,15 @@ class CatalogAndEnvTest {
         assertEquals("secretsecret123456", env["AWS_SECRET_ACCESS_KEY"])
         assertEquals("us-west-2", env["AWS_REGION"])
         assertNull(env["AWS_BEARER_TOKEN_BEDROCK"])
-        assertEquals("az-key-0123456789", env["AZURE_OPENAI_API_KEY"])
-        assertEquals("my-res", env["AZURE_OPENAI_RESOURCE_NAME"])
-        assertEquals("v1", env["AZURE_OPENAI_API_VERSION"])
+        // Bedrock 有多个密文字段：仍经进程环境注入（改了要重启）；Azure 只有一个密文字段：热加载，Key 与非密文字段写 auth.json
+        assertNull(env["AZURE_OPENAI_API_KEY"])
+        val az = json(paths.authJson)["azure"]!!.jsonObject
+        assertEquals("az-key-0123456789", az["key"]!!.jsonPrimitive.content)
+        assertEquals("my-res", az["env"]!!.jsonObject["AZURE_OPENAI_RESOURCE_NAME"]!!.jsonPrimitive.content)
+        assertEquals("v1", az["env"]!!.jsonObject["AZURE_OPENAI_API_VERSION"]!!.jsonPrimitive.content)
         assertTrue(s.configured().containsAll(listOf("amazon-bedrock", "azure")))
-        // 这两个不共用变量：不写任何容器文件
-        assertFalse(paths.authJson.exists())
+        assertNull("Bedrock 不写 auth.json", json(paths.authJson)["amazon-bedrock"])
+        assertFalse(paths.authJson.readText().contains("secretsecret123456"))
         // 预填：密文只给末 4 位
         val f = s.providerFields("amazon-bedrock")
         assertEquals("AKIAEXAMPLE", f["AWS_ACCESS_KEY_ID"])
@@ -143,15 +146,17 @@ class CatalogAndEnvTest {
         // 编辑时密文留空 = 保留原值
         s.setProviderFields("azure", mapOf("AZURE_OPENAI_API_KEY" to "k-0123456789", "AZURE_OPENAI_BASE_URL" to "https://a.openai.azure.com"))
         s.setProviderFields("azure", mapOf("AZURE_OPENAI_API_KEY" to "", "AZURE_OPENAI_BASE_URL" to "https://b.openai.azure.com"))
-        assertEquals("k-0123456789", s.env()["AZURE_OPENAI_API_KEY"])
-        assertEquals("https://b.openai.azure.com", s.env()["AZURE_OPENAI_BASE_URL"])
+        val az = json(paths.authJson)["azure"]!!.jsonObject
+        assertEquals("k-0123456789", az["key"]!!.jsonPrimitive.content)
+        assertEquals("https://b.openai.azure.com", az["env"]!!.jsonObject["AZURE_OPENAI_BASE_URL"]!!.jsonPrimitive.content)
         s.clearProvider("azure")
         assertTrue(s.env().isEmpty())
+        assertNull(json(paths.authJson)["azure"])
     }
 
     // ---------------- 共用 Key 变量 ----------------
 
-    @Test fun sharedEnvProvidersUseAuthReferencesWithoutKeys() = runTest {
+    @Test fun sharedEnvProvidersWriteOwnKeysToAuthJson() = runTest {
         val s = store()
         paths.authJson.parentFile.mkdirs()
         paths.authJson.writeText("""{"github-copilot":{"type":"oauth","refresh":"r","access":"a","expires":1},"mine":{"type":"api_key","key":"literal"}}""")
@@ -161,19 +166,18 @@ class CatalogAndEnvTest {
         s.setProviderFields("cloudflare-ai-gateway", mapOf("CLOUDFLARE_API_KEY" to "cf-gw-0123456789", "CLOUDFLARE_ACCOUNT_ID" to "acc2", "CLOUDFLARE_GATEWAY_ID" to "gw"))
 
         val env = s.env()
-        assertEquals("sk-intl-0123456789", env["PIGO_PK_MOONSHOTAI"])
-        assertEquals("sk-cn-0123456789", env["PIGO_PK_MOONSHOTAI_CN"])
+        assertNull("热加载：Key 不进进程环境", env["PIGO_PK_MOONSHOTAI"])
         assertNull("共用变量不直接注入，避免互相覆盖", env["MOONSHOT_API_KEY"])
         assertNull(env["CLOUDFLARE_API_KEY"])
         assertNull(env["CLOUDFLARE_ACCOUNT_ID"])
 
         val auth = json(paths.authJson)
-        assertEquals("\$PIGO_PK_MOONSHOTAI_CN", auth["moonshotai-cn"]!!.jsonObject["key"]!!.jsonPrimitive.content)
+        // 各存各的 Key（与 pi /login 存 Key 的格式相同），共用环境变量的服务商也不会互相覆盖
+        assertEquals("sk-cn-0123456789", auth["moonshotai-cn"]!!.jsonObject["key"]!!.jsonPrimitive.content)
+        assertEquals("sk-intl-0123456789", auth["moonshotai"]!!.jsonObject["key"]!!.jsonPrimitive.content)
         assertEquals("acc2", auth["cloudflare-ai-gateway"]!!.jsonObject["env"]!!.jsonObject["CLOUDFLARE_ACCOUNT_ID"]!!.jsonPrimitive.content)
         assertEquals("oauth", auth["github-copilot"]!!.jsonObject["type"]!!.jsonPrimitive.content)
         assertEquals("literal", auth["mine"]!!.jsonObject["key"]!!.jsonPrimitive.content)
-        val text = paths.authJson.readText()
-        for (k in listOf("sk-intl-0123456789", "sk-cn-0123456789", "cf-workers-0123456789", "cf-gw-0123456789")) assertFalse(text.contains(k))
         assertEquals(setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE), Files.getPosixFilePermissions(paths.authJson.toPath()))
         assertFalse(File(paths.authJson.parentFile, "auth.json.lock").exists())
 

@@ -86,6 +86,7 @@ GPL/LGPL 义务：mvp/runtime 引入时在 `core/runtime/NOTICE-runtime.md` 记�
   - `feature/chat/.../ChatController.kt`（`stop()` 先收起并取消阻塞类对话框）← `lib/rpc-manager.ts:1323-1345`
   - `core/store/.../ModelDiscovery.kt` ← `lib/model-discovery.ts:1-135`、`app/api/models-config/discover/route.ts:13-99`
   - `core/store/.../ProviderTester.kt` ← `app/api/models-config/test/route.ts:11`、`:28-121`
+  - `core/store/.../QuickModelSetup.kt`、`feature/settings/.../QuickModelSetupPage.kt`（极简模型配置流程：服务商 + Key → 自动拉模型列表 → 测试连接 → 保存，r4/model-config）← 模型配置页流程思路，`app/api/models-config/discover/route.ts`、`app/api/models-config/test/route.ts`
 
 - 以下由 W5（feat/wiring）从 `docs/notices/*.md` 并入（各工作流原文件保留作为出处）：
 - feat/commands（W4，`docs/notices/feat-commands.md`）：

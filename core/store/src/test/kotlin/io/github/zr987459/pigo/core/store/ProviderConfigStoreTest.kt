@@ -52,6 +52,12 @@ class ProviderConfigStoreTest {
 
     private fun readJson(f: File) = Json.parseToJsonElement(f.readText()).jsonObject
 
+    /** auth.json 里 pi-go 写的条目：provider → 字面 Key。 */
+    private fun authKeys(): Map<String, String> =
+        if (!paths.authJson.exists()) emptyMap() else readJson(paths.authJson).filter { (_, v) ->
+            (v.jsonObject[PiProviderConfigStore.MANAGED_MARK] as? kotlinx.serialization.json.JsonPrimitive)?.content == "true"
+        }.mapValues { (_, v) -> v.jsonObject["key"]!!.jsonPrimitive.content }
+
     // ---------------- 预设 ----------------
 
     @Test fun presetsGroupedIntoThreeKinds() = runTest {
@@ -89,11 +95,13 @@ class ProviderConfigStoreTest {
         s.setBuiltInKey("deepseek", "  Bearer sk-xxxx  ")
         assertEquals("sk-xxxx", secrets.map["key.deepseek"])
         assertEquals(listOf("deepseek"), s.configured())
-        assertEquals(mapOf("DEEPSEEK_API_KEY" to "sk-xxxx"), s.env())
-        // 内置 Provider 不写任何容器文件，尤其是 auth.json（C2）
-        assertFalse(paths.authJson.exists())
+        // r4 热加载：Key 写进 pi 自己读的 auth.json（600），不再进进程环境
+        assertEquals(emptyMap<String, String>(), s.env())
+        assertEquals(mapOf("deepseek" to "sk-xxxx"), authKeys())
+        // 用户 2026-11-05 接受 Key 落 auth.json（与 pi 原生 /login 一致）：只在这一个文件里，权限 600；其他容器文件没有
+        assertEquals(setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE), Files.getPosixFilePermissions(paths.authJson.toPath()))
         assertFalse(paths.modelsJson.exists())
-        assertTrue(rootfs.walk().none { it.isFile && it.readText().contains("sk-xxxx") })
+        assertTrue(rootfs.walk().none { it.isFile && it != paths.authJson && it.readText().contains("sk-xxxx") })
     }
 
     @Test fun sanitizeVariants() = runTest {
@@ -122,7 +130,8 @@ class ProviderConfigStoreTest {
         )
         assertFalse(f.readText().contains(fullKey)) // Key 不落容器磁盘
         assertEquals(fullKey, secrets.map["key.custom.bailian"])
-        assertEquals(mapOf("PIGO_KEY_BAILIAN" to fullKey), s.env())
+        assertEquals(emptyMap<String, String>(), s.env())
+        assertEquals(mapOf("bailian" to fullKey), authKeys())
         assertEquals(listOf("bailian"), s.configured())
         assertFalse(File(f.parentFile, ".models.json.pigo-tmp").exists())
     }
@@ -158,7 +167,7 @@ class ProviderConfigStoreTest {
         assertEquals(128000, models[0]["contextWindow"]!!.jsonPrimitive.content.toInt()) // 已有模型附加字段保留
         // 不是 pi-go 写的条目不算「已配置」，也不注入环境变量
         assertEquals(listOf("zhipu"), s.configured())
-        assertEquals(setOf("PIGO_KEY_ZHIPU"), s.env().keys)
+        assertEquals(setOf("zhipu"), authKeys().keys)
     }
 
     @Test fun editingCustomWithBlankKeyKeepsOldKey() = runTest {
@@ -166,7 +175,7 @@ class ProviderConfigStoreTest {
         s.upsertCustom("my-api", "https://api.example.com/v1", fullKey, listOf("m1"))
         s.upsertCustom("my-api", "https://api.example.com/v2", "   ", listOf("m1", "m2"))
         assertEquals(fullKey, secrets.map["key.custom.my-api"])
-        assertEquals(mapOf("PIGO_KEY_MY_API" to fullKey), s.env())
+        assertEquals(mapOf("my-api" to fullKey), authKeys())
     }
 
     @Test fun customIdsMappingToSameEnvVarAreRejected() = runTest {
@@ -186,7 +195,7 @@ class ProviderConfigStoreTest {
         assertNull(secrets.map["key.custom.my_api"])
         // 同一个 id 再次保存（编辑）不算冲突
         s.upsertCustom("my-api", "https://api.example.com/v2", "", listOf("m1", "m3"))
-        assertEquals(mapOf("PIGO_KEY_MY_API" to fullKey), s.env())
+        assertEquals(mapOf("my-api" to fullKey), authKeys())
     }
 
     @Test fun customValidation() = runTest {
@@ -263,14 +272,14 @@ class ProviderConfigStoreTest {
 
         // 日志兜底：已知 Key 与常见形态都被替换
         val line = "请求失败 Authorization: Bearer $fullKey key=$oddKey"
-        val red = KeyRedaction.redact(line, s.env().values)
+        val red = KeyRedaction.redact(line, s.knownSecrets())
         assertFalse(red.contains(fullKey))
         assertFalse(red.contains(oddKey))
         assertFalse(red.contains("abcdef1234"))
 
         // 与 AppLog 的基础脱敏组合使用时同样不泄露
         val log = FakeAppLog()
-        log.i("store", KeyRedaction.redact("保存了 $fullKey", s.env().values))
+        log.i("store", KeyRedaction.redact("保存了 $fullKey", s.knownSecrets()))
         assertTrue(log.tail(10).none { it.message.contains(fullKey) })
     }
 

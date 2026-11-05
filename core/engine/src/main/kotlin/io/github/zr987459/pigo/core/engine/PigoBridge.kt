@@ -80,6 +80,10 @@ object PigoBridge {
 
     fun reloadCommand(req: String? = null): String = if (req == null) RELOAD_COMMAND else "$RELOAD_COMMAND --req=$req"
 
+    const val MODELS_REFRESH_COMMAND = "/pigo:models-refresh"
+
+    fun modelsRefreshCommand(req: String? = null): String = if (req == null) MODELS_REFRESH_COMMAND else "$MODELS_REFRESH_COMMAND --req=$req"
+
     fun switchCommand(path: String, req: String? = null): String = "/pigo:switch " + reqArg(req) + path.replace(Regex("[\\r\\n]+"), "").trim()
 
     /**

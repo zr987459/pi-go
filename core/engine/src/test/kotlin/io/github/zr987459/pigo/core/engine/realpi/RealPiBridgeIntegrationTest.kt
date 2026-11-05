@@ -167,4 +167,44 @@ class RealPiBridgeIntegrationTest {
         assertTrue("回复完整：$last", last.contains("片段14"))
         assertEquals("生成中", (engine.tree() as Outcome.Ok).value.find(asst.id)?.label)
     }
+
+    /**
+     * r4/model-config 热加载（用户 2026-11-05「存好 Key 不应该重启」）：生成中新增一个服务商，Key 只写进 auth.json
+     * （models.json 的 apiKey 仍是一个没注入的 `$PIGO_KEY_*` 引用），`/pigo:models-refresh` 后 `set_model` 立即可用，
+     * 请求带的就是新 Key；正在生成的回复不被打断，进程与会话文件不变。
+     */
+    @Test
+    fun hotReloadNewKeyWithoutRestartWhileGenerating() = runBlocking {
+        startReady()
+        turn("先来一轮 #text")
+        val file = engine.currentSessionFile
+        assertTrue("新服务商未配置前切不过去", engine.setModel("hot", "hot-model") is Outcome.Err)
+
+        assertTrue(engine.send("慢一点 #slow") is Outcome.Ok)
+        until { engine.chat.value.running }
+        val models = File(sb.agentDir, "models.json")
+        val root = kotlinx.serialization.json.Json.parseToJsonElement(models.readText()) as kotlinx.serialization.json.JsonObject
+        val providers = root["providers"] as kotlinx.serialization.json.JsonObject
+        val hot = kotlinx.serialization.json.Json.parseToJsonElement(
+            """{"baseUrl":"${sb.mock.baseUrl}","api":"openai-completions","apiKey":"${'$'}PIGO_KEY_HOT","models":[{"id":"hot-model"}]}""",
+        )
+        models.writeText(kotlinx.serialization.json.JsonObject(root + ("providers" to kotlinx.serialization.json.JsonObject(providers + ("hot" to hot)))).toString())
+        File(sb.agentDir, "auth.json").writeText("""{"hot":{"type":"api_key","key":"sk-hot-0123456789abcdef","pigoManaged":true}}""")
+
+        val t0 = System.currentTimeMillis()
+        assertEquals(Outcome.Ok(Unit), engine.refreshModels())
+        assertTrue("立即执行（${System.currentTimeMillis() - t0}ms）", System.currentTimeMillis() - t0 < 5_000)
+        assertTrue("没有打断生成", engine.chat.value.running)
+        until(60_000) { !engine.chat.value.running }
+        val last = (engine.lastAssistantText() as Outcome.Ok).value.orEmpty()
+        assertTrue("回复完整：$last", last.contains("片段14"))
+
+        val switched = engine.setModel("hot", "hot-model")
+        assertTrue("热加载后可切换：$switched", switched is Outcome.Ok)
+        sb.mock.authorizations.clear()
+        turn("用新 Key #text")
+        assertEquals("请求带的是 auth.json 里的新 Key", "Bearer sk-hot-0123456789abcdef", sb.mock.authorizations.lastOrNull())
+        assertEquals("没有重启：会话文件不变", file, engine.currentSessionFile)
+        assertEquals(BridgeState.READY, engine.bridgeStatus.value.state)
+    }
 }
