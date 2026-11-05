@@ -15,7 +15,8 @@ android {
         // 与 PiMet、Termux 相同，避开 Android 10+ 对 App 私有目录 exec 的限制（DESIGN.md §1.2、§7 R1）。
         @Suppress("ExpiredTargetSdkVersion")
         targetSdk = 28
-        versionCode = 1
+        // CI 传 -PpigoVersionCode=<GITHUB_RUN_NUMBER+偏移>，保证每次 nightly 递增、能直接覆盖安装；本地构建默认 1。
+        versionCode = (findProperty("pigoVersionCode") as String?)?.toIntOrNull() ?: 1
         versionName = "0.1.0-dev"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -24,7 +25,21 @@ android {
         }
     }
 
+    // 固定 debug 签名（个人自用测试包）：所有 CI / nightly / 本地构建都用仓库里的同一把 debug key，
+    // 新包可以直接覆盖安装旧包。这把 key 公开在仓库里，只用于 debug 包，不要用它签正式发布版。
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("pigo-debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("debug")
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))

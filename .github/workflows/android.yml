@@ -41,6 +41,14 @@ jobs:
         if: steps.detect.outputs.has_project == 'true'
         uses: gradle/actions/setup-gradle@v4
 
+      - name: 设定 versionCode（随构建递增）
+        if: steps.detect.outputs.has_project == 'true'
+        # run_number 单调递增；+100 留余量，高于早期 versionCode=1 的包。写进环境变量，后续每个 gradle 步骤都一致，
+        # 避免后面的 assembleDebugAndroidTest 用默认值重新打包把 app-debug.apk 覆盖成 versionCode 1。
+        run: |
+          echo "ORG_GRADLE_PROJECT_pigoVersionCode=$((GITHUB_RUN_NUMBER + 100))" >> "$GITHUB_ENV"
+          echo "versionCode=$((GITHUB_RUN_NUMBER + 100))" >> "$GITHUB_STEP_SUMMARY"
+
       - name: 构建 debug APK
         if: steps.detect.outputs.has_project == 'true'
         run: |
@@ -102,6 +110,20 @@ jobs:
           echo "count=$n" >> "$GITHUB_OUTPUT"
           ls -la out
 
+      - name: 校验签名与 versionCode
+        if: steps.detect.outputs.has_project == 'true' && steps.apk.outputs.count != '0'
+        # 固定 debug key（app/pigo-debug.keystore）的证书 SHA-256；签名变了就不能覆盖安装，直接让构建失败。
+        run: |
+          BT="$ANDROID_HOME/build-tools/35.0.0"
+          EXPECT=2cf17a4917e7e7402888c0d5ea6095e1fb1684b3ffe1f8cb0496fa58ef41a5a8
+          for f in out/app-debug-*.apk; do
+            got=$("$BT/apksigner" verify --print-certs "$f" | sed -n 's/.*certificate SHA-256 digest: //p' | head -1)
+            vc=$("$BT/aapt2" dump badging "$f" | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p")
+            echo "$f: cert=$got versionCode=$vc"
+            [ "$got" = "$EXPECT" ] || { echo "::error::$f 的签名证书不是固定 debug key"; exit 1; }
+            [ "$vc" = "$ORG_GRADLE_PROJECT_pigoVersionCode" ] || { echo "::error::$f 的 versionCode=$vc，应为 $ORG_GRADLE_PROJECT_pigoVersionCode"; exit 1; }
+          done
+
       - name: 上传构建产物
         if: steps.detect.outputs.has_project == 'true' && steps.apk.outputs.count != '0'
         uses: actions/upload-artifact@v4
@@ -131,6 +153,8 @@ jobs:
           else
             gh release create "$TAG" --target "$GITHUB_SHA" --title "pi-go 测试版" --notes "$NOTES" --prerelease
           fi
+          # 固定文件名的最新包，下载地址不变：.../releases/download/nightly/app-debug-latest.apk
+          cp "$(ls out/app-debug-*.apk | head -1)" out/app-debug-latest.apk
           gh release upload "$TAG" out/*.apk --clobber
 
   # r3（DESIGN-r3 §8.4 第 3 条）：模拟器仪器测试。只跑已存在的硬性要求测试类。

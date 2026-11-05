@@ -5,7 +5,7 @@ pi-go 是一个原生 Android 的「pi 编程助手」客户端。它在手机�
 - 设计文档（决策记录、技术栈、模块划分、通信协议、运行环境迁移、MVP 范围与工作流拆分、风险与路线）：[docs/DESIGN.md](docs/DESIGN.md)
 - 代码审查重点：[REVIEW.md](REVIEW.md)
 - 第三方组件与代码来源：[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
-- 测试版 APK：每次推送 main 后由 GitHub Actions 构建，发布在 Releases 的「pi-go 测试版」（tag `nightly`）。
+- 测试版 APK：每次推送 main 后由 GitHub Actions 构建，发布在 Releases 的「pi-go 测试版」（tag `nightly`）。固定下载地址：<https://github.com/zr987459/pi-go/releases/download/nightly/app-debug-latest.apk>。所有 CI 包都用仓库里固定的 debug key（`app/pigo-debug.keystore`）签名，versionCode 随构建递增，新包可直接覆盖安装（从旧的随机签名包升级时需要先卸载一次）。
 
 当前状态：设计已定稿，已建立工程骨架（见分支 `mvp/scaffold`）；W1–W4 在其合入后并行开发。许可证已选定 Apache-2.0（见下）。
 
