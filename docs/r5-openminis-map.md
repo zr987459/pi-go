@@ -12,7 +12,7 @@ pi-go 只换「界面与交互」：引擎仍是 `pi --mode rpc`（SessionHost /
 | `ChatScreen`（← 返回、居中标题、⋯ 菜单） | `CalmSurface` 聊天页 | ← = `session.resume`（回会话列表）；标题点按 = `session.name`；右侧「终端」图标 = `form.toggle`；⋯ = 新对话 / 分享 / 分支树 / 复制会话 / 导出 / 搜索 / 展开工具 / 会话信息 / 打开终端（`menu:<id>`）。 |
 | `TerminalScreen`（黑底、圆形 ✕、等宽标题、绿色 🖌、键盘附件条） | `TermSurface` 终端页（`host.form = TERM`） | 内容是 pi TUI 的 Compose 渲染（同一个 SessionHost）；✕ / 返回键 = 回聊天页；🖌 = 清空输入行；附件条 = 键盘开关、复制全部、Esc、Tab、⇣排队、↑队、^C、⌃O、⌕、⇞⇟、⤢、/、@、!、📎、⏎（`term:key:*`）。入口：聊天顶栏终端图标、⋯「打开终端」、会话列表终端图标 / 菜单、`/term`。 |
 | 导航转场（推入 / 推出） | `FormHost` AnimatedContent：终端从右推入（280ms），会话列表从左滑入 | 只换渲染层，不发 RPC、不重启引擎、草稿 / overlay / 阅读位置不丢（FormToggleNoRpcTest、RealHostFormSwitchTest、UiCoverageTest、FormSwitchStreamingTest）。 |
-| 设置（分组卡片） | 设置 › 模型（r4 QuickModelSetupPage + 高级） | 逻辑不变（r4 模型配置 + Key 热加载）；外观沿用 r4 页面（见「已知差距」）。 |
+| 设置（`SettingsSection` / `SectionDesign` / `SectionTextField` 分组卡片） | 设置 › 模型（r4 QuickModelSetupPage + 高级） | 逻辑不变（r4 模型配置 + Key 热加载）；外观换成分组卡片：服务商单选行（右侧 ✓）、卡片内无边框输入框、模型列表行、蓝字操作行、「高级设置 ›」。 |
 
 ## 主题与组件
 
