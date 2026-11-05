@@ -54,7 +54,11 @@
   QuickModelSetupUiTest 过了选模型、保存、热加载，卡在「离开再回来仍显示已保存」：进页面时自动拉模型列表会顺手清掉上一次保存结果（r4 起的真实缺陷）。
   改为只有用户点「获取 / 刷新列表」才清，自动拉取不清。
 
+- 2026-11-05 13:22 CST 7eebb65 全绿（run 41967626549）：build 127048194268 ✅（assembleDebug + 全模块单测）、
+  模拟器 127048225633 ✅（UiCoverageTest 7、TermCoverageTest 16、AppCoverageTest 8、FormSwitchStreamingTest 4、SettingsScreenUiTest 9、QuickModelSetupUiTest 2）、
+  realpi 127048194341 ✅（RealPiBridgeIntegrationTest 7 个，失败 0 跳过 0）。已开 PR #31（r5/openminis → main），未合并。
+
 ## 下一步（精确）
-- 盯本次推送的 CI（build、realpi、模拟器 6 个类：UiCoverageTest/TermCoverageTest/AppCoverageTest/FormSwitchStreamingTest/SettingsScreenUiTest/QuickModelSetupUiTest）；失败按日志修。
-- 全绿后开 PR（r5/openminis → main），描述含改动、证据（测试名 + CI run/job id）、来源说明、已知差距。
-- 本地构建：/workspace/work/gw.sh（JDK17 + SDK35 + /tmp/ab/aapt2 qemu 包装；/tmp 丢失时按 r3-app.md 记的方法重装：qemu-user-static + debian amd64 libc6/libgcc-s1/libstdc++6 解包到 /tmp/ab/amd64）。
+- 等所有者审查 PR #31；不合并。已知差距见 PR 描述（终端内容区仍是 pi TUI 渲染、附件条无粘滞 Ctrl / 方向键、高级设置子页未逐页对照、未真机验收）。
+
+完成，PR #31
