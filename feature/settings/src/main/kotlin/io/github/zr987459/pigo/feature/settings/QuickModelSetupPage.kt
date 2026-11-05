@@ -121,8 +121,10 @@ fun QuickModelSetupPage(
     val current = actions.currentModel?.collectAsState()?.value
     val preset = actions.presets.firstOrNull { it.id == presetId }
 
-    fun fetch() = scope.launch {
-        busy = "正在获取模型列表…"; result = null; actions.saver.acknowledge()
+    // [byUser]：用户点了「获取 / 刷新列表」才清掉上一次保存的结果；进页面时的自动拉取不清——
+    // 否则保存后离开再回来，「已保存」被自动拉列表顺手抹掉（违背「离开再回来也接得上」，QuickModelSetupUiTest 上 CI 后抓到）。
+    fun fetch(byUser: Boolean = false) = scope.launch {
+        busy = "正在获取模型列表…"; result = null; if (byUser) actions.saver.acknowledge()
         when (val r = actions.loadModels(presetId, key, baseUrl)) {
             is Outcome.Ok -> {
                 models = r.value
@@ -212,7 +214,7 @@ fun QuickModelSetupPage(
             }
             item {
                 Card(Slice.Bottom) {
-                    LinkRow(if (models.isEmpty()) "获取模型列表" else "刷新列表", divider = true, enabled = busy == null, modifier = Modifier.testTag(QuickTags.FETCH)) { fetch() }
+                    LinkRow(if (models.isEmpty()) "获取模型列表" else "刷新列表", divider = true, enabled = busy == null, modifier = Modifier.testTag(QuickTags.FETCH)) { fetch(byUser = true) }
                 }
             }
             item { Step("测试并保存") }

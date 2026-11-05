@@ -50,6 +50,10 @@
   自动选中第一个模型后，模型列表按输入框文字筛选，只剩选中的那一个，其他模型看不到也点不了（r4 起就有的真实缺陷，此前这个类没上 CI）。
   改为：输入框是列表里的模型时列出全部，只有手打列表外的文字才筛选。THIRD_PARTY_NOTICES 补设置页来源。
 
+- 2026-11-05 12:50 CST abfe327 的 CI（run 41965898408）：build 127043118625 ✅（单测全过）、realpi 127043031961 ✅；模拟器 127043168998：前 5 个类全过，
+  QuickModelSetupUiTest 过了选模型、保存、热加载，卡在「离开再回来仍显示已保存」：进页面时自动拉模型列表会顺手清掉上一次保存结果（r4 起的真实缺陷）。
+  改为只有用户点「获取 / 刷新列表」才清，自动拉取不清。
+
 ## 下一步（精确）
 - 盯本次推送的 CI（build、realpi、模拟器 6 个类：UiCoverageTest/TermCoverageTest/AppCoverageTest/FormSwitchStreamingTest/SettingsScreenUiTest/QuickModelSetupUiTest）；失败按日志修。
 - 全绿后开 PR（r5/openminis → main），描述含改动、证据（测试名 + CI run/job id）、来源说明、已知差距。
