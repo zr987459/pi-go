@@ -1,7 +1,22 @@
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+
 package io.github.zr987459.pigo.feature.chat.ui.calm
 
 import io.github.zr987459.pigo.contract.workspace.FileMatch
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
+import io.github.zr987459.pigo.core.ui.calm.CalmDims
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -160,9 +175,9 @@ private fun CalmSurfaceBody(
             CalmTopBar(
                 title = chat.sessionName,
                 subtitle = subtitleOf(chat.running, chat.statusLine, chat.retry?.let { "重试 ${it.attempt}/${it.maxAttempts}" }, ephemeral),
+                running = chat.running,
                 onMenu = { view.drawerOpen = true },
                 onRename = { run("session.name", null) },
-                onCommands = { openCommandCenter(host) },
                 onToggleForm = toggleForm,
                 onAction = run,
                 locked = overlays.isNotEmpty(),
@@ -173,10 +188,12 @@ private fun CalmSurfaceBody(
                 Text(
                     "引擎已停止：${s.hint}",
                     style = Calm.type.caption, color = c.error,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).testTag("calm:engineCrashed"),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)
+                        .background(c.error.copy(alpha = 0.08f), RoundedCornerShape(10.dp)).padding(horizontal = 12.dp, vertical = 8.dp)
+                        .testTag("calm:engineCrashed"),
                 )
             }
-            if (view.searchOpen) {
+            AnimatedVisibility(view.searchOpen, enter = fadeIn(tween(CalmDims.MOTION_MS)) + expandVertically(tween(CalmDims.MOTION_MS)), exit = fadeOut(tween(CalmDims.MOTION_MS)) + shrinkVertically(tween(CalmDims.MOTION_MS))) {
                 TranscriptSearch(
                     query = view.searchQuery,
                     onQuery = { view.searchQuery = it },
@@ -191,25 +208,21 @@ private fun CalmSurfaceBody(
                 onAction = run,
                 modifier = Modifier.weight(1f),
             )
-            CalmComposer(host = host, chat = chat, view = view, onAction = run, fileSearch = fileSearch)
+            CalmComposer(host = host, chat = chat, view = view, onAction = run, fileSearch = fileSearch, locked = overlays.isNotEmpty())
         }
 
-        // ☰ 会话列表
-        AnimatedVisibility(view.drawerOpen, enter = fadeIn(tween(180)), exit = fadeOut(tween(180))) {
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.32f)).testTag("calm:drawerScrim").clickable(
-                interactionSource = remember { MutableInteractionSource() }, indication = null,
-            ) { view.drawerOpen = false })
-        }
+        // 会话列表（OpenMinis 的首页 SessionListScreen）：整页从左侧推入，聊天页在它之上「推出」（OpenMinis 导航转场）。
         AnimatedVisibility(
             view.drawerOpen,
-            enter = slideInHorizontally(tween(180)) { -it },
-            exit = slideOutHorizontally(tween(180)) { -it },
+            enter = slideInHorizontally(tween(CalmDims.PAGE_MS, easing = FastOutSlowInEasing)) { -it / 3 } + fadeIn(tween(CalmDims.PAGE_MS)),
+            exit = slideOutHorizontally(tween(CalmDims.PAGE_MS, easing = FastOutSlowInEasing)) { -it / 3 } + fadeOut(tween(CalmDims.PAGE_MS)),
         ) {
             CalmSessionList(
                 host = host,
                 onAction = run,
                 onClose = { view.drawerOpen = false },
                 onOpenSettings = { view.drawerOpen = false; onOpenSettings() },
+                onOpenTerminal = { view.drawerOpen = false; host.form.value = UiForm.TERM },
                 onToast = { view.toast = it },
             )
         }
@@ -226,13 +239,14 @@ private fun CalmSurfaceBody(
             if (sink != null) CalmPanelLogic.dismissEvent(t)?.let { k -> scope.launch { sink.onEvent(t.id, k, null) } }
             host.overlay.remove(t.id)
         }
-        // 返回键（PR #21 审查第 1 轮 Important 3、第 2 轮 Nit 2）：按画面层级自上而下——面板 → 展开编辑器 → 会话列表 → 搜索；都关着不拦截。
+        // 返回键（r5：OpenMinis 导航——聊天页在会话列表之上）：面板 → 展开编辑器 → 搜索 → 聊天页返回会话列表；
+        // 会话列表是首页，再按返回不拦截（外层退到后台）。
         val backStep = CalmBack.step(view.editorExpanded, top, view.drawerOpen, view.searchOpen)
         backHandler?.invoke(backStep != CalmBack.Step.NONE) {
             when (CalmBack.step(view.editorExpanded, host.overlay.top, view.drawerOpen, view.searchOpen)) {
                 CalmBack.Step.EDITOR -> view.editorExpanded = false
                 CalmBack.Step.OVERLAY -> host.overlay.top?.let { dismissTop(it) }
-                CalmBack.Step.DRAWER -> view.drawerOpen = false
+                CalmBack.Step.LIST -> view.drawerOpen = true
                 CalmBack.Step.SEARCH -> { view.searchOpen = false; view.searchQuery = "" }
                 CalmBack.Step.NONE -> Unit
             }
@@ -254,15 +268,21 @@ private fun CalmSurfaceBody(
             }
         }
 
-        view.toast?.let { t ->
-            Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 120.dp)) {
-                Text(
-                    t,
-                    style = Calm.type.label,
-                    color = c.background,
-                    modifier = Modifier.background(c.text.copy(alpha = 0.88f), RoundedCornerShape(12.dp)).padding(horizontal = 16.dp, vertical = 10.dp).testTag("calm:toast"),
-                )
-            }
+        // 提示（OpenMinis：底部居中的深色圆角胶囊，淡入淡出）
+        AnimatedVisibility(
+            view.toast != null,
+            enter = fadeIn(tween(CalmDims.MOTION_MS)) + slideInVertically(tween(CalmDims.MOTION_MS)) { it / 2 },
+            exit = fadeOut(tween(CalmDims.MOTION_MS)),
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 128.dp),
+        ) {
+            var shown by remember { mutableStateOf("") }
+            view.toast?.let { shown = it }
+            Text(
+                shown,
+                style = Calm.type.label,
+                color = Color.White,
+                modifier = Modifier.padding(horizontal = 24.dp).background(c.toastBg, RoundedCornerShape(50)).padding(horizontal = 18.dp, vertical = 10.dp).testTag("calm:toast"),
+            )
         }
     }
 }
@@ -298,72 +318,106 @@ internal fun searchableText(item: ChatItem): String = when (item) {
     is ChatItem.Raw -> item.json.toString()
 }
 
+/**
+ * 聊天页顶栏（OpenMinis ChatScreen TopAppBar）：左 ← 返回会话列表；中间居中的会话名（点按改名，下方一行状态）；
+ * 右侧「终端」图标（OpenMinis 会话列表 / 聊天菜单里的 Terminal 入口）与 ⋯ 菜单（带图标的分组菜单）。
+ */
 @Composable
 private fun CalmTopBar(
     title: String?,
     subtitle: String,
+    running: Boolean,
     onMenu: () -> Unit,
     onRename: () -> Unit,
-    onCommands: () -> Unit,
     onToggleForm: () -> Unit,
     onAction: (String, String?) -> Unit,
-    /** 有面板 / 扩展对话框打开：只有 ⇄ 可点，其余按钮停用（[CalmSurface] 里的说明）。 */
+    /** 有面板 / 扩展对话框打开：只有终端入口可点，其余按钮停用（[CalmSurface] 里的说明）。 */
     locked: Boolean = false,
 ) {
     val c = Calm.colors
     var menu by remember { mutableStateOf(false) }
-    val tint = if (locked) c.secondary else c.text
+    val tint = if (locked) c.tertiary else c.text
     // 上锁（来了面板 / 扩展对话框）时收起 ⋯ 菜单并复位：否则对话框结束后菜单会自己重新弹出（PR #26 定向复核 Nit）
     LaunchedEffect(locked) { if (locked) menu = false }
-    Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        IconButton(onClick = onMenu, enabled = !locked, modifier = Modifier.testTag(persistentTag("session.resume") ?: "persist:session.resume")) {
-            Icon(CalmIcons.Menu, contentDescription = "会话列表", tint = tint)
+    Box(Modifier.fillMaxWidth().height(56.dp).background(c.background)) {
+        IconButton(
+            onClick = onMenu, enabled = !locked,
+            modifier = Modifier.align(Alignment.CenterStart).padding(start = 4.dp).testTag(persistentTag("session.resume") ?: "persist:session.resume"),
+        ) {
+            Icon(CalmIcons.ArrowBack, contentDescription = "会话列表", tint = tint)
         }
         Column(
-            Modifier.weight(1f).clickable(enabled = !locked, onClick = onRename).padding(horizontal = 4.dp, vertical = 2.dp)
+            Modifier.align(Alignment.Center).padding(horizontal = 104.dp).clip(RoundedCornerShape(10.dp))
+                .clickable(enabled = !locked, onClick = onRename).padding(horizontal = 10.dp, vertical = 2.dp)
                 .testTag(persistentTag("session.name") ?: "persist:session.name"),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    title?.takeIf { it.isNotBlank() } ?: "新对话",
-                    style = Calm.type.title, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-                Icon(CalmIcons.ChevronDown, contentDescription = null, tint = c.secondary, modifier = Modifier.size(16.dp))
-            }
-            if (subtitle.isNotEmpty()) {
-                Text(subtitle, style = Calm.type.caption, color = c.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.testTag("calm:subtitle"))
-            }
-        }
-        IconButton(onClick = onCommands, enabled = !locked, modifier = Modifier.testTag("calm:commands")) {
-            Icon(CalmIcons.Command, contentDescription = "命令中心", tint = tint)
-        }
-        Box {
-            IconButton(onClick = { menu = true }, enabled = !locked, modifier = Modifier.testTag("calm:sessionMenu")) {
-                Icon(CalmIcons.More, contentDescription = "会话菜单", tint = tint)
-            }
-            // 菜单开着时弹出扩展对话框 / 面板：菜单一并收起
-            DropdownMenu(expanded = menu && !locked, onDismissRequest = { menu = false }) {
-                for ((id, label) in SESSION_MENU) {
-                    DropdownMenuItem(
-                        text = { Text(label, style = Calm.type.label) },
-                        onClick = { menu = false; if (id == "form.toggle") onToggleForm() else onAction(id, null) },
-                        modifier = Modifier.testTag("menu:$id"),
-                    )
+            Text(
+                title?.takeIf { it.isNotBlank() } ?: "新对话",
+                style = Calm.type.title, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            AnimatedVisibility(subtitle.isNotEmpty(), enter = fadeIn(tween(CalmDims.MOTION_MS)), exit = fadeOut(tween(CalmDims.MOTION_MS))) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (running) { BreathingDot(c.accent); Spacer(Modifier.width(5.dp)) }
+                    Text(subtitle, style = Calm.type.caption, color = c.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.testTag("calm:subtitle"))
                 }
             }
         }
-        Box(Modifier.testTag("form:toggle")) {
-            IconButton(onClick = onToggleForm, modifier = Modifier.testTag(persistentTag("form.toggle") ?: "persist:form.toggle")) {
-                Icon(CalmIcons.Swap, contentDescription = "切到终端形态", tint = c.text)
+        Row(Modifier.align(Alignment.CenterEnd).padding(end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.testTag("form:toggle")) {
+                IconButton(onClick = onToggleForm, modifier = Modifier.testTag(persistentTag("form.toggle") ?: "persist:form.toggle")) {
+                    Icon(CalmIcons.Terminal, contentDescription = "打开终端", tint = c.text)
+                }
+            }
+            Box {
+                IconButton(onClick = { menu = true }, enabled = !locked, modifier = Modifier.testTag("calm:sessionMenu")) {
+                    Icon(CalmIcons.More, contentDescription = "会话菜单", tint = tint)
+                }
+                // 菜单开着时弹出扩展对话框 / 面板：菜单一并收起
+                MinisMenu(expanded = menu && !locked, onDismissRequest = { menu = false }) {
+                    SESSION_MENU.forEachIndexed { i, (id, label) ->
+                        if (id in SESSION_MENU_DIVIDER_BEFORE && i > 0) MinisMenuDivider()
+                        MinisMenuItem(
+                            label = label,
+                            icon = sessionMenuIcon(id),
+                            onClick = { menu = false; if (id == "form.toggle") onToggleForm() else onAction(id, null) },
+                            modifier = Modifier.testTag("menu:$id"),
+                        )
+                    }
+                }
             }
         }
-        Spacer(Modifier.width(4.dp))
     }
 }
 
+/** 生成中标题下的呼吸点（OpenMinis 的 TypingIndicator / 呼吸动效的简化版）。 */
+@Composable
+internal fun BreathingDot(color: Color, size: androidx.compose.ui.unit.Dp = 6.dp) {
+    val t = rememberInfiniteTransition(label = "breath")
+    val a by t.animateFloat(0.3f, 1f, infiniteRepeatable(tween(700, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "breathAlpha")
+    Box(Modifier.size(size).graphicsLayer { alpha = a }.background(color, CircleShape))
+}
+
+private fun sessionMenuIcon(id: String) = when (id) {
+    "session.new" -> CalmIcons.Compose
+    "session.tree" -> CalmIcons.Branch
+    "session.clone" -> CalmIcons.Copy
+    "session.export" -> CalmIcons.Folder
+    "session.share" -> CalmIcons.Share
+    "transcript.search" -> CalmIcons.Search
+    "tools.expandAll" -> CalmIcons.Wrench
+    "session.info" -> CalmIcons.Info
+    "form.toggle" -> CalmIcons.Terminal
+    else -> null
+}
+
+/** 菜单分组：这些项前画分隔线（OpenMinis MinisMenuDivider 的用法）。 */
+internal val SESSION_MENU_DIVIDER_BEFORE = setOf("session.tree", "transcript.search", "form.toggle")
+
 /** 会话菜单（⋯，§4.3）。 */
 internal val SESSION_MENU: List<Pair<String, String>> = listOf(
+    "session.new" to "新对话",
+    "session.share" to "分享链接",
     "session.tree" to "分支树",
     "session.clone" to "复制会话",
     "session.export" to "导出（HTML / JSONL）",
@@ -371,5 +425,5 @@ internal val SESSION_MENU: List<Pair<String, String>> = listOf(
     "transcript.search" to "搜索本会话",
     "tools.expandAll" to "全部展开 / 折叠工具",
     "session.info" to "会话信息",
-    "form.toggle" to "切换形态",
+    "form.toggle" to "打开终端",
 )

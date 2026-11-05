@@ -3,6 +3,47 @@
 package io.github.zr987459.pigo.feature.chat.ui.calm
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.StartOffset
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.keyframes
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.DpOffset
+import androidx.compose.ui.unit.sp
+import io.github.zr987459.pigo.core.ui.calm.CalmDims
+import io.github.zr987459.pigo.core.ui.calm.CalmIcons
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -161,111 +202,234 @@ internal fun CalmMessages(
         EmptyHeader(chat, modifier)
         return
     }
+    // 等待首个 token：最后一条是用户消息且正在生成 → 助手页眉 + 跳动三点（OpenMinis TypingIndicator）
+    val waiting = chat.running && (chat.items.lastOrNull() as? ChatItem.User) != null && locals.isEmpty()
     LazyColumn(
         state = list,
         modifier = modifier.fillMaxWidth().testTag("calm:messages").onSizeChanged { viewportH = it.height },
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        items(rows, key = { it.key }) { row ->
+        itemsIndexed(rows, key = { _, r -> r.key }) { idx, row ->
+            val prev = rows.getOrNull(idx - 1)
+            val enter = Modifier.animateItem(fadeInSpec = tween(220), placementSpec = null, fadeOutSpec = tween(150))
             when (row) {
-                is Row_.Local -> LocalBlockView(row.block)
+                is Row_.Local -> LocalBlockView(row.block, enter)
                 is Row_.Item -> when (val it = row.item) {
-                    is ChatItem.User -> UserBlock(it, onAction, highlight = view.searchQuery)
-                    is ChatItem.Assistant -> AssistantBlock(it, view, onAction)
-                    is ChatItem.Tool -> ProcessRow(host, it, expandedByDefault = view.toolsExpanded)
-                    is ChatItem.Notice -> NoticeRow(it)
-                    is ChatItem.Raw -> Text("[${it.role ?: "raw"}]", style = Calm.type.caption, color = c.secondary)
+                    is ChatItem.User -> UserBlock(it, onAction, highlight = view.searchQuery, precededByUser = (prev as? Row_.Item)?.item is ChatItem.User, modifier = enter)
+                    is ChatItem.Assistant -> AssistantBlock(it, view, onAction, showHeader = startsAssistantTurn(prev), modifier = enter)
+                    is ChatItem.Tool -> Column(enter) {
+                        if (startsAssistantTurn(prev)) AssistantHeader()
+                        ProcessRow(host, it, expandedByDefault = view.toolsExpanded)
+                    }
+                    is ChatItem.Notice -> NoticeRow(it, enter)
+                    is ChatItem.Raw -> Text("[${it.role ?: "raw"}]", style = Calm.type.caption, color = c.secondary, modifier = enter)
                 }
             }
         }
+        if (waiting) item(key = "calm:typing") {
+            Column(Modifier.animateItem(fadeInSpec = tween(220), placementSpec = null, fadeOutSpec = tween(120)).testTag("calm:typing")) {
+                AssistantHeader()
+                Box(Modifier.padding(start = 2.dp, top = 8.dp, bottom = 8.dp)) { BouncingDots(c.secondary) }
+            }
+        }
     }
 }
 
-/** 空会话：pi 页眉信息（§4、X9：不放建议胶囊）。 */
+/** 助手一轮的开头（前一行是用户消息或列表开头）：画 OpenMinis 的助手页眉。 */
+private fun startsAssistantTurn(prev: Row_?): Boolean = prev == null || (prev as? Row_.Item)?.item is ChatItem.User
+
+/** 助手页眉（OpenMinis AssistantHeader：渐变 ✦ 图标 + 名字，16sp SemiBold）。 */
+@Composable
+private fun AssistantHeader() {
+    val c = Calm.colors
+    Row(Modifier.padding(top = 10.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+            CalmIcons.Sparkle, contentDescription = null,
+            modifier = Modifier.size(18.dp).graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                .drawWithCache {
+                    val brush = Brush.linearGradient(listOf(Color(0xFF7B61FF), Color(0xFF3FA9F5)))
+                    onDrawWithContent { drawContent(); drawRect(brush, blendMode = BlendMode.SrcAtop) }
+                },
+            tint = c.accent,
+        )
+        Spacer(Modifier.width(6.dp))
+        Text("pi", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = c.text)
+    }
+}
+
+/** 跳动三点（OpenMinis BouncingDots：4dp 圆点，700ms 周期，依次错开 120ms）。 */
+@Composable
+internal fun BouncingDots(color: Color) {
+    val t = rememberInfiniteTransition(label = "dots")
+    Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+        repeat(3) { i ->
+            val y by t.animateFloat(
+                0f, 1f,
+                infiniteRepeatable(keyframes { durationMillis = 700; 0f at 0; 1f at 175; 0f at 350; 0f at 700 }, RepeatMode.Restart, StartOffset(i * 120)),
+                label = "dot$i",
+            )
+            Box(Modifier.size(5.dp).graphicsLayer { translationY = -3.dp.toPx() * y }.background(color, CircleShape))
+        }
+    }
+}
+
+/** 空会话：pi 页眉信息（§4、X9：不放建议胶囊）——OpenMinis 空聊天页的居中问候样式。 */
 @Composable
 private fun EmptyHeader(chat: ChatState, modifier: Modifier) {
     val c = Calm.colors
-    Column(modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 32.dp).testTag("calm:empty"), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text("pi", style = Calm.type.title.copy(fontWeight = FontWeight.Bold), color = c.text)
-        chat.model?.let { Text("${it.provider} / ${it.name ?: it.id}" + (chat.thinkingLevel?.let { t -> " · $t" } ?: ""), style = Calm.type.code, color = c.secondary) }
+    Column(
+        modifier.fillMaxWidth().padding(horizontal = 32.dp).testTag("calm:empty"),
+        verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(Modifier.size(56.dp).background(c.accent.copy(alpha = 0.12f), CircleShape), contentAlignment = Alignment.Center) {
+            Text("π", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = c.accent)
+        }
+        Text("有什么可以帮你？", style = Calm.type.largeTitle, color = c.text)
+        chat.model?.let { Text("${it.provider} / ${it.name ?: it.id}" + (chat.thinkingLevel?.let { t -> " · $t" } ?: ""), style = Calm.type.caption, color = c.secondary) }
         Text("输入消息开始；/ 命令，@ 文件，! 运行命令。", style = Calm.type.label, color = c.secondary)
-        Text("⌘ 里能找到 pi 的全部功能。", style = Calm.type.label, color = c.secondary)
+        Text("点输入框里的 / 能找到 pi 的全部功能。", style = Calm.type.label, color = c.tertiary)
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+/**
+ * 用户气泡（OpenMinis UserMessageBubble）：靠右、最宽 80%、18dp 圆角、16.5sp；长按震动并弹出贴右对齐的菜单。
+ * 排队中的消息（delivery = QUEUED）画成透明底 + 虚线框 + 灰字。
+ */
 @Composable
-private fun UserBlock(item: ChatItem.User, onAction: (String, String?) -> Unit, highlight: String) {
+private fun UserBlock(item: ChatItem.User, onAction: (String, String?) -> Unit, highlight: String, precededByUser: Boolean, modifier: Modifier = Modifier) {
     val c = Calm.colors
+    val haptics = LocalHapticFeedback.current
     var menu by remember { mutableStateOf(false) }
     val hit = highlight.isNotBlank() && item.text.contains(highlight, ignoreCase = true)
-    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
-        Box(
-            Modifier.widthIn(max = 320.dp)
-                .background(if (hit) c.accent.copy(alpha = 0.18f) else c.userBlock, RoundedCornerShape(12.dp))
-                .combinedClickable(onClick = {}, onLongClick = { menu = true })
-                .padding(horizontal = 14.dp, vertical = 10.dp)
-                .testTag("msg:${item.key}"),
-        ) {
-            Text(item.text, style = Calm.type.body, color = c.text)
-            MessageMenu(menu, onDismiss = { menu = false }, key = item.key, text = item.text, isUser = true, onAction = onAction)
-        }
-    }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun AssistantBlock(item: ChatItem.Assistant, view: CalmViewState, onAction: (String, String?) -> Unit) {
-    val c = Calm.colors
-    var menu by remember { mutableStateOf(false) }
-    val markdown = item.blocks.filterIsInstance<ContentBlock.Text>().joinToString("\n") { it.text }
-    Column(
-        Modifier.fillMaxWidth().combinedClickable(onClick = {}, onLongClick = { menu = true }).testTag("msg:${item.key}"),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        for (b in item.blocks) {
-            when (b) {
-                is ContentBlock.Thinking -> ThinkingRow(b, view.thinkingExpanded)
-                is ContentBlock.Text -> MarkdownLite(b.text, highlight = view.searchQuery)
-                is ContentBlock.ToolCall -> Unit // 工具调用由 ChatItem.Tool 的过程行显示
+    val queued = item.delivery == io.github.zr987459.pigo.contract.Delivery.QUEUED
+    BoxWithConstraints(modifier.fillMaxWidth().padding(top = if (precededByUser) 14.dp else 10.dp, bottom = 4.dp)) {
+        val maxW = maxWidth * 0.8f
+        Row(Modifier.fillMaxWidth()) {
+            Spacer(Modifier.weight(1f).widthIn(min = 60.dp))
+            Box(Modifier.widthIn(max = maxW)) {
+                val shape = RoundedCornerShape(CalmDims.bubbleRadius)
+                Text(
+                    item.text,
+                    style = Calm.type.bubble,
+                    color = if (queued) c.secondary else c.text,
+                    modifier = Modifier
+                        .clip(shape)
+                        .background(if (hit) c.accent.copy(alpha = 0.22f) else if (queued) Color.Transparent else c.userBlock, shape)
+                        .then(if (queued) Modifier.dashedBorder(c.secondary.copy(alpha = 0.5f), CalmDims.bubbleRadius) else Modifier)
+                        .combinedClickable(onClick = {}, onLongClick = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); menu = true })
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                        .testTag("msg:${item.key}"),
+                )
+                MessageMenu(menu, onDismiss = { menu = false }, key = item.key, text = item.text, isUser = true, onAction = onAction, alignEnd = true)
             }
         }
-        item.errorMessage?.let { Text(it, style = Calm.type.label, color = c.error) }
-        MessageMenu(menu, onDismiss = { menu = false }, key = item.key, text = markdown, isUser = false, onAction = onAction)
     }
 }
 
-/** 长按消息菜单（§4.5）：复制、复制 Markdown、从这里分叉（用户消息）、设置标签、在分支树中定位。 */
+/** 虚线圆角框（OpenMinis 排队气泡）。 */
+internal fun Modifier.dashedBorder(color: Color, radius: androidx.compose.ui.unit.Dp): Modifier = drawBehind {
+    val stroke = Stroke(width = 1.5.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(6.dp.toPx(), 4.dp.toPx()), 0f))
+    drawRoundRect(color = color, cornerRadius = CornerRadius(radius.toPx(), radius.toPx()), style = stroke)
+}
+
+/** 助手消息（OpenMinis AssistantMessageView）：无气泡、全宽；思考块、正文 Markdown；正文增长时平滑撑开。 */
 @Composable
-private fun MessageMenu(expanded: Boolean, onDismiss: () -> Unit, key: String, text: String, isUser: Boolean, onAction: (String, String?) -> Unit) {
-    val clipboard = LocalClipboardManager.current
-    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
-        DropdownMenuItem(text = { Text("复制") }, onClick = { onDismiss(); clipboard.setText(AnnotatedString(stripMarkdown(text))) }, modifier = Modifier.testTag("msgmenu:copy"))
-        DropdownMenuItem(text = { Text("复制 Markdown") }, onClick = { onDismiss(); clipboard.setText(AnnotatedString(text)) }, modifier = Modifier.testTag("msgmenu:copyMd"))
-        if (isUser) {
-            DropdownMenuItem(text = { Text("从这里分叉") }, onClick = { onDismiss(); onAction("session.fork", key) }, modifier = Modifier.testTag("msgmenu:fork"))
+private fun AssistantBlock(item: ChatItem.Assistant, view: CalmViewState, onAction: (String, String?) -> Unit, showHeader: Boolean, modifier: Modifier = Modifier) {
+    val c = Calm.colors
+    val haptics = LocalHapticFeedback.current
+    var menu by remember { mutableStateOf(false) }
+    val markdown = item.blocks.filterIsInstance<ContentBlock.Text>().joinToString("\n") { it.text }
+    Column(modifier.fillMaxWidth()) {
+        if (showHeader) AssistantHeader()
+        Box {
+            Column(
+                Modifier.fillMaxWidth().animateContentSize(tween(160))
+                    .combinedClickable(onClick = {}, onLongClick = { haptics.performHapticFeedback(HapticFeedbackType.LongPress); menu = true })
+                    .padding(vertical = 4.dp)
+                    .testTag("msg:${item.key}"),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                for (b in item.blocks) {
+                    when (b) {
+                        is ContentBlock.Thinking -> ThinkingRow(b, view.thinkingExpanded, streaming = item.streaming && b === item.blocks.lastOrNull())
+                        is ContentBlock.Text -> MarkdownLite(b.text, highlight = view.searchQuery)
+                        is ContentBlock.ToolCall -> Unit // 工具调用由 ChatItem.Tool 的胶囊行显示
+                    }
+                }
+                item.errorMessage?.let { InlineErrorBanner(it) }
+            }
+            MessageMenu(menu, onDismiss = { menu = false }, key = item.key, text = markdown, isUser = false, onAction = onAction)
         }
-        DropdownMenuItem(
-            text = { Text("设置标签") },
-            onClick = { onDismiss(); onAction("tree.label", key) },
-            modifier = Modifier.testTag(longPressTag("tree.label") ?: "longpress:tree.label"),
-        )
-        DropdownMenuItem(text = { Text("在分支树中定位") }, onClick = { onDismiss(); onAction("session.tree", key) }, modifier = Modifier.testTag("msgmenu:locate"))
+    }
+}
+
+/** 行内错误条（OpenMinis InlineErrorBanner：浅红底 12dp 圆角 + ⚠）。 */
+@Composable
+private fun InlineErrorBanner(text: String) {
+    val c = Calm.colors
+    Row(
+        Modifier.fillMaxWidth().background(c.danger.copy(alpha = 0.08f), RoundedCornerShape(12.dp)).padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Icon(CalmIcons.Alert, contentDescription = null, tint = c.danger, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(8.dp))
+        Text(text, style = Calm.type.label, color = c.danger)
+    }
+}
+
+/** 长按消息菜单（§4.5，OpenMinis 带图标菜单）：复制、复制 Markdown、从这里分叉（用户消息）、设置标签、在分支树中定位。 */
+@Composable
+private fun MessageMenu(expanded: Boolean, onDismiss: () -> Unit, key: String, text: String, isUser: Boolean, onAction: (String, String?) -> Unit, alignEnd: Boolean = false) {
+    val clipboard = LocalClipboardManager.current
+    MinisMenu(expanded = expanded, onDismissRequest = onDismiss, alignEnd = alignEnd, offset = DpOffset(0.dp, 6.dp), minWidth = 200.dp) {
+        MinisMenuItem("复制", icon = CalmIcons.Copy, onClick = { onDismiss(); clipboard.setText(AnnotatedString(stripMarkdown(text))) }, modifier = Modifier.testTag("msgmenu:copy"))
+        MinisMenuItem("复制 Markdown", icon = CalmIcons.Copy, onClick = { onDismiss(); clipboard.setText(AnnotatedString(text)) }, modifier = Modifier.testTag("msgmenu:copyMd"))
+        MinisMenuDivider()
+        if (isUser) {
+            MinisMenuItem("从这里分叉", icon = CalmIcons.Branch, onClick = { onDismiss(); onAction("session.fork", key) }, modifier = Modifier.testTag("msgmenu:fork"))
+        }
+        MinisMenuItem("设置标签", icon = CalmIcons.Pencil, onClick = { onDismiss(); onAction("tree.label", key) }, modifier = Modifier.testTag(longPressTag("tree.label") ?: "longpress:tree.label"))
+        MinisMenuItem("在分支树中定位", icon = CalmIcons.Search, onClick = { onDismiss(); onAction("session.tree", key) }, modifier = Modifier.testTag("msgmenu:locate"))
     }
 }
 
 internal fun stripMarkdown(s: String): String = s.replace(Regex("```[a-zA-Z0-9_-]*\\n?"), "").replace(Regex("[*_`#>]+"), "")
 
+/**
+ * 思考块（OpenMinis ThinkingBlock）：浅蓝底 12dp 圆角卡片 + 0.5dp 蓝描边；生成中左侧转圈，结束后 💡；
+ * 标题「思考中… / 思考了 N 秒」+ 字数；点按展开 / 收起（展开有尺寸动画）。
+ */
 @Composable
-private fun ThinkingRow(b: ContentBlock.Thinking, expandAll: Boolean) {
+private fun ThinkingRow(b: ContentBlock.Thinking, expandAll: Boolean, streaming: Boolean) {
     val c = Calm.colors
     var open by rememberSaveable { mutableStateOf(false) }
     val shown = open || expandAll
-    Column(Modifier.fillMaxWidth().clickable { open = !open }.testTag("calm:thinking")) {
-        val secs = b.durationMs?.let { " ${(it / 1000).coerceAtLeast(1)} 秒" } ?: ""
-        Text((if (shown) "▾ " else "▸ ") + "思考了$secs", style = Calm.type.label, color = c.secondary)
-        if (shown) Text(b.text, style = Calm.type.label, color = c.secondary, modifier = Modifier.padding(start = 14.dp, top = 4.dp))
+    val blue = c.thinking
+    val arrow by animateFloatAsState(if (shown) 90f else 0f, tween(200), label = "thinkArrow")
+    Column(
+        Modifier.fillMaxWidth().padding(vertical = 4.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(blue.copy(alpha = 0.06f))
+            .border(0.5.dp, blue.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
+            .clickable { open = !open }
+            .animateContentSize(tween(200))
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .testTag("calm:thinking"),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (streaming) CircularProgressIndicator(color = blue, strokeWidth = 1.5.dp, modifier = Modifier.size(13.dp))
+            else Icon(CalmIcons.Lightbulb, contentDescription = null, tint = blue, modifier = Modifier.size(14.dp))
+            Spacer(Modifier.width(6.dp))
+            val secs = b.durationMs?.let { " ${(it / 1000).coerceAtLeast(1)} 秒" } ?: ""
+            Text(if (streaming) "思考中…" else "思考了$secs", style = Calm.type.label.copy(fontWeight = FontWeight.Medium), color = blue, modifier = Modifier.weight(1f))
+            val n = b.text.length
+            Text(if (n >= 1000) "${n / 1000}K 字" else "$n 字", style = Calm.type.caption, color = blue.copy(alpha = 0.7f))
+            Spacer(Modifier.width(4.dp))
+            Icon(CalmIcons.ChevronRight, contentDescription = null, tint = blue.copy(alpha = 0.7f), modifier = Modifier.size(14.dp).graphicsLayer { rotationZ = arrow })
+        }
+        if (shown) Text(b.text, style = Calm.type.label, color = c.secondary, modifier = Modifier.padding(top = 6.dp))
     }
 }
 
@@ -273,13 +437,13 @@ private fun ThinkingRow(b: ContentBlock.Thinking, expandAll: Boolean) {
 @Composable
 internal fun MarkdownLite(text: String, highlight: String = "") {
     val c = Calm.colors
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         for (seg in splitFences(text)) {
             when (seg) {
                 is MdSegment.Prose -> SelectionContainer {
                     val hit = highlight.isNotBlank() && seg.text.contains(highlight, ignoreCase = true)
                     Text(
-                        seg.text,
+                        inlineMarkdown(seg.text, c.inlineCodeBg, c.inlineCodeText, c.link),
                         style = Calm.type.body,
                         color = c.text,
                         modifier = if (hit) Modifier.background(c.accent.copy(alpha = 0.12f)) else Modifier,
@@ -291,112 +455,189 @@ internal fun MarkdownLite(text: String, highlight: String = "") {
     }
 }
 
+/** 行内 Markdown（**粗体**、`行内代码`、标题 #）：OpenMinis 行内代码 = 浅灰底 + 橙字。 */
+internal fun inlineMarkdown(src: String, codeBg: Color, codeFg: Color, link: Color): AnnotatedString = buildAnnotatedString {
+    val lines = src.split('\n')
+    lines.forEachIndexed { li, raw ->
+        var line = raw
+        val heading = Regex("^(#{1,6})\\s+").find(line)
+        val headStart = length
+        if (heading != null) line = line.substring(heading.value.length)
+        var i = 0
+        while (i < line.length) {
+            when {
+                line.startsWith("**", i) && line.indexOf("**", i + 2) > i -> {
+                    val e = line.indexOf("**", i + 2)
+                    withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append(line.substring(i + 2, e)) }
+                    i = e + 2
+                }
+                line[i] == '`' && line.indexOf('`', i + 1) > i -> {
+                    val e = line.indexOf('`', i + 1)
+                    withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = codeBg, color = codeFg, fontSize = 14.sp)) { append(" " + line.substring(i + 1, e) + " ") }
+                    i = e + 1
+                }
+                else -> { append(line[i]); i++ }
+            }
+        }
+        if (heading != null) addStyle(SpanStyle(fontWeight = FontWeight.Bold, fontSize = (20 - heading.groupValues[1].length).coerceAtLeast(16).sp), headStart, length)
+        if (li < lines.lastIndex) append('\n')
+    }
+}
+
+/** 代码块（OpenMinis：黑底绿字 / 深色 #262626，12dp 圆角；顶部语言名 + 复制）。 */
 @Composable
 private fun CodeBlock(lang: String, code: String) {
     val c = Calm.colors
+    val clipboard = LocalClipboardManager.current
     var diagram by rememberSaveable(code) { mutableStateOf(false) }
     val isMermaid = lang.equals("mermaid", ignoreCase = true)
-    Column(
-        Modifier.fillMaxWidth().background(c.surface, RoundedCornerShape(12.dp)).border(1.dp, c.stroke, RoundedCornerShape(12.dp)).padding(12.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(lang.ifBlank { "code" }, style = Calm.type.caption, color = c.secondary, modifier = Modifier.weight(1f))
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(c.codeBlockBg)) {
+        Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(lang.ifBlank { "code" }, style = Calm.type.caption, color = c.codeBlockText.copy(alpha = 0.6f), modifier = Modifier.weight(1f))
             if (isMermaid) {
                 Text(
                     if (diagram) "代码" else "图示",
-                    style = Calm.type.caption, color = c.accent,
-                    modifier = Modifier.clickable { diagram = !diagram }.padding(4.dp).testTag("calm:mermaidToggle"),
+                    style = Calm.type.caption, color = c.codeBlockText,
+                    modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { diagram = !diagram }.padding(6.dp).testTag("calm:mermaidToggle"),
                 )
             }
+            IconButton(onClick = { clipboard.setText(AnnotatedString(code)) }, modifier = Modifier.size(32.dp)) {
+                Icon(CalmIcons.Copy, contentDescription = "复制代码", tint = c.codeBlockText.copy(alpha = 0.7f), modifier = Modifier.size(15.dp))
+            }
         }
-        Spacer(Modifier.size(6.dp))
-        Box(Modifier.horizontalScroll(rememberScrollState())) {
+        Box(Modifier.horizontalScroll(rememberScrollState()).padding(start = 12.dp, end = 12.dp, bottom = 12.dp)) {
             SelectionContainer {
-                Text(if (isMermaid && diagram) MermaidAscii.render(code) else code, style = Calm.type.code, color = c.text)
+                Text(if (isMermaid && diagram) MermaidAscii.render(code) else code, style = Calm.type.code.copy(fontSize = 13.sp, lineHeight = 19.sp), color = c.codeBlockText)
             }
         }
     }
 }
 
-/** 过程行（§4.5 ProcessRow）：工具、bash 共用骨架；点开看参数与输出。 */
+/**
+ * 工具胶囊（OpenMinis ToolCallPill）：36dp 高的圆角胶囊（toolCapsuleBg + 0.5dp 描边），左图标（状态色）、标题、
+ * 运行中跳动三点 + 扫光、右侧等宽耗时；点按在下方展开参数与输出卡片（OpenMinis 打开详情面板，这里就地展开）。
+ */
 @Composable
 private fun ProcessRow(host: SessionHost, item: ChatItem.Tool, expandedByDefault: Boolean) {
     val c = Calm.colors
     var open by rememberSaveable(item.key) { mutableStateOf(false) }
     val shown = open || expandedByDefault
-    val dot = when (item.status) {
+    val running = item.status == ToolStatus.RUNNING || item.status == ToolStatus.PENDING
+    val tint = when (item.status) {
         ToolStatus.PENDING, ToolStatus.RUNNING -> c.accent
         ToolStatus.OK -> c.success
-        ToolStatus.ERROR -> c.error
+        ToolStatus.ERROR -> c.danger
     }
-    Column(Modifier.fillMaxWidth().testTag("tool:${item.key}")) {
-        Row(Modifier.fillMaxWidth().clickable { open = !open }.padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-            val running = item.status == ToolStatus.RUNNING || item.status == ToolStatus.PENDING
-            Box(
-                Modifier.size(8.dp).then(
-                    if (running) Modifier.border(1.5.dp, dot, CircleShape) else Modifier.background(dot, CircleShape),
-                ),
-            )
-            Spacer(Modifier.size(10.dp))
-            Text(toolSummary(item), style = Calm.type.label, color = c.text, maxLines = 1, modifier = Modifier.weight(1f))
-            editStats(item)?.let { (add, del) ->
-                Text("+$add −$del", style = Calm.type.caption, color = c.secondary, modifier = Modifier.padding(start = 8.dp))
+    Column(Modifier.fillMaxWidth().padding(vertical = 3.dp).animateContentSize(tween(200)).testTag("tool:${item.key}")) {
+        Box(Modifier.widthIn(max = 520.dp)) {
+            Row(
+                Modifier.clip(CircleShape).background(c.toolCapsuleBg).border(0.5.dp, c.toolBorder, CircleShape)
+                    .clickable { open = !open }
+                    .padding(horizontal = 12.dp).height(36.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(toolIcon(item.toolName), contentDescription = null, tint = tint, modifier = Modifier.size(14.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(toolSummary(item), fontSize = 13.sp, fontWeight = FontWeight.Medium, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                if (running) { Spacer(Modifier.width(4.dp)); BouncingDots(c.text) }
+                editStats(item)?.let { (add, del) ->
+                    Spacer(Modifier.width(8.dp))
+                    Text("+$add", fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = c.success)
+                    Text(" −$del", fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = c.danger)
+                }
+                item.durationMs?.let {
+                    Spacer(Modifier.width(8.dp))
+                    val sec = it / 1000.0
+                    Text(if (sec < 10) "%.1fs".format(sec) else "%.0fs".format(sec), fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = c.secondary.copy(alpha = 0.6f), maxLines = 1)
+                }
             }
-            item.durationMs?.let { Text(" %.1fs".format(it / 1000.0), style = Calm.type.caption, color = c.secondary) }
+            if (running) Shimmer(Modifier.matchParentSize().clip(CircleShape))
         }
         if (shown) {
             val out = toolOutput(item)
             if (out.isNotBlank()) {
                 Box(
-                    Modifier.fillMaxWidth().padding(start = 18.dp, top = 4.dp)
-                        .background(c.surface, RoundedCornerShape(10.dp)).border(1.dp, c.stroke, RoundedCornerShape(10.dp))
+                    Modifier.fillMaxWidth().padding(top = 6.dp)
+                        .clip(RoundedCornerShape(12.dp)).background(c.toolCapsuleBg).border(0.5.dp, c.toolBorder, RoundedCornerShape(12.dp))
                         .padding(10.dp).horizontalScroll(rememberScrollState()),
                 ) {
-                    SelectionContainer { Text(out.lines().take(200).joinToString("\n"), style = Calm.type.code, color = c.text) }
+                    SelectionContainer { Text(out.lines().take(200).joinToString("\n"), style = Calm.type.code.copy(fontSize = 12.5.sp, lineHeight = 18.sp), color = c.text) }
                 }
             }
             fullOutputPath(item)?.let { path ->
                 Text(
                     "查看完整输出",
                     style = Calm.type.caption, color = c.accent,
-                    modifier = Modifier.padding(start = 18.dp, top = 4.dp).clickable {
+                    modifier = Modifier.padding(top = 4.dp).clip(RoundedCornerShape(8.dp)).clickable {
                         host.overlay.push(OverlayModel.FullOutput(id = "fullOutput", title = "完整输出", path = path))
-                    }.testTag("calm:fullOutput"),
+                    }.padding(6.dp).testTag("calm:fullOutput"),
                 )
             }
         }
     }
 }
 
-/** 压缩卡、分支摘要卡（SummaryCard）与其他提示。 */
+private fun toolIcon(name: String) = when (name) {
+    "bash" -> CalmIcons.Terminal
+    "read", "ls", "find", "grep" -> CalmIcons.Search
+    "edit", "write" -> CalmIcons.Pencil
+    else -> CalmIcons.Wrench
+}
+
+/** 运行中工具胶囊上的扫光（OpenMinis 1.4s 周期、60% 宽白色渐变带）。 */
 @Composable
-private fun NoticeRow(item: ChatItem.Notice) {
+private fun Shimmer(modifier: Modifier) {
+    val t = rememberInfiniteTransition(label = "shimmer")
+    val phase by t.animateFloat(0f, 1f, infiniteRepeatable(tween(1400, easing = LinearEasing)), label = "shimmerPhase")
+    Box(
+        modifier.graphicsLayer { translationX = (-1f + phase * 3f) * size.width * 0.6f }
+            .drawWithCache {
+                val band = size.width * 0.6f
+                val brush = Brush.linearGradient(listOf(Color.White.copy(alpha = 0f), Color.White.copy(alpha = 0.18f), Color.White.copy(alpha = 0f)), start = Offset.Zero, end = Offset(band, 0f))
+                onDrawBehind { drawRect(brush, size = Size(band, size.height)) }
+            },
+    )
+}
+
+/** 压缩卡、分支摘要卡（SummaryCard）与其他提示（OpenMinis：居中细分隔线 + 文案）。 */
+@Composable
+private fun NoticeRow(item: ChatItem.Notice, modifier: Modifier = Modifier) {
     val c = Calm.colors
     if (item.kind == NoticeKind.COMPACTION) {
         var open by rememberSaveable(item.key) { mutableStateOf(false) }
         Column(
-            Modifier.fillMaxWidth().border(1.dp, c.stroke, RoundedCornerShape(12.dp)).clickable { open = !open }.padding(12.dp).testTag("calm:summaryCard"),
+            modifier.fillMaxWidth().padding(vertical = 6.dp).clip(RoundedCornerShape(12.dp)).background(c.toolCapsuleBg)
+                .clickable { open = !open }.animateContentSize(tween(200)).padding(12.dp).testTag("calm:summaryCard"),
         ) {
             Text(item.text.lineSequence().firstOrNull().orEmpty(), style = Calm.type.label, color = c.secondary)
             if (open) Text(item.text, style = Calm.type.label, color = c.text, modifier = Modifier.padding(top = 6.dp))
         }
         return
     }
-    val color = when (item.kind) {
-        NoticeKind.ERROR -> c.error
-        else -> c.secondary
+    if (item.kind == NoticeKind.ERROR) {
+        Box(modifier.padding(vertical = 4.dp)) { InlineErrorBanner(item.text) }
+        return
     }
-    Text(item.text, style = Calm.type.caption, color = color, modifier = Modifier.fillMaxWidth())
+    Row(modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.weight(1f).height(0.5.dp).background(c.stroke))
+        Text(item.text, style = Calm.type.caption, color = c.secondary, modifier = Modifier.padding(horizontal = 10.dp).widthIn(max = 280.dp), maxLines = 3)
+        Box(Modifier.weight(1f).height(0.5.dp).background(c.stroke))
+    }
 }
 
 @Composable
-private fun LocalBlockView(block: LocalBlock) {
+private fun LocalBlockView(block: LocalBlock, modifier: Modifier = Modifier) {
     val c = Calm.colors
     Column(
-        Modifier.fillMaxWidth().border(1.dp, c.stroke, RoundedCornerShape(12.dp)).padding(12.dp).testTag("local:${block.title}"),
+        modifier.fillMaxWidth().padding(vertical = 6.dp).clip(RoundedCornerShape(12.dp)).background(c.toolCapsuleBg)
+            .border(0.5.dp, c.toolBorder, RoundedCornerShape(12.dp)).padding(12.dp).testTag("local:${block.title}"),
     ) {
-        Text(block.title.removePrefix("explain:").let { if (block.title.startsWith("explain:")) "说明" else it }, style = Calm.type.caption, color = c.secondary)
-        Spacer(Modifier.size(4.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(CalmIcons.Info, contentDescription = null, tint = c.accent, modifier = Modifier.size(14.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(block.title.removePrefix("explain:").let { if (block.title.startsWith("explain:")) "说明" else it }, style = Calm.type.caption.copy(fontWeight = FontWeight.Medium), color = c.secondary)
+        }
+        Spacer(Modifier.size(6.dp))
         SelectionContainer { Text(block.text, style = Calm.type.label, color = c.text) }
     }
 }

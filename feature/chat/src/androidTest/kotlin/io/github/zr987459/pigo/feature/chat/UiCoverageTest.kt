@@ -111,7 +111,8 @@ class UiCoverageTest {
     private fun resetUi() {
         compose.runOnIdle { host.overlay.clear() }
         if (exists("calm:expandedClose")) compose.onNodeWithTag("calm:expandedClose").performClick()
-        if (exists("calm:drawerScrim")) compose.onNodeWithTag("calm:drawerScrim").performTouchInput { click(Offset(width - 8f, height / 2f)) }
+        // r5：会话列表是整页（OpenMinis 首页），用「继续当前对话」回到聊天页
+        if (exists("calm:drawer")) compose.onNodeWithTag("drawer:back").performClick()
         compose.waitForIdle()
     }
 
@@ -302,7 +303,7 @@ class UiCoverageTest {
     @Test
     fun leavingAndReenteringCalmRestoresDraftOverlayAndReadingPosition() {
         setCalm()
-        // 一键切换：顶栏 ⇄
+        // 一键进入终端：聊天页顶栏的终端图标（r5 起终端是 OpenMinis 式独立页面）
         compose.onNodeWithTag("form:toggle").performClick()
         compose.waitForIdle()
         assertEquals(UiForm.TERM, host.form.value)

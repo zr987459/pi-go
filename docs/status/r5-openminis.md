@@ -4,7 +4,11 @@
 - 2026-11-05 11:02 CST **需求变更**（用户：「这个也有终端呀」）：终端也照 OpenMinis 的内置终端做（交互、入口、样式），
   替换/改造现有终端形态；全 App 统一按 OpenMinis 的方式，**不再保留「我们自己的终端形态 + ⇄ 切换」**（此前「保留终端形态可切换」作废）。
   pi 原生功能仍不能丢：终端侧的 pi 功能经 OpenMinis 式终端/入口可达。形态切换相关测试按新结构如实改写（保留「不重启引擎、草稿/会话不丢」的断言）。
-- 2026-11-05 11:20 CST 阶段 1 进行中：已通读 OpenMinis src/android 的 theme、chat、sessions、terminal；对照表写入 docs/r5-openminis-map.md。
+- 2026-11-05 11:20 CST 阶段 1：已通读 OpenMinis src/android 的 theme、chat、sessions、terminal；对照表写入 docs/r5-openminis-map.md。
+- 2026-11-05 11:50 CST 阶段 2–6 第一批完成并推送（本地 :feature:chat/:feature:term/:core:contract/:core:session/:app 单测全绿，三个模块仪器测试编译通过）：
+  主题换 OpenMinis 色板；聊天页（← / 居中标题 / 终端图标 / ⋯ 图标菜单）、消息（右侧 18dp 气泡、助手页眉、思考卡片、工具胶囊 + 扫光、代码块黑底绿字、错误条、等待三点）、
+  输入卡片（阴影、＋ / ／ 圆钮、红色停止键、排队虚线气泡 + 红色撤回、上滑发送）、会话列表整页（分节、头像、FAB、长按菜单、撤销条）、底部面板（28dp、拖动条、滑入）、
+  终端页（黑底、✕ / 标题 / 🖌、键盘附件条、返回键回聊天）；FormHost 推入转场；返回键改为 OpenMinis 两级导航；测试按新结构改写（见 PR 描述）。
 
 ## 目标
 照 OpenMinis Android 端（src/android，Kotlin/Compose）重做 pi-go 的界面与交互：布局、消息流/气泡、输入框、会话列表、设置与模型配置、动效、**终端**。
@@ -30,4 +34,7 @@
 7. 测试与 CI 全绿（build、单测、模拟器、真 pi 桥），开 PR 到 main。
 
 ## 下一步（精确）
-- 写 docs/r5-openminis-map.md；装本地构建环境（JDK17 + SDK35 + qemu aapt2，/tmp/ab）；从 core/ui/calm/CalmTheme.kt 开始换 OpenMinis 调色板。
+- 盯本次推送的 CI（build、realpi、模拟器 UiCoverageTest/TermCoverageTest/AppCoverageTest/FormSwitchStreamingTest/SettingsScreenUiTest）；失败按日志修。
+- 设置 › 模型页（feature/settings QuickModelSetupPage）换 OpenMinis 分组卡片外观（逻辑不动）。
+- 全绿后开 PR（r5/openminis → main），描述含改动、证据（测试名 + CI run id）、来源说明、已知差距。
+- 本地构建：/workspace/work/gw.sh（JDK17 + SDK35 + /tmp/ab/aapt2 qemu 包装；/tmp 丢失时按 r3-app.md 记的方法重装：qemu-user-static + debian amd64 libc6/libgcc-s1/libstdc++6 解包到 /tmp/ab/amd64）。

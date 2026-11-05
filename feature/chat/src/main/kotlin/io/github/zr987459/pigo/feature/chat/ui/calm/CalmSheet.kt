@@ -1,5 +1,15 @@
 package io.github.zr987459.pigo.feature.chat.ui.calm
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.unit.sp
+import io.github.zr987459.pigo.core.ui.calm.CalmDims
+
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -101,25 +111,37 @@ internal fun CalmSheet(
         }
     }
     val full = model.id == COMMANDS_OVERLAY_ID || model is OverlayModel.Tree || model is OverlayModel.FullOutput
+    // OpenMinis StandardChatSheet：28dp 顶部圆角、拖动条、居中粗标题、右上灰色圆形 ×；从底部滑入（260ms）、遮罩淡入。
+    val enter = remember(model.id) { Animatable(1f) }
+    LaunchedEffect(model.id) { enter.animateTo(0f, tween(260, easing = FastOutSlowInEasing)) }
+    val sheetShape = RoundedCornerShape(topStart = CalmDims.sheetRadius, topEnd = CalmDims.sheetRadius)
     Box(Modifier.fillMaxSize()) {
         Box(
-            Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.32f)).clickable(
+            Modifier.fillMaxSize().graphicsLayer { alpha = 1f - enter.value }.background(Color.Black.copy(alpha = 0.4f)).clickable(
                 interactionSource = remember { MutableInteractionSource() }, indication = null,
             ) { if (model !is OverlayModel.ExtDialog) onDismiss() },
         )
         Column(
             Modifier.align(Alignment.BottomCenter).fillMaxWidth()
-                .then(if (full) Modifier.fillMaxHeight(0.92f) else Modifier.heightIn(max = 560.dp))
-                .background(c.background, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
-                .border(1.dp, c.stroke, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
+                .then(if (full) Modifier.fillMaxHeight(0.92f) else Modifier.heightIn(max = 600.dp))
+                .graphicsLayer { translationY = enter.value * size.height }
+                .shadow(16.dp, sheetShape)
+                .background(if (c.isDark) Color(0xFF1C1C1E) else c.groupedBg, sheetShape)
                 .navigationBarsPadding().imePadding()
-                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .padding(horizontal = 16.dp)
                 .testTag("overlay:${model.id}"),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(model.title, style = Calm.type.title, color = c.text, modifier = Modifier.weight(1f))
+            Box(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier.size(width = 36.dp, height = 5.dp).background(c.tertiary, RoundedCornerShape(50)))
+            }
+            Box(Modifier.fillMaxWidth().heightIn(min = 44.dp), contentAlignment = Alignment.Center) {
+                Text(model.title, style = Calm.type.title, color = c.text, maxLines = 1, modifier = Modifier.padding(horizontal = 48.dp))
                 if (model !is OverlayModel.ExtDialog) {
-                    IconButton(onClick = onDismiss, modifier = Modifier.testTag("overlay:close")) { Icon(CalmIcons.Close, contentDescription = "关闭", tint = c.secondary) }
+                    Box(
+                        Modifier.align(Alignment.CenterEnd).size(30.dp).clip(CircleShape).background(c.secondary.copy(alpha = 0.14f))
+                            .clickable(onClick = onDismiss).testTag("overlay:close"),
+                        contentAlignment = Alignment.Center,
+                    ) { Icon(CalmIcons.Close, contentDescription = "关闭", tint = c.secondary, modifier = Modifier.size(14.dp)) }
                 }
             }
             Spacer(Modifier.size(8.dp))
@@ -152,7 +174,7 @@ internal fun CalmSheet(
 private fun SearchField(value: String, placeholder: String, tag: String, onChange: (String) -> Unit) {
     val c = Calm.colors
     Row(
-        Modifier.fillMaxWidth().background(c.surface, RoundedCornerShape(12.dp)).border(1.dp, c.stroke, RoundedCornerShape(12.dp)).padding(horizontal = 12.dp, vertical = 10.dp),
+        Modifier.fillMaxWidth().background(if (c.isDark) Color(0xFF2C2C2E) else Color(0x1F767680), RoundedCornerShape(12.dp)).padding(horizontal = 10.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(CalmIcons.Search, contentDescription = null, tint = c.secondary, modifier = Modifier.size(16.dp))
@@ -214,14 +236,14 @@ private fun ColumnScope.CommandCenter(host: SessionHost, model: OverlayModel.Sel
 @Composable
 private fun CommandRow(spec: PiActionSpec, onClick: () -> Unit) {
     val c = Calm.colors
-    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 12.dp).testTag("action:${spec.id}"), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick).padding(horizontal = 8.dp, vertical = 12.dp).testTag("action:${spec.id}"), verticalAlignment = Alignment.CenterVertically) {
         Text(spec.title, style = Calm.type.body, color = c.text, modifier = Modifier.weight(1f), maxLines = 1)
         val hint = when {
             spec.slash.isNotEmpty() -> spec.slash.joinToString(" ") { "/$it" }
             spec.ui is UiEntry.Explain -> "说明"
             else -> ""
         }
-        if (hint.isNotEmpty()) Text(hint, style = Calm.type.code, color = c.secondary)
+        if (hint.isNotEmpty()) Text(hint, style = Calm.type.code.copy(fontSize = 13.sp), color = c.accent)
     }
 }
 
@@ -244,8 +266,8 @@ private fun ColumnScope.SelectListView(host: SessionHost, model: OverlayModel.Se
             for (t in model.tabs) {
                 val sel = t == (model.tab ?: model.tabs.first())
                 Text(
-                    t, style = Calm.type.label, color = if (sel) c.background else c.text,
-                    modifier = Modifier.background(if (sel) c.accent else c.surface, RoundedCornerShape(12.dp)).border(1.dp, c.stroke, RoundedCornerShape(12.dp))
+                    t, style = Calm.type.label, color = if (sel) Color.White else c.text,
+                    modifier = Modifier.clip(RoundedCornerShape(50)).background(if (sel) c.accent else c.surface)
                         .clickable { update { it.copy(tab = t, scrollIndex = 0) }; panel?.invoke("tab:$t", model.query) }.padding(horizontal = 12.dp, vertical = 6.dp).testTag("tab:$t"),
                 )
             }

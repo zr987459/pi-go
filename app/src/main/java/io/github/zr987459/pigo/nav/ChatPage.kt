@@ -14,7 +14,7 @@ import io.github.zr987459.pigo.contract.workspace.FileMatch
 import io.github.zr987459.pigo.feature.term.FileMatch as TermFileMatch
 
 /**
- * 会话页（DESIGN-r3 §5.2）：FormHost 的两层 + 两形态共用的装配（面板事件、@ 文件搜索、＋ › 图片、返回键、退到后台）。
+ * 会话页（DESIGN-r3 §5.2；r5：聊天页 + OpenMinis 式终端页）：FormHost 的两页 + 共用的装配（面板事件、@ 文件搜索、＋ › 图片、返回键、退到后台）。
  * PiGoNavHost 用 AppGraph 的真实依赖调用它；仪器测试（FormSwitchStreamingTest、AppCoverageTest）用同一个函数、换成 Fake 依赖，
  * 所以测到的就是 App 里那份接线（PR #26 审查 I2、Nit 3）。
  */
@@ -53,7 +53,9 @@ fun ChatPage(
                 )
             }
             // 返回键：与 Esc 同一条 TermPanelRouter.close（done / cancel 结果落地、清面板提示）；扩展对话框固定在顶不被关；
-            // 都没有时不拦截，FormHost 退到后台（PR #26 审查 Nit 1）。
+            // 没有可关的面板时（r5，OpenMinis 终端页）返回 = 关闭终端回到聊天页（同一会话、草稿与引擎不变）。
+            // 这个 BackHandler 先注册、优先级低于 TermSurface 自己的面板返回键；扩展对话框等待应答时也回聊天页（对话框两页共用，仍在栈顶）。
+            BackHandler { host.form.value = io.github.zr987459.pigo.contract.session.UiForm.CALM }
             TermSurface(host, cwd = cwd, home = home, env = env, backHandler = { enabled, onBack -> BackHandler(enabled, onBack) })
         },
         // 各层都关着时按返回：退到后台，不结束 Activity、不打断生成（两形态同理）。
