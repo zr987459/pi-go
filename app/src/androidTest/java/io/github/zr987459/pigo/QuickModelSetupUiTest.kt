@@ -78,7 +78,11 @@ class QuickModelSetupUiTest {
     }
 
     private fun list() = rule.onNodeWithTag(QuickTags.LIST)
-    private fun waitTag(tag: String) = rule.waitUntil(5_000) { rule.onAllNodes(hasTestTag(tag)).fetchSemanticsNodes().isNotEmpty() }
+    // r5：服务商改成 OpenMinis 式分组卡片的单选行后页面更长，模型行可能在首屏外（LazyColumn 不组合）——边滚边等它出现。
+    private fun waitTag(tag: String) = rule.waitUntil(5_000) {
+        rule.onAllNodes(hasTestTag(tag)).fetchSemanticsNodes().isNotEmpty() ||
+            runCatching { list().performScrollToNode(hasTestTag(tag)) }.isSuccess
+    }
 
     @Test fun pickProviderTypeKeyPickModelSaveHotReloadsAndChatUsesIt() {
         var shown by mutableStateOf(true)
@@ -86,6 +90,7 @@ class QuickModelSetupUiTest {
         restoration.setContent { if (shown) QuickModelSetupPage(actions) }
         rule.onNodeWithTag(QuickTags.preset("deepseek")).performClick()
         waitTag(QuickTags.model("deepseek-reasoner"))
+        list().performScrollToNode(hasTestTag(QuickTags.KEY))
         rule.onNodeWithTag(QuickTags.KEY).performTextInput("sk-test-0123456789abcdef")
         list().performScrollToNode(hasTestTag(QuickTags.model("deepseek-reasoner")))
         rule.onNodeWithTag(QuickTags.model("deepseek-reasoner")).performClick()
@@ -93,7 +98,9 @@ class QuickModelSetupUiTest {
         // N5：模拟转屏（保存并恢复实例状态、重建组合），已选模型不被清空
         restoration.emulateSavedInstanceStateRestore()
         waitTag(QuickTags.model("deepseek-reasoner"))
+        list().performScrollToNode(hasTestTag(QuickTags.MODEL_INPUT))
         rule.onNodeWithTag(QuickTags.MODEL_INPUT).assertTextContains("deepseek-reasoner")
+        list().performScrollToNode(hasTestTag(QuickTags.KEY))
         rule.onNodeWithTag(QuickTags.KEY).performTextInput("sk-test-0123456789abcdef") // Key 只在内存里，重建后要重填
 
         list().performScrollToNode(hasTestTag(QuickTags.SAVE))
@@ -117,9 +124,13 @@ class QuickModelSetupUiTest {
 
     @Test fun customEndpointNeedsOnlyBaseUrlAndKeyAndBadUrlIsExplained() {
         rule.setContent { QuickModelSetupPage(actions, onAdvanced = {}) }
+        list().performScrollToNode(hasTestTag(QuickTags.preset(QuickModelSetup.CUSTOM)))
         rule.onNodeWithTag(QuickTags.preset(QuickModelSetup.CUSTOM)).performClick()
+        list().performScrollToNode(hasTestTag(QuickTags.BASE_URL))
         rule.onNodeWithTag(QuickTags.BASE_URL).assertIsDisplayed().performTextInput("example.com")
+        list().performScrollToNode(hasTestTag(QuickTags.KEY))
         rule.onNodeWithTag(QuickTags.KEY).performTextInput("sk-test-0123456789abcdef")
+        list().performScrollToNode(hasTestTag(QuickTags.MODEL_INPUT))
         rule.onNodeWithTag(QuickTags.MODEL_INPUT).performTextInput("m1")
         list().performScrollToNode(hasTestTag(QuickTags.TEST))
         rule.onNodeWithTag(QuickTags.TEST).performClick()

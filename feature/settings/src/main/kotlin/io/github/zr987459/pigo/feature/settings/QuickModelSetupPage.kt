@@ -3,22 +3,32 @@ package io.github.zr987459.pigo.feature.settings
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.material3.Button
-import androidx.compose.material3.FilterChip
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Surface
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.VisualTransformation
+import io.github.zr987459.pigo.feature.settings.ui.PlainFilledButton
+import io.github.zr987459.pigo.feature.settings.ui.PlainOutlinedButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -87,7 +97,6 @@ object QuickTags {
  * 设置 › 模型（r4）：选服务商 → 填 Key → 选模型（自动拉列表）→ 测试连接 → 保存并使用。
  * 其余服务商、账号登录（OAuth）、代理、运行环境都在「高级设置」（[onAdvanced]，即原来的完整页面）。
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun QuickModelSetupPage(
     actions: QuickSetupActions,
@@ -134,88 +143,89 @@ fun QuickModelSetupPage(
     // 保存成功后清掉内存里的 Key。
     LaunchedEffect(saveState) { if (saveState is QuickSaveState.Done) key = "" }
 
+    // r5：照 OpenMinis 设置页（`ui/components/SettingsSection.kt` + `SectionDesign.kt` + `SectionTextField.kt`）的分组卡片外观：
+    // iOS 式分组底色、强调色小标题、16dp 圆角卡片、行高 ≥44dp、行间 0.5dp 内缩细线、无边框输入框、选中行右侧 ✓。逻辑不变。
     PlainBackdrop(modifier.testTag(QuickTags.PAGE)) {
         LazyColumn(Modifier.fillMaxSize().testTag(QuickTags.LIST), contentPadding = PaddingValues(top = 8.dp, bottom = 40.dp)) {
             if (onBack != null) item { BackButton(onBack, Modifier.padding(start = 12.dp).testTag("settings:back")) }
             item { LargeTitle("模型", subtitle = "选服务商、填 Key、选模型，保存后马上就能聊") }
             item {
-                Text(
-                    "正在使用：" + (current ?: "还没有"),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = SettingsColors.faint,
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp).testTag(QuickTags.CURRENT),
-                )
-            }
-            item { Step("1  选服务商") }
-            item {
-                FlowRow(Modifier.padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    actions.presets.forEach { p ->
-                        FilterChip(
-                            selected = p.id == presetId,
-                            onClick = { presetId = p.id },
-                            label = { Text(p.label) },
-                            modifier = Modifier.testTag(QuickTags.preset(p.id)),
+                Card(Slice.Single) {
+                    Row(
+                        Modifier.fillMaxWidth().semantics(mergeDescendants = true) {}.testTag(QuickTags.CURRENT)
+                            .heightIn(min = 44.dp).padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("正在使用", style = MaterialTheme.typography.bodyLarge)
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            current ?: "还没有", style = MaterialTheme.typography.bodyMedium, color = SettingsColors.faint,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.End, modifier = Modifier.weight(1f),
                         )
                     }
                 }
             }
-            if (preset?.hint?.isNotBlank() == true) item { Hint(preset.hint) }
-            if (preset?.needsBaseUrl == true) item {
-                OutlinedTextField(
-                    value = baseUrl, onValueChange = { baseUrl = it; models = emptyList() },
-                    label = { Text("接口地址（Base URL）") }, placeholder = { Text("https://api.example.com/v1") }, singleLine = true,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp).testTag(QuickTags.BASE_URL),
-                )
+            item { Step("服务商") }
+            actions.presets.forEachIndexed { i, p ->
+                item(key = "p:${p.id}") {
+                    Card(Slice.of(i, actions.presets.size)) {
+                        CheckRow(p.label, selected = p.id == presetId, divider = i > 0, modifier = Modifier.testTag(QuickTags.preset(p.id))) { presetId = p.id }
+                    }
+                }
             }
-            item { Step("2  填 API Key") }
+            if (preset?.hint?.isNotBlank() == true) item { Footer(preset.hint) }
+            if (preset?.needsBaseUrl == true) {
+                item { Step("接口地址（Base URL）") }
+                item {
+                    Card(Slice.Single) {
+                        CardField(baseUrl, { baseUrl = it; models = emptyList() }, "https://api.example.com/v1", Modifier.testTag(QuickTags.BASE_URL))
+                    }
+                }
+            }
+            item { Step("API Key") }
             item {
-                OutlinedTextField(
-                    value = key, onValueChange = { key = it.trim(); result = null },
-                    label = { Text("API Key") }, singleLine = true, visualTransformation = PasswordVisualTransformation(),
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp).testTag(QuickTags.KEY),
-                )
+                Card(if (preset?.keyUrl?.isNotBlank() == true) Slice.Top else Slice.Single) {
+                    CardField(key, { key = it.trim(); result = null }, "粘贴服务商给的 Key", Modifier.testTag(QuickTags.KEY), password = true)
+                }
             }
             if (preset?.keyUrl?.isNotBlank() == true) item {
-                TextButton(onClick = { runCatching { uri.openUri(preset.keyUrl) } }, modifier = Modifier.padding(horizontal = 12.dp)) { Text("没有 Key？去 ${preset.label} 申请") }
+                Card(Slice.Bottom) {
+                    LinkRow("没有 Key？去 ${preset.label} 申请", divider = true) { runCatching { uri.openUri(preset.keyUrl) } }
+                }
             }
-            item { Step("3  选模型") }
+            item { Step("模型") }
+            val shown = models.filter { model.isBlank() || it.contains(model, ignoreCase = true) || it == model }.take(40)
+                .ifEmpty { models.take(40) }
             item {
-                Row(Modifier.padding(horizontal = 24.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { fetch() }, enabled = busy == null, modifier = Modifier.testTag(QuickTags.FETCH)) {
-                        Text(if (models.isEmpty()) "获取模型列表" else "刷新列表")
+                Card(Slice.Top) {
+                    CardField(model, { model = it.trim(); result = null }, "从下面选，或直接输入模型名", Modifier.testTag(QuickTags.MODEL_INPUT))
+                }
+            }
+            shown.forEach { id ->
+                item(key = "m:$id") {
+                    Card(Slice.Middle) {
+                        CheckRow(id, selected = id == model, divider = true, modifier = Modifier.testTag(QuickTags.model(id))) { model = id; result = null }
                     }
                 }
             }
             item {
-                OutlinedTextField(
-                    value = model, onValueChange = { model = it.trim(); result = null },
-                    label = { Text("模型") }, placeholder = { Text("从下面选，或直接输入模型名") }, singleLine = true,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp).testTag(QuickTags.MODEL_INPUT),
-                )
-            }
-            val shown = models.filter { model.isBlank() || it.contains(model, ignoreCase = true) || it == model }.take(40)
-                .ifEmpty { models.take(40) }
-            shown.forEach { id ->
-                item(key = "m:$id") {
-                    Text(
-                        (if (id == model) "● " else "○ ") + id,
-                        style = MaterialTheme.typography.bodyLarge,
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 40.dp).clickable { model = id; result = null }
-                            .padding(horizontal = 28.dp, vertical = 8.dp).testTag(QuickTags.model(id)),
-                    )
+                Card(Slice.Bottom) {
+                    LinkRow(if (models.isEmpty()) "获取模型列表" else "刷新列表", divider = true, enabled = busy == null, modifier = Modifier.testTag(QuickTags.FETCH)) { fetch() }
                 }
             }
-            item { Step("4  测试并保存") }
+            item { Step("测试并保存") }
             item {
-                Row(Modifier.padding(horizontal = 24.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    OutlinedButton(
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    PlainOutlinedButton(
+                        "测试连接",
                         onClick = { actions.saver.acknowledge(); scope.launch { busy = "正在测试…"; result = actions.test(presetId, key, model, baseUrl); busy = null } },
-                        enabled = busy == null && !saving, modifier = Modifier.testTag(QuickTags.TEST),
-                    ) { Text("测试连接") }
-                    Button(
+                        enabled = busy == null && !saving, modifier = Modifier.weight(1f).testTag(QuickTags.TEST),
+                    )
+                    PlainFilledButton(
+                        "保存并使用",
                         onClick = { result = null; actions.saver.start(QuickSaveRequest(presetId, key, model, models, baseUrl)) },
-                        enabled = busy == null && !saving && model.isNotBlank(), modifier = Modifier.testTag(QuickTags.SAVE),
-                    ) { Text("保存并使用") }
+                        enabled = busy == null && !saving && model.isNotBlank(), modifier = Modifier.weight(1f).testTag(QuickTags.SAVE),
+                    )
                 }
             }
             item {
@@ -233,17 +243,17 @@ fun QuickModelSetupPage(
                         style = MaterialTheme.typography.bodyMedium,
                         color = when {
                             progress != null -> SettingsColors.faint
-                            shownResult?.ok == true -> Color(0xFF2E7D32)
+                            shownResult?.ok == true -> Color(0xFF34C759)
                             else -> MaterialTheme.colorScheme.error
                         },
-                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp).testTag(QuickTags.RESULT),
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp).testTag(QuickTags.RESULT),
                     )
                 }
             }
             if (onAdvanced != null) item {
                 Column(Modifier.padding(top = 16.dp)) {
-                    TextButton(onClick = onAdvanced, modifier = Modifier.padding(horizontal = 12.dp).testTag(QuickTags.ADVANCED)) {
-                        Text("高级设置（更多服务商、账号登录、代理、运行环境）")
+                    Card(Slice.Single) {
+                        LinkRow("高级设置（更多服务商、账号登录、代理、运行环境）", divider = false, chevron = true, modifier = Modifier.testTag(QuickTags.ADVANCED), onClick = onAdvanced)
                     }
                 }
             }
@@ -251,13 +261,89 @@ fun QuickModelSetupPage(
     }
 }
 
-@Composable
-private fun Step(text: String) {
-    // r5：OpenMinis 分组小标题（强调色 labelMedium）
-    Text(text, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 18.dp, bottom = 6.dp))
+/** 一段分组卡片：同一组的相邻行拼成一张 16dp 圆角卡片（首行上圆角、末行下圆角）。 */
+private enum class Slice(val top: Boolean, val bottom: Boolean) {
+    Single(true, true), Top(true, false), Middle(false, false), Bottom(false, true);
+    companion object {
+        fun of(i: Int, n: Int) = when {
+            n == 1 -> Single
+            i == 0 -> Top
+            i == n - 1 -> Bottom
+            else -> Middle
+        }
+    }
 }
 
 @Composable
-private fun Hint(text: String) {
-    Text(text, style = MaterialTheme.typography.bodySmall, color = SettingsColors.faint, modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp))
+private fun Card(slice: Slice, content: @Composable () -> Unit) {
+    val r = 16.dp
+    val shape = RoundedCornerShape(
+        topStart = if (slice.top) r else 0.dp, topEnd = if (slice.top) r else 0.dp,
+        bottomStart = if (slice.bottom) r else 0.dp, bottomEnd = if (slice.bottom) r else 0.dp,
+    )
+    Surface(
+        shape = shape,
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = if (slice.bottom) 8.dp else 0.dp),
+    ) { Column(Modifier.fillMaxWidth()) { content() } }
+}
+
+@Composable
+private fun RowDivider() {
+    HorizontalDivider(Modifier.padding(start = 16.dp), thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+}
+
+@Composable
+private fun CheckRow(label: String, selected: Boolean, divider: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    if (divider) RowDivider()
+    Row(
+        modifier.fillMaxWidth().selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
+            .heightIn(min = 44.dp).padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+        if (selected) Text("✓", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+    }
+}
+
+@Composable
+private fun LinkRow(label: String, divider: Boolean, modifier: Modifier = Modifier, enabled: Boolean = true, chevron: Boolean = false, onClick: () -> Unit) {
+    if (divider) RowDivider()
+    Row(
+        modifier.fillMaxWidth().clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .heightIn(min = 44.dp).padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f),
+            color = if (chevron) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.primary.copy(alpha = if (enabled) 1f else 0.38f),
+        )
+        if (chevron) Text("›", style = MaterialTheme.typography.titleMedium, color = SettingsColors.faint)
+    }
+}
+
+/** 卡片里的无边框输入框（OpenMinis `SectionTextField`：边框、底色透明，卡片本身是唯一边界）。 */
+@Composable
+private fun CardField(value: String, onValueChange: (String) -> Unit, placeholder: String, modifier: Modifier = Modifier, password: Boolean = false) {
+    OutlinedTextField(
+        value = value, onValueChange = onValueChange, singleLine = true,
+        placeholder = { Text(placeholder, color = SettingsColors.faint) },
+        visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedBorderColor = Color.Transparent, unfocusedBorderColor = Color.Transparent, disabledBorderColor = Color.Transparent,
+            focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent, disabledContainerColor = Color.Transparent,
+        ),
+        modifier = modifier.fillMaxWidth().heightIn(min = 52.dp),
+    )
+}
+
+@Composable
+private fun Footer(text: String) {
+    Text(text, style = MaterialTheme.typography.bodySmall, color = SettingsColors.faint, modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp))
+}
+
+@Composable
+private fun Step(text: String) {
+    // r5：OpenMinis 分组小标题（强调色 labelMedium）
+    Text(text, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 8.dp).semantics { heading() })
 }

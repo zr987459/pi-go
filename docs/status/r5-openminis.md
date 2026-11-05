@@ -37,8 +37,14 @@
   FormSwitchStreamingTest.extDialogKeepsTopBarModalButToggleSwitches 失败：／（命令中心）移到输入卡片后被扩展对话框面板盖住，按坐标点到了面板里的按钮。
   改为断言它在面板打开时已停用（与顶栏同一条 locked 规则），顶栏按钮仍逐个真点。同批推送：设置页套 OpenMinis 主题 + 分组卡片、NavHost 推入转场。
 
+- 2026-11-05 12:05 CST 84bc27a 的 CI：build 127035655328 ✅、realpi 127035656205 ✅；模拟器 127035696213 ❌——UiCoverageTest.sendKeyThreeStates 失败（裸 AssertionError，无消息）。
+  4bbb852 上同一测试通过、两次推送之间 feature/chat 没改，判断为时序抖动（模拟器 GPU 报 ColorBuffer 错、点完立即查动作记录）：
+  把「点了就立刻 ran()」改为最多等 3 秒的 ranSoon()、waitFor 放宽到 5 秒，并给每条断言加中文说明，断言本身一条不少。
+  同批：设置 › 模型页（QuickModelSetupPage）换 OpenMinis 分组卡片外观——服务商改成卡片里的单选行（右侧 ✓）、Key / 地址 / 模型名为卡片内无边框输入框、
+  模型列表为同一张卡片里的行、「获取 / 刷新列表」「去申请 Key」是卡片里的蓝字行、「高级设置」是带 › 的卡片行；保存 / 测试逻辑与测试标签不变。
+  QuickModelSetupUiTest 随之改为先滚到控件再操作（页面变长），并加入 CI 模拟器 job 的类列表（此前没在 CI 跑）。
+
 ## 下一步（精确）
-- 盯本次推送的 CI（build、realpi、模拟器 UiCoverageTest/TermCoverageTest/AppCoverageTest/FormSwitchStreamingTest/SettingsScreenUiTest）；失败按日志修。
-- 设置 › 模型页（feature/settings QuickModelSetupPage）换 OpenMinis 分组卡片外观（逻辑不动）。
-- 全绿后开 PR（r5/openminis → main），描述含改动、证据（测试名 + CI run id）、来源说明、已知差距。
+- 盯本次推送的 CI（build、realpi、模拟器 6 个类：UiCoverageTest/TermCoverageTest/AppCoverageTest/FormSwitchStreamingTest/SettingsScreenUiTest/QuickModelSetupUiTest）；失败按日志修。
+- 全绿后开 PR（r5/openminis → main），描述含改动、证据（测试名 + CI run/job id）、来源说明、已知差距。
 - 本地构建：/workspace/work/gw.sh（JDK17 + SDK35 + /tmp/ab/aapt2 qemu 包装；/tmp 丢失时按 r3-app.md 记的方法重装：qemu-user-static + debian amd64 libc6/libgcc-s1/libstdc++6 解包到 /tmp/ab/amd64）。

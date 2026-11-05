@@ -175,7 +175,7 @@ jobs:
         run: |
           n=0
           classes=""
-          for name in UiCoverageTest TermCoverageTest AppCoverageTest FormSwitchStreamingTest SettingsScreenUiTest; do
+          for name in UiCoverageTest TermCoverageTest AppCoverageTest FormSwitchStreamingTest SettingsScreenUiTest QuickModelSetupUiTest; do
             f=$(find . -path '*/src/androidTest/*' -name "$name.kt" -not -path './build/*' | head -1)
             [ -z "$f" ] && { echo "未找到 $name（尚未合入）"; continue; }
             module=$(echo "$f" | sed -e 's#^\./##' -e 's#/src/androidTest/.*##' | tr / :)
