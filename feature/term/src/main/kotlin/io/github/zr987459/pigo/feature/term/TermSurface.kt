@@ -36,6 +36,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.structuralEqualityPolicy
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -48,6 +49,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -214,6 +219,9 @@ private fun TermScreen(
     val historyNav = remember { HistoryNav() }
     var stripVisible by rememberSaveable { mutableStateOf(true) }
     var toast by remember { mutableStateOf<String?>(null) }
+    // 🖌 清屏（只清回显，不碰草稿）：clearTick 由顶栏递增，时间线子组合据当时的行记下 clearMark
+    var clearTick by remember { mutableIntStateOf(0) }
+    var clearMark by remember { mutableStateOf(TermClearMark()) }
     var commands by remember { mutableStateOf(emptyList<SlashCommand>()) }
     var lastEsc by remember { mutableLongStateOf(0L) }
     val hideThinking = settings["hideThinkingBlock"] == "true"
@@ -392,10 +400,23 @@ private fun TermScreen(
         overlayWasOpen = overlays.isNotEmpty()
     }
 
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+    var editorFocused by remember { mutableStateOf(false) }
+    fun copyAll() {
+        val text = TermChrome.transcriptText(chatFull.value.items)
+        if (text.isNotEmpty()) { clipboard.setText(androidx.compose.ui.text.AnnotatedString(text)); toast = "已复制全部输出" }
+    }
+    fun toggleKeyboard() {
+        if (editorFocused) { focusManager.clearFocus(); keyboard?.hide() } else { runCatching { focus.requestFocus() }; keyboard?.show() }
+    }
     Column(
         modifier
             .fillMaxSize()
-            .background(tokens.bg)
+            .background(TermChrome.Bg)
+            .statusBarsPadding()
+            .navigationBarsPadding()
             .imePadding()
             .testTag("term:surface")
             .onPreviewKeyEvent { ev ->
@@ -422,7 +443,14 @@ private fun TermScreen(
                 }
             },
     ) {
-        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+        // 顶栏（OpenMinis TerminalScreen：左圆形 ✕ 关闭回聊天、居中等宽标题、右绿色 🖌 清屏——只清回显，不碰输入行，PR #31 审查 I2）
+        TermTopBar(
+            title = "终端",
+            subtitle = chat.sessionName,
+            onClose = { toggleForm() },
+            onClearScreen = { clearTick++; toast = "已清屏" },
+        )
+        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().background(tokens.bg)) {
             val measurer = rememberTextMeasurer()
             val density = LocalDensity.current
             val style = monoStyle(fontSp.sp, tokens)
@@ -431,16 +459,21 @@ private fun TermScreen(
             val items = chatFull.value.items
             val opts = FormatOptions(width = cols, hideThinking = hideThinking, toolsExpanded = toolsExpanded, expandedKeys = expandedKeys, cwd = cwd, home = home, expandKey = expandKey)
             // 按行拆分（审查第 1 轮慢帧修复）：只重排变化的消息，LazyColumn 只组合可见行。
-            val rows = remember(items, opts) { rowCache.rows(items, opts) }
+            val allRows = remember(items, opts) { rowCache.rows(items, opts) }
+            val rows = remember(allRows, clearMark) { TermClear.visible(allRows, clearMark) }
             // 每行固定同一高度（= 行高）：空行与中英混排的行高度一致，锚点「行号 × 行高 + 行内偏移」才能精确还原（§5.3）。
             val rowHeight = with(density) { (fontSp * 1.35f).sp.toDp() }
-            val localRows = remember(localBlocks, cols) {
-                localBlocks.flatMap { b ->
+            val localRows = remember(localBlocks, cols, clearMark) {
+                localBlocks.filter { !clearMark.cleared || it.key !in clearMark.localKeys }.flatMap { b ->
                     (listOf(TermLine(emptyList())) + TermFormatter.wrapSpans(listOf(Span("[${b.title}] ", "customMessageLabel", bold = true), Span(b.text, "customMessageText")), cols - 2)
                         .map { TermLine(listOf(Span(" ")) + it, "customMessageBg") }).mapIndexed { i, l -> TermRow("local:${b.key}#$i", "local:${b.key}", i, l, null) }
                 }
             }
             val rowsNow by rememberUpdatedState(rows)
+            val allRowsNow by rememberUpdatedState(allRows)
+            LaunchedEffect(clearTick) {
+                if (clearTick > 0) clearMark = TermClear.mark(allRowsNow, host.localBlocks.value.map { it.key })
+            }
 
             // 阅读位置：进入时恢复，用户滚动时写回 host.scrollAnchor（§5.3）。锚点仍是「消息 key + 消息内像素偏移」，与 calm 形态通用：
             // 行号 → 消息 key；消息内偏移 = 本消息在首个可见行之前的行数 × 行高 + 首个可见行内偏移。
@@ -517,7 +550,7 @@ private fun TermScreen(
                         },
                 ) {
                     item(key = "term:header") {
-                        Header(piVersion, cols, fontSp, tokens, bindings, TermInput.startupResources(env.contextFiles, commands, enabledModels, home), quiet = settings["quietStartup"] == "true") { run("about") }
+                        if (!clearMark.cleared) Header(piVersion, cols, fontSp, tokens, bindings, TermInput.startupResources(env.contextFiles, commands, enabledModels, home), quiet = settings["quietStartup"] == "true") { run("about") }
                     }
                     items(rows, key = { it.key }) { r ->
                         val l = r.line
@@ -575,6 +608,7 @@ private fun TermScreen(
             onChange = { v -> setDraftText(v.text, v.selection.start).also { host.draft.value = host.draft.value.copy(selectionStart = v.selection.start, selectionEnd = v.selection.end) } },
             onBorderTap = { run("thinking.cycle") },
             onBangCap = { run("bash") },
+            onFocusChanged = { editorFocused = it },
         )
         surfaceExt.widgets.filter { it.value.first == "belowEditor" }.toSortedMap().forEach { (k, v) ->
             Column(Modifier.testTag("term:widget:$k")) { v.second.forEach { TermLineText(TermLine(listOf(Span(CellWidth.truncate(it, 200)))), fontSp.sp, tokens) } }
@@ -623,22 +657,20 @@ private fun TermScreen(
                             }
                             Text(spansToAnnotated(listOf(s), tokens), style = monoStyle(fontSp.sp, tokens), softWrap = false, maxLines = 1, modifier = m)
                         }
-                        if (i == 0) Text(
-                            spansToAnnotated(listOf(Span(" ".repeat((cols - 4 - CellWidth.width(l.joinToString("") { it.text })).coerceAtLeast(1)) + "[UI]", "accent", bold = true)), tokens), style = monoStyle(fontSp.sp, tokens),
-                            modifier = Modifier.clickable { toggleForm() }.testTag("term:footer:ui"),
-                        )
                     }
                 }
             }
         }
 
         // ---- 触屏键条（接外接键盘时可收起） ----
-        if (stripVisible) KeyStrip(TermInput.stripKeys(catalog), fontSp, tokens, ::onStripKey, onCollapse = { stripVisible = false })
-        else Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("⌨", modifier = Modifier.clickable { stripVisible = true }.padding(4.dp).testTag("term:strip:show"), color = tokens.fgOf("dim"))
-            Spacer(Modifier.weight(1f))
-            // 键条收起时形态切换键仍在（PR #26 审查 I1：一键即切不能藏起来）
-            FormKey(fontSp, tokens) { onStripKey(TermInput.KEY_FORM) }
+        // 键盘附件条（OpenMinis KeyboardAccessoryBar：圆角深灰条 + 灰色按钮 + 绿色等宽字；随输入法抬起）。
+        // 关闭终端（⇄UI）在顶栏的 ✕，附件条收起后 ✕ 仍在（一键即回聊天）。
+        if (stripVisible) KeyStrip(
+            TermInput.stripKeys(catalog), ::onStripKey, onCollapse = { stripVisible = false },
+            keyboardVisible = editorFocused, onToggleKeyboard = ::toggleKeyboard, onCopyAll = ::copyAll,
+        )
+        else Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            TermChrome.QuickButton("键条", iconText = "⌨", modifier = Modifier.testTag("term:strip:show")) { stripVisible = true }
         }
 
         toast?.let { t ->
@@ -773,6 +805,7 @@ private fun Editor(
     onChange: (TextFieldValue) -> Unit,
     onBorderTap: () -> Unit,
     onBangCap: () -> Unit,
+    onFocusChanged: (Boolean) -> Unit = {},
 ) {
     val border = if (bash) tokens.fgOf("bashMode") else tokens.thinkingBorder(thinkingLevel)
     Box(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp)) {
@@ -784,6 +817,7 @@ private fun Editor(
             modifier = Modifier
                 .fillMaxWidth()
                 .focusRequester(focus)
+                .onFocusChanged { onFocusChanged(it.isFocused) }
                 .drawBehind {
                     // 框线用 drawBehind 画（§3.1），中英混排不错位。
                     drawRoundRect(color = border, topLeft = Offset(0f, 0f), size = Size(size.width, size.height), cornerRadius = CornerRadius(6.dp.toPx()), style = Stroke(1.dp.toPx()))
@@ -805,38 +839,39 @@ private fun Editor(
 }
 
 @Composable
-private fun KeyStrip(keys: List<TermInput.StripKey>, fontSp: Float, tokens: PiTokens, onKey: (String) -> Unit, onCollapse: () -> Unit) {
-    // ⇄UI（形态切换）固定在键条最右、不随横向滚动移出视口（PR #26 审查 I1）；其余键在左侧可横向滚动的区域里。
-    val formKey = keys.firstOrNull { it.key == TermInput.KEY_FORM }
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()).testTag("term:strip")) {
+private fun KeyStrip(
+    keys: List<TermInput.StripKey>,
+    onKey: (String) -> Unit,
+    onCollapse: () -> Unit,
+    keyboardVisible: Boolean,
+    onToggleKeyboard: () -> Unit,
+    onCopyAll: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp)
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(12.dp)).background(TermChrome.AccessoryBg),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(
+            Modifier.weight(1f).horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 6.dp).testTag("term:strip"),
+            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TermChrome.QuickButton(if (keyboardVisible) "隐藏键盘" else "键盘", iconText = "⌨", modifier = Modifier.testTag("term:kbd"), onClick = onToggleKeyboard)
+            TermChrome.QuickButton("复制全部", iconText = "⧉", modifier = Modifier.testTag("term:copyAll"), onClick = onCopyAll)
             keys.forEach { k ->
+                // ⇄UI（关闭终端）在顶栏 ✕，不在附件条里重复。
                 if (k.key == TermInput.KEY_FORM) return@forEach
                 // ↑↓、⇞⇟ 拆成两个键帽（Nit 2、3）：第一个沿用原测试标签（上 / 上一条），第二个加 `:down` / `:next`
                 val second = when (k.key) { "↑↓" -> "↓" to "↑↓:down"; "⇞⇟" -> "⇟" to "⇞⇟:next"; else -> null }
-                Text(
+                TermChrome.QuickButton(
                     if (second != null) k.label.take(1) else k.label,
-                    style = monoStyle(fontSp.sp, tokens).copy(color = tokens.fgOf(if (k.key == "⏎") "accent" else "muted")),
-                    modifier = Modifier.clickable { onKey(k.key) }.padding(horizontal = 10.dp, vertical = 8.dp).testTag("term:key:${k.key}"),
-                )
-                if (second != null) Text(
-                    second.first,
-                    style = monoStyle(fontSp.sp, tokens).copy(color = tokens.fgOf("muted")),
-                    modifier = Modifier.clickable { onKey(second.second) }.padding(horizontal = 10.dp, vertical = 8.dp).testTag("term:key:${second.second}"),
-                )
+                    active = k.key == "⏎",
+                    modifier = Modifier.testTag("term:key:${k.key}"),
+                ) { onKey(k.key) }
+                if (second != null) TermChrome.QuickButton(second.first, modifier = Modifier.testTag("term:key:${second.second}")) { onKey(second.second) }
             }
-            Text("▾", color = tokens.fgOf("dim"), modifier = Modifier.clickable(onClick = onCollapse).padding(horizontal = 10.dp, vertical = 8.dp).testTag("term:strip:hide"))
+            TermChrome.QuickButton("收起", iconText = "▾", modifier = Modifier.testTag("term:strip:hide"), onClick = onCollapse)
         }
-        if (formKey != null) FormKey(fontSp, tokens, formKey.label) { onKey(TermInput.KEY_FORM) }
     }
-}
-
-/** 固定可见的形态切换键（测试标签 form:toggle，与 UI 形态顶栏的 ⇄ 同名）。 */
-@Composable
-private fun FormKey(fontSp: Float, tokens: PiTokens, label: String = TermInput.KEY_FORM, onClick: () -> Unit) {
-    Text(
-        label,
-        style = monoStyle(fontSp.sp, tokens).copy(color = tokens.fgOf("muted")),
-        modifier = Modifier.clickable(onClick = onClick).padding(horizontal = 10.dp, vertical = 8.dp).testTag("form:toggle"),
-    )
 }

@@ -69,16 +69,19 @@ class CalmAppFix1Test {
         assertEquals(listOf("provider.form:deepseek"), s.items.value.map { it.id })
     }
 
-    /** Important 3：返回键逐层关（第 2 轮 Nit 2 起按画面层级：面板在最上）；都关着交给外层（退到后台）；扩展对话框不替用户作答。 */
+    /**
+     * Important 3：返回键逐层关（第 2 轮 Nit 2 起按画面层级：面板在最上）；扩展对话框不替用户作答。
+     * r5（OpenMinis 导航）：会话列表是首页——列表在前台时不拦截（外层退到后台）；聊天页什么都没开时返回 = 回到会话列表（LIST）。
+     */
     @Test
     fun backOrder() {
         val panel = OverlayModel.SelectList("model.select", "模型")
         assertEquals(CalmBack.Step.OVERLAY, CalmBack.step(true, panel, true, true))
         assertEquals(CalmBack.Step.EDITOR, CalmBack.step(true, null, true, true))
         assertEquals(CalmBack.Step.OVERLAY, CalmBack.step(false, panel, true, true))
-        assertEquals(CalmBack.Step.DRAWER, CalmBack.step(false, null, true, true))
+        assertEquals("会话列表在前台：交给外层退到后台", CalmBack.Step.NONE, CalmBack.step(false, null, true, true))
         assertEquals(CalmBack.Step.SEARCH, CalmBack.step(false, null, false, true))
-        assertEquals(CalmBack.Step.NONE, CalmBack.step(false, null, false, false))
+        assertEquals("聊天页什么都没开：回会话列表", CalmBack.Step.LIST, CalmBack.step(false, null, false, false))
         val dlg = OverlayModel.ExtDialog("ext:1", "确认", ExtUiRequest(id = "1", method = "confirm", title = "确认"), 0L)
         assertEquals(CalmBack.Step.NONE, CalmBack.step(false, dlg, false, false))
     }

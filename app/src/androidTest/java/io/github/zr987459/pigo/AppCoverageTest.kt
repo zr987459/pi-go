@@ -100,7 +100,13 @@ class AppCoverageTest {
         assertEquals(listOf("ext:req-9"), host.overlay.items.value.map { it.id })
         assertEquals(0, background)
 
-        pressBack() // 只剩扩展对话框：不拦截，退到后台
+        // r5（OpenMinis 终端页）：只剩扩展对话框时返回 = 关闭终端回聊天页（对话框两页共用，仍在栈顶、不替用户作答）
+        pressBack()
+        assertEquals(UiForm.CALM, host.form.value)
+        assertEquals(0, background)
+        assertEquals(listOf("ext:req-9"), host.overlay.items.value.map { it.id })
+        // 聊天页上扩展对话框在最上：不越过它关下面的层，退到后台
+        pressBack()
         assertEquals(1, background)
         assertEquals(listOf("ext:req-9"), host.overlay.items.value.map { it.id })
         assertTrue(!rule.activity.isFinishing)
@@ -135,7 +141,11 @@ class AppCoverageTest {
         rule.waitForIdle()
     }
 
-    /** Important 3：返回键依次关闭 面板 → 会话列表，都关着时退到后台（不结束 Activity、不打断生成）；终端形态同理。 */
+    /**
+     * Important 3 + r5（OpenMinis 导航）：会话列表是首页、聊天页压在它上面、终端页压在聊天页上面。
+     * 返回依次：面板 → （会话列表在前台）退到后台；聊天页什么都没开时返回 = 回会话列表；终端页返回 = 回聊天页。
+     * 全程不结束 Activity、不打断生成、不重启引擎。
+     */
     @Test
     fun backClosesPanelThenSessionListThenGoesToBackground() {
         val host = newHost()
@@ -154,22 +164,30 @@ class AppCoverageTest {
         assertEquals(0, background)
 
         pressBack()
-        rule.onNodeWithTag("calm:drawer").assertDoesNotExistCompat()
-        assertEquals(0, background)
-
-        pressBack()
-        assertEquals("都关着：退到后台", 1, background)
+        assertEquals("会话列表是首页：退到后台", 1, background)
         assertTrue("Activity 没有结束", !rule.activity.isFinishing)
+        rule.onNodeWithTag("calm:drawer").assertIsDisplayed()
 
+        // 「继续当前对话」回到聊天页；聊天页什么都没开时返回 = 回会话列表（不退到后台）
+        rule.onNodeWithTag("drawer:back").performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag("calm:drawer").assertDoesNotExistCompat()
+        pressBack()
+        rule.onNodeWithTag("calm:drawer").assertIsDisplayed()
+        assertEquals(1, background)
+        rule.onNodeWithTag("drawer:back").performClick()
+        rule.waitForIdle()
+
+        // 终端页：返回 = 回聊天页（同一会话），不退到后台
         rule.runOnUiThread { host.form.value = UiForm.TERM }
         rule.waitForIdle()
         pressBack()
-        assertEquals("终端形态同理", 2, background)
+        assertEquals("终端页返回回到聊天页", UiForm.CALM, host.form.value)
+        assertEquals(1, background)
         assertEquals("不重启引擎", startsBefore, host.fakeEngine.startCount)
         assertEquals(0, host.fakeEngine.restartCount)
     }
 
-    /** Important 1：点「＋ › 图片」（第 2 轮 Nit 3：文案与能力一致，只能选图片）调起装配层的图片选择器，选中的图片进 host.draft（两形态共用）。 */
     @Test
     fun plusAttachPutsPickedImageIntoSharedDraft() {
         val host = newHost()

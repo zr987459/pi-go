@@ -53,8 +53,9 @@ class QuickSaveRunner(
             } catch (e: Exception) {
                 QuickCheck(false, "保存失败：${e.message ?: e.javaClass.simpleName}")
             }
+            // 先回调（全局提示）再公布结果：观察到 Done / Failed 的一方能确定提示已经发出（CI 上 CredentialReloaderTest 抓到过这个先后竞争）。
+            runCatching { onFinished(result) }
             _state.value = if (result.ok) QuickSaveState.Done(result.message) else QuickSaveState.Failed(result.message)
-            onFinished(result)
         }
         return true
     }

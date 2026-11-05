@@ -161,3 +161,9 @@ GPL/LGPL 义务：mvp/runtime 引入时在 `core/runtime/NOTICE-runtime.md` 记�
 ### 9.6 r3 删除的旧代码（来源条目仍在 §7、§8 作历史记录）
 - `feature/usage` 整模块、`feature/files` 的文件浏览器 / 预览 / Git 页 / 高亮 / 旧导出弹层、`app` 的旧抽屉与旧页面（`WiredPages.kt`、`PiGoDrawer.kt`）已在 r3/app PR 2 删除；§7、§8 中指向这些文件的条目不再对应仓库内文件。
 - 本 PR（r3/app）无新增移植代码、素材或第三方依赖。
+
+## 10. OpenMinis（r5/openminis 界面重做）
+
+- 来源：OpenMinis（https://github.com/OpenMinis/OpenMinis ，`src/android`，GPL-3.0）。所有者确认 pi-go 为个人非商业使用，同意直接借鉴 / 复制 OpenMinis 代码与资源，此处记一行来源。
+- 移植 / 改写（Kotlin，按 pi-go 的 SessionHost 接线）：`core/ui/.../calm/CalmTheme.kt` ← `ui/theme/Theme.kt` + `ui/theme/ChatColors.kt`（色值原样）；`feature/chat/.../calm/MinisMenu.kt` ← `ui/components/MinisMenu.kt`、`MinisAlertDialog.kt`；`feature/chat/.../calm/CalmMessages.kt`、`CalmComposer.kt`、`CalmSessionList.kt`、`CalmSheet.kt`、`CalmSurface.kt` ← `ui/chat/ChatUserMessageUI.kt`、`ChatAssistantMessageUI.kt`（ToolCallPill、ThinkingBlock、AssistantHeader、InlineErrorBanner）、`ChatIndicators.kt`（BouncingDots）、`ChatScreen.kt`（输入卡片阴影、按钮行、上滑发送、顶栏菜单）、`ChatComposerWidgets.kt`（InputCircleButton）、`SendReturnModeMenu.kt`（发送 / 停止键）、`ui/sessions/SessionListScreen.kt`（分节、会话行、FAB）；`feature/term/.../TermChrome.kt` 与 `TermSurface.kt` 的顶栏 / 键盘附件条 ← `ui/terminal/TerminalScreen.kt`（配色与按钮规格原样）。对照表见 `docs/r5-openminis-map.md`。
+- 设置页：`feature/settings/.../ui/SettingsComponents.kt`（SettingsSection）、`QuickModelSetupPage.kt`（分组卡片、卡片内单选行与无边框输入框）← `ui/components/SettingsSection.kt`、`SectionDesign.kt`（圆角、行高、细线规格）、`SectionTextField.kt`（透明边框 / 底色）。

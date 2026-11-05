@@ -16,6 +16,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performScrollTo
@@ -633,5 +634,36 @@ class TermCoverageTest {
                 Text(text, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
             }
         }
+    }
+
+    /**
+     * PR #31 审查 I2：顶栏 🖌 = 清屏（OpenMinis clearOutput），只清终端回显，共享草稿逐字段不变、不发命令；
+     * 清屏后新来的消息照常显示。
+     */
+    @Test
+    fun brushClearsScreenButKeepsDraft() {
+        val host = setUp()
+        val fake = host.fake
+        val draft = fake.draft.value.withText("很长的提示词 草稿")
+        fake.draft.value = draft
+        rule.waitForIdle()
+        fake.clearCommands()
+        assertTrue("清屏前应有回显", rule.onAllNodesWithTag("term:item:a0", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty())
+
+        rule.onNodeWithTag("term:clear").performClick()
+        rule.waitForIdle()
+
+        assertEquals("🖌 不得改动草稿", draft, fake.draft.value)
+        rule.onNodeWithTag("term:editor").assertTextContains("很长的提示词 草稿", substring = true)
+        assertTrue("清屏后旧回显应消失", rule.onAllNodesWithTag("term:item:a0", useUnmergedTree = true).fetchSemanticsNodes().isEmpty())
+        assertTrue("清屏后旧回显应消失", rule.onAllNodesWithTag("term:item:u0", useUnmergedTree = true).fetchSemanticsNodes().isEmpty())
+        assertTrue("清屏不发命令：${fake.commands.value}", fake.commands.value.isEmpty())
+
+        // 清屏后的新输出照常显示
+        host.chat.value = baseChat.copy(items = baseChat.items + ChatItem.Assistant("a1", listOf(ContentBlock.Text(0, "新输出")), streaming = false, stopReason = "stop"))
+        rule.waitForIdle()
+        rule.onAllNodesWithTag("term:item:a1", useUnmergedTree = true).onFirst().assertIsDisplayed()
+        assertTrue(rule.onAllNodesWithTag("term:item:a0", useUnmergedTree = true).fetchSemanticsNodes().isEmpty())
+        assertEquals(draft, fake.draft.value)
     }
 }

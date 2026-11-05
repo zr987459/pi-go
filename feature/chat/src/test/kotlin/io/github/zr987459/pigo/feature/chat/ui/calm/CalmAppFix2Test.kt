@@ -126,11 +126,11 @@ class CalmAppFix2Test {
     @Test
     fun backFollowsVisualLayers() {
         val panel = OverlayModel.Text("help.hotkeys", "快捷键", "Esc 中止")
-        assertEquals("面板压在展开编辑器上：先关面板", CalmBack.Step.OVERLAY, CalmBack.step(editorExpanded = true, top = panel, drawerOpen = false, searchOpen = false))
-        assertEquals("面板压在会话列表上：先关面板", CalmBack.Step.OVERLAY, CalmBack.step(editorExpanded = false, top = panel, drawerOpen = true, searchOpen = false))
-        assertEquals("编辑器画在会话列表之上", CalmBack.Step.EDITOR, CalmBack.step(editorExpanded = true, top = null, drawerOpen = true, searchOpen = true))
-        assertEquals(CalmBack.Step.DRAWER, CalmBack.step(editorExpanded = false, top = null, drawerOpen = true, searchOpen = true))
-        assertEquals("ExtDialog 在最上：不关下面的编辑器", CalmBack.Step.NONE, CalmBack.step(editorExpanded = true, top = dlg(), drawerOpen = true, searchOpen = false))
+        assertEquals("面板压在展开编辑器上：先关面板", CalmBack.Step.OVERLAY, CalmBack.step(editorExpanded = true, top = panel, listOpen = false, searchOpen = false))
+        assertEquals("面板压在会话列表上：先关面板", CalmBack.Step.OVERLAY, CalmBack.step(editorExpanded = false, top = panel, listOpen = true, searchOpen = false))
+        assertEquals("编辑器画在会话列表之上", CalmBack.Step.EDITOR, CalmBack.step(editorExpanded = true, top = null, listOpen = true, searchOpen = true))
+        assertEquals("会话列表（首页）在前台：不拦截", CalmBack.Step.NONE, CalmBack.step(editorExpanded = false, top = null, listOpen = true, searchOpen = true))
+        assertEquals("ExtDialog 在最上：不关下面的编辑器", CalmBack.Step.NONE, CalmBack.step(editorExpanded = true, top = dlg(), listOpen = true, searchOpen = false))
     }
 
     /** Nit 3：「＋」菜单文案与能力一致——只能选图片。 */

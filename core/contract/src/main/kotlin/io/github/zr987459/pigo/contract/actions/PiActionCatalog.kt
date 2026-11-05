@@ -517,7 +517,7 @@ object PiActionCatalog {
         ),
         spec(
             id = "form.toggle",
-            title = "切换形态",
+            title = "终端（打开 / 返回聊天）",
             group = ActionGroup.SESSION,
             slash = listOf("ui", "term"),
             featureRefs = listOf("§13 两种形态无缝切换", "§3 本地命令 /ui、/term"),

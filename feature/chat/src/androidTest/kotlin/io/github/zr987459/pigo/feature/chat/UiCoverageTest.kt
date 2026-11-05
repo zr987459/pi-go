@@ -102,6 +102,11 @@ class UiCoverageTest {
 
     private fun ran(id: String) = host.fakeActions.ran.any { it.first == id }
 
+    /** 动作经协程派发，模拟器慢时点完不一定立刻记上：最多等 [timeoutMs]（只放宽时序，不放宽断言）。 */
+    private fun ranSoon(id: String, timeoutMs: Long = 3_000): Boolean = try {
+        compose.waitUntil(timeoutMs) { ran(id) }; true
+    } catch (_: Throwable) { false }
+
     private fun exists(tag: String): Boolean = compose.onAllNodes(hasTestTag(tag), useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
 
     private fun waitFor(tag: String, timeoutMs: Long = 3_000): Boolean = try {
@@ -111,7 +116,8 @@ class UiCoverageTest {
     private fun resetUi() {
         compose.runOnIdle { host.overlay.clear() }
         if (exists("calm:expandedClose")) compose.onNodeWithTag("calm:expandedClose").performClick()
-        if (exists("calm:drawerScrim")) compose.onNodeWithTag("calm:drawerScrim").performTouchInput { click(Offset(width - 8f, height / 2f)) }
+        // r5：会话列表是整页（OpenMinis 首页），用「继续当前对话」回到聊天页
+        if (exists("calm:drawer")) compose.onNodeWithTag("drawer:back").performClick()
         compose.waitForIdle()
     }
 
@@ -264,32 +270,32 @@ class UiCoverageTest {
     fun sendKeyThreeStates() {
         setCalm()
         // 空闲 + 空：↑ 发送，禁用
-        assertTrue(waitFor("send:send"))
+        assertTrue("应出现 send:send", waitFor("send:send", 5_000))
         compose.onNodeWithTag("persist:send").assertIsNotEnabled()
         // 空闲 + 有字：可发送
         compose.runOnIdle { host.draft.value = DraftState(text = "你好") }
         compose.onNodeWithTag("persist:send").assertIsEnabled().performClick()
         compose.waitForIdle()
-        assertTrue(ran("send"))
+        assertTrue("点发送后应执行 send", ranSoon("send"))
         // `!` 模式：文字为「运行」
         compose.runOnIdle { host.overlay.clear(); host.draft.value = DraftState(text = "ls", bashMode = BashMode.INCLUDE) }
-        assertTrue(waitFor("send:run"))
-        assertTrue(waitFor("calm:bashPrefix"))
+        assertTrue("应出现 send:run", waitFor("send:run", 5_000))
+        assertTrue("应出现 calm:bashPrefix", waitFor("calm:bashPrefix", 5_000))
         // 生成中 + 空：■ 停止 → abort
         compose.runOnIdle { host.draft.value = DraftState.EMPTY }
         startLongStream()
-        assertTrue(waitFor("send:stop"))
+        assertTrue("应出现 send:stop", waitFor("send:stop", 5_000))
         compose.onNodeWithTag("persist:send").performClick()
         compose.waitForIdle()
-        assertTrue(ran("abort"))
+        assertTrue("生成中点停止应执行 abort", ranSoon("abort"))
         // 生成中 + 有字：引导（steer = send），长按：排队 / 停止
         compose.runOnIdle { host.overlay.clear() }
         startLongStream()
         compose.runOnIdle { host.draft.value = DraftState(text = "顺便补测试") }
-        assertTrue(waitFor("send:steer"))
+        assertTrue("应出现 send:steer", waitFor("send:steer", 5_000))
         compose.onNodeWithTag("persist:send").performTouchInput { longClick() }
-        assertTrue(waitFor("longpress:send.followUp"))
-        assertTrue(waitFor("longpress:abort"))
+        assertTrue("应出现 longpress:send.followUp", waitFor("longpress:send.followUp", 5_000))
+        assertTrue("应出现 longpress:abort", waitFor("longpress:abort", 5_000))
         // 重试中停止 → retry.abort；bash 运行中停止 → bash.abort（纯逻辑，Fake 引擎造不出这两种状态）
         assertEquals(SendKey.Stop("retry.abort"), sendKeyOf(ChatState(running = true, retry = RetryBanner(1, 3, 2_000, null)), DraftState.EMPTY))
         val bash = ChatItem.Tool("t", "c", "bash", buildJsonObject { put("command", "sleep 9") }, ToolStatus.RUNNING)
@@ -302,7 +308,7 @@ class UiCoverageTest {
     @Test
     fun leavingAndReenteringCalmRestoresDraftOverlayAndReadingPosition() {
         setCalm()
-        // 一键切换：顶栏 ⇄
+        // 一键进入终端：聊天页顶栏的终端图标（r5 起终端是 OpenMinis 式独立页面）
         compose.onNodeWithTag("form:toggle").performClick()
         compose.waitForIdle()
         assertEquals(UiForm.TERM, host.form.value)
