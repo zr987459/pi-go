@@ -143,7 +143,14 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
     }
 
     Box(Modifier.fillMaxSize()) {
-            NavHost(navController, startDestination = start.route, modifier = Modifier.fillMaxSize()) {
+            NavHost(
+                navController, startDestination = start.route, modifier = Modifier.fillMaxSize(),
+                // r5：OpenMinis 式页面推入 / 推出（设置页从右侧推入，返回时滑出）
+                enterTransition = { androidx.compose.animation.slideInHorizontally(androidx.compose.animation.core.tween(280)) { it } + androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(200)) },
+                exitTransition = { androidx.compose.animation.slideOutHorizontally(androidx.compose.animation.core.tween(280)) { -it / 4 } + androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(280)) },
+                popEnterTransition = { androidx.compose.animation.slideInHorizontally(androidx.compose.animation.core.tween(280)) { -it / 4 } + androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(200)) },
+                popExitTransition = { androidx.compose.animation.slideOutHorizontally(androidx.compose.animation.core.tween(280)) { it } + androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(280)) },
+            ) {
                 composable(Destination.Onboarding.route) {
                     OnboardingScreen(
                         graph.runtime,
@@ -189,7 +196,10 @@ fun PiGoNavHost(graph: AppGraph, navController: NavHostController = rememberNavC
                     SETTINGS_PATTERN,
                     arguments = listOf(navArgument("focus") { type = NavType.StringType; nullable = true; defaultValue = null }),
                 ) { entry ->
-                    SettingsPage(graph, focus = entry.arguments?.getString("focus"), onBack = { if (!navController.popBackStack()) navController.navigateTopLevel(Destination.Chat) })
+                    // r5：设置页用与聊天页同一套 OpenMinis 主题（分组底色、强调色、圆角），配置逻辑不变（r4）。
+                    io.github.zr987459.pigo.core.ui.calm.CalmTheme {
+                        SettingsPage(graph, focus = entry.arguments?.getString("focus"), onBack = { if (!navController.popBackStack()) navController.navigateTopLevel(Destination.Chat) })
+                    }
                 }
             }
             SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 96.dp))

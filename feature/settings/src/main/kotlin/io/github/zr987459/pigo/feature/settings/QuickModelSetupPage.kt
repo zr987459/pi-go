@@ -253,7 +253,8 @@ fun QuickModelSetupPage(
 
 @Composable
 private fun Step(text: String) {
-    Text(text, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 18.dp, bottom = 6.dp))
+    // r5：OpenMinis 分组小标题（强调色 labelMedium）
+    Text(text, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 18.dp, bottom = 6.dp))
 }
 
 @Composable

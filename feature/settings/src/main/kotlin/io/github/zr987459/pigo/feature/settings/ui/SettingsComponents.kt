@@ -82,7 +82,10 @@ internal fun LargeTitle(title: String, modifier: Modifier = Modifier, subtitle: 
     }
 }
 
-/** 分组：标题 + 细分隔线下的行；没有卡片底。 */
+/**
+ * 分组（r5：照 OpenMinis `ui/components/SettingsSection.kt`）：强调色小标题 + 16dp 圆角卡片（白 / #1C1C1E），
+ * 页面是 iOS 式分组底色；行与行之间 0.5dp 细线由行自己决定（这里只给卡片）。
+ */
 @Composable
 internal fun SettingsSection(
     title: String?,
@@ -91,15 +94,16 @@ internal fun SettingsSection(
     footer: String? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    Column(modifier.fillMaxWidth().padding(bottom = 20.dp)) {
+    Column(modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 16.dp)) {
         if (title != null) {
-            Text(title, style = groupTitleStyle(), modifier = titleModifier.padding(start = 24.dp, end = 24.dp, bottom = 4.dp).semantics { heading() })
+            Text(title, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary, modifier = titleModifier.padding(horizontal = 4.dp, vertical = 8.dp).semantics { heading() })
         }
-        Column(Modifier.fillMaxWidth(), content = content)
+        Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainer, tonalElevation = 0.dp, modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.fillMaxWidth().padding(vertical = 4.dp), content = content)
+        }
         if (footer != null) {
-            Text(footer, style = MaterialTheme.typography.bodySmall, color = SettingsColors.faint, modifier = Modifier.padding(start = 24.dp, top = 4.dp, end = 24.dp))
+            Text(footer, style = MaterialTheme.typography.bodySmall, color = SettingsColors.faint, modifier = Modifier.padding(start = 4.dp, top = 6.dp, end = 4.dp))
         }
-        HorizontalDivider(Modifier.padding(top = 12.dp, start = 24.dp, end = 24.dp), color = MaterialTheme.colorScheme.outlineVariant)
     }
 }
 
@@ -125,8 +129,8 @@ internal fun SettingsTile(
         modifier
             .fillMaxWidth()
             .then(if (onTap != null) Modifier.clickable(enabled = enabled, onClick = onTap) else Modifier)
-            .heightIn(min = 52.dp)
-            .padding(horizontal = 24.dp, vertical = 8.dp),
+            .heightIn(min = 48.dp)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {

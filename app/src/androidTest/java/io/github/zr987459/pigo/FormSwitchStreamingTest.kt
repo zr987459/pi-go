@@ -34,6 +34,7 @@ import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.text.TextRange
@@ -303,7 +304,10 @@ class FormSwitchStreamingTest {
         host.clearCommands()
         assertEquals("ext:req-2", host.overlay.top?.id)
 
-        for (tag in listOf("calm:commands", "calm:sessionMenu", "persist:session.resume", "persist:session.name")) {
+        // r5：命令中心入口（／）在输入卡片里，被扩展对话框的底部面板盖住；按坐标点会点到面板里的按钮，所以这里断言它已停用
+        // （面板打开时不可点，与顶栏按钮同一条 locked 规则）。顶栏的 ⋯、←、标题仍逐个真点。
+        rule.onNodeWithTag("calm:commands", useUnmergedTree = true).assertIsNotEnabled()
+        for (tag in listOf("calm:sessionMenu", "persist:session.resume", "persist:session.name")) {
             rule.onNodeWithTag(tag, useUnmergedTree = true).performClick()
             rule.waitForIdle()
             assertEquals("对话框等待应答时点 $tag 改变了栈顶：${host.overlay.items.value.map { it.id }}", "ext:req-2", host.overlay.top?.id)
